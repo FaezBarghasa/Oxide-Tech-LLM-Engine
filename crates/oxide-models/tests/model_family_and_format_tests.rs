@@ -628,32 +628,32 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "ai-pcb-generator",
-            oxide_models::registry::ModelFamily::AiPcbGenerator,
+            oxide_models::registry::ModelFamily::AiPcbGeneratorSuite,
             oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
         ),
         (
             "kicad-mcp",
-            oxide_models::registry::ModelFamily::KicadMcp,
+            oxide_models::registry::ModelFamily::KicadMcpServer,
             oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
         ),
         (
             "kicad-autopilot",
-            oxide_models::registry::ModelFamily::KicadAutopilot,
+            oxide_models::registry::ModelFamily::KicadAutopilotRouter,
             oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
         ),
         (
             "field-ratchet",
-            oxide_models::registry::ModelFamily::FieldRatchet,
+            oxide_models::registry::ModelFamily::FieldRatchetPcb,
             oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
         ),
         (
             "electrodesign-ai",
-            oxide_models::registry::ModelFamily::ElectroDesignAi,
+            oxide_models::registry::ModelFamily::ElectroDesignCircuitVerse,
             oxide_models::registry::ModelModality::SpiceCircuitSimulation,
         ),
         (
             "electroninja",
-            oxide_models::registry::ModelFamily::ElectroNinja,
+            oxide_models::registry::ModelFamily::ElectroNinjaLtSpice,
             oxide_models::registry::ModelModality::SpiceCircuitSimulation,
         ),
     ];
@@ -674,7 +674,7 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "cadam",
-            oxide_models::registry::ModelFamily::CadamTextToCad,
+            oxide_models::registry::ModelFamily::CadamWasm3D,
             oxide_models::registry::ModelModality::ParametricCad3DGeneration,
         ),
         (
@@ -684,18 +684,18 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "guidecad",
-            oxide_models::registry::ModelFamily::GuideCadPrefix,
+            oxide_models::registry::ModelFamily::GuideCadMultimodal,
             oxide_models::registry::ModelModality::ParametricCad3DGeneration,
         ),
         (
             "stunning-modeler",
             oxide_models::registry::ModelFamily::StunningModeler3D,
-            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+            oxide_models::registry::ModelModality::Asset3DGeneration,
         ),
         (
             "cube-3d",
-            oxide_models::registry::ModelFamily::Cube3DShapeGen,
-            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+            oxide_models::registry::ModelFamily::Cube3D,
+            oxide_models::registry::ModelModality::Asset3DGeneration,
         ),
     ];
 
@@ -715,12 +715,12 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "deepanalyze",
-            oxide_models::registry::ModelFamily::DeepAnalyzeDataScience,
-            oxide_models::registry::ModelModality::DataWorkflowAutomation,
+            oxide_models::registry::ModelFamily::DeepAnalyzeRuc,
+            oxide_models::registry::ModelModality::TimeSeriesTabular,
         ),
         (
             "doctrail",
-            oxide_models::registry::ModelFamily::DocTrailResearchDb,
+            oxide_models::registry::ModelFamily::DocTrailSqlite,
             oxide_models::registry::ModelModality::DataWorkflowAutomation,
         ),
     ];
@@ -751,12 +751,12 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "patch",
-            oxide_models::registry::ModelFamily::PatchTerminalPair,
+            oxide_models::registry::ModelFamily::PatchPairProgrammer,
             oxide_models::registry::ModelModality::PairProgrammingSoftwareAgent,
         ),
         (
             "coderai",
-            oxide_models::registry::ModelFamily::CoderAiAutonomous,
+            oxide_models::registry::ModelFamily::CoderAiTerminalAgent,
             oxide_models::registry::ModelModality::PairProgrammingSoftwareAgent,
         ),
         (
@@ -777,12 +777,12 @@ fn test_eda_cad_materials_science_and_qa_suites() {
     let science_models = [
         (
             "ai-research-paper-agent",
-            oxide_models::registry::ModelFamily::AiResearchPaperAgent,
+            oxide_models::registry::ModelFamily::AiResearchPaperRag,
             oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
         ),
         (
             "zori",
-            oxide_models::registry::ModelFamily::ZoriResearchAssistant,
+            oxide_models::registry::ModelFamily::ZoriZoteroAssistant,
             oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
         ),
         (
@@ -792,12 +792,12 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "autoresearchclaw",
-            oxide_models::registry::ModelFamily::AutoResearchClaw,
+            oxide_models::registry::ModelFamily::AutoResearchClawAgent,
             oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
         ),
         (
             "freephdlabor",
-            oxide_models::registry::ModelFamily::FreePhdLaborScience,
+            oxide_models::registry::ModelFamily::FreePhdLaborMultiAgent,
             oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
         ),
         (
@@ -823,7 +823,7 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "aidesignhea",
-            oxide_models::registry::ModelFamily::AiDesignHeaAlloy,
+            oxide_models::registry::ModelFamily::AiDesignHeaHighEntropy,
             oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
         ),
         (
@@ -833,17 +833,17 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "semantic-metallurgy-lm",
-            oxide_models::registry::ModelFamily::SemanticMetallurgyLm,
+            oxide_models::registry::ModelFamily::SemanticMetallurgyMagnesium,
             oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
         ),
         (
             "nsgan-aluminium",
-            oxide_models::registry::ModelFamily::NsganAluminiumAlloy,
+            oxide_models::registry::ModelFamily::NsganAluminiumGenerative,
             oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
         ),
         (
             "das-dao",
-            oxide_models::registry::ModelFamily::DasDaoScrapAlloy,
+            oxide_models::registry::ModelFamily::DasDaoScrapToAlloy,
             oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
         ),
     ];
@@ -864,7 +864,7 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "falcon-automation",
-            oxide_models::registry::ModelFamily::FalconAutomationPlaywright,
+            oxide_models::registry::ModelFamily::FalconPlaywrightAutomation,
             oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
         ),
         (
@@ -874,12 +874,12 @@ fn test_eda_cad_materials_science_and_qa_suites() {
         ),
         (
             "cognitest",
-            oxide_models::registry::ModelFamily::CogniTestCaseGenerator,
+            oxide_models::registry::ModelFamily::CogniTestFramework,
             oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
         ),
         (
             "checkmate",
-            oxide_models::registry::ModelFamily::CheckmatePlaywrightQa,
+            oxide_models::registry::ModelFamily::CheckmatePlaywright,
             oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
         ),
     ];
