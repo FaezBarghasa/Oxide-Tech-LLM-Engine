@@ -208,3 +208,36 @@ fn test_cli_subcommands_chat_server_img() {
         _ => panic!("Expected Img command"),
     }
 }
+
+#[test]
+fn test_cli_top_level_prompt_and_interactive_parity() {
+    // 1. Direct prompt generation (llama.cpp parity: main -m model.gguf -p "Hello")
+    let prompt_args = [
+        "oxide-engine",
+        "-m",
+        "/models/llama-3-8b.gguf",
+        "-p",
+        "Explain quantum computing in one sentence.",
+    ];
+    let cli = Cli::parse_normalized(prompt_args).unwrap();
+    assert_eq!(cli.model, "/models/llama-3-8b.gguf");
+    assert_eq!(
+        cli.prompt.as_deref(),
+        Some("Explain quantum computing in one sentence.")
+    );
+    assert!(!cli.interactive);
+
+    // 2. Direct interactive mode (llama.cpp parity: main -m model.gguf -i)
+    let interactive_args = [
+        "oxide-engine",
+        "-m",
+        "./models/qwen2.5-7b.gguf",
+        "-i",
+        "-ngl",
+        "33",
+    ];
+    let cli_i = Cli::parse_normalized(interactive_args).unwrap();
+    assert_eq!(cli_i.model, "./models/qwen2.5-7b.gguf");
+    assert!(cli_i.interactive);
+    assert_eq!(cli_i.n_gpu_layers, 33);
+}

@@ -253,6 +253,14 @@ pub struct Cli {
     #[arg(long)]
     pub gpu: Option<String>,
 
+    /// Prompt to run directly without entering server mode (llama.cpp -p / --prompt)
+    #[arg(short = 'p', long)]
+    pub prompt: Option<String>,
+
+    /// Enter interactive chat REPL mode directly (llama.cpp -i / --interactive)
+    #[arg(short = 'i', long)]
+    pub interactive: bool,
+
     /// Tier 1 Device VRAM KV cache capacity in blocks
     #[arg(long, default_value_t = 1024)]
     pub kv_device_blocks: usize,
@@ -299,63 +307,14 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse_normalized(std::env::args_os())?;
 
     match cli.command {
-        Some(Commands::Chat(chat)) => {
-            tracing::info!(
-                "Starting Oxide-Tech Chat | Model: {} | Backend: {:?} | Target Device: {:?}",
-                chat.model,
-                chat.backend,
-                chat.gpu.as_deref().unwrap_or("Auto-Detect / System Native")
-            );
-            let backend_str = chat.backend.as_str();
-            let mut pipeline = SpecializedPipeline::from_model_or_path(
-                &chat.model,
-                backend_str,
-                chat.gpu.as_deref(),
-                1,
-                chat.weights.as_deref(),
-            )?;
-
-            println!(
-                "Oxide-Tech-LLM-Engine | Model: {} | Backend: {}",
-                chat.model, backend_str
-            );
-            if let Some(prompt) = chat.prompt {
-                println!("Prompt: {prompt}");
-                let cmd = StepCommand::new(1, 1, 0, true);
-                let step_res = pipeline.step(&cmd)?;
-                println!(
-                    "Assistant (Token {} generated via zero-allocation DAG): Response ready.",
-                    step_res.sampled_token
-                );
-            } else {
-                println!("Interactive REPL. Type 'exit' or 'quit' to terminate.");
-                let stdin = std::io::stdin();
-                loop {
-                    use std::io::Write;
-                    print!("\n> ");
-                    let _ = std::io::stdout().flush();
-                    let mut line = String::new();
-                    if stdin.read_line(&mut line)? == 0 {
-                        break;
-                    }
-                    let trimmed = line.trim();
-                    if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit")
-                    {
-                        break;
-                    }
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let cmd = StepCommand::new(1, 1, 0, true);
-                    let step_res = pipeline.step(&cmd)?;
-                    println!(
-                        "Assistant (Token {}): Response ready.",
-                        step_res.sampled_token
-                    );
-                }
-            }
-            Ok(())
-        }
+        Some(Commands::Chat(chat)) => run_chat_session(
+            &chat.model,
+            chat.backend,
+            chat.gpu.as_deref(),
+            chat.weights.as_deref(),
+            chat.prompt.as_deref(),
+            None,
+        ),
         Some(Commands::Img(img)) => {
             tracing::info!(
                 "Starting Oxide-Tech Diffusion Engine | Model: {} | Backend: {:?}",
@@ -401,24 +360,161 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await
         }
         None => {
-            run_server_with_options(
-                &cli.model,
-                cli.alias.as_deref(),
-                cli.models_dir.as_deref(),
-                cli.ctx_size,
-                cli.n_gpu_layers,
-                cli.backend,
-                cli.serve,
-                cli.weights.as_deref(),
-                cli.max_slots,
-                cli.gpu.as_deref(),
-                cli.kv_device_blocks,
-                cli.kv_host_blocks,
-                cli.kv_storage_blocks,
-            )
-            .await
+            if cli.prompt.is_some() || cli.interactive {
+                run_chat_session(
+                    &cli.model,
+                    cli.backend,
+                    cli.gpu.as_deref(),
+                    cli.weights.as_deref(),
+                    cli.prompt.as_deref(),
+                    cli.models_dir.as_deref(),
+                )
+            } else {
+                run_server_with_options(
+                    &cli.model,
+                    cli.alias.as_deref(),
+                    cli.models_dir.as_deref(),
+                    cli.ctx_size,
+                    cli.n_gpu_layers,
+                    cli.backend,
+                    cli.serve,
+                    cli.weights.as_deref(),
+                    cli.max_slots,
+                    cli.gpu.as_deref(),
+                    cli.kv_device_blocks,
+                    cli.kv_host_blocks,
+                    cli.kv_storage_blocks,
+                )
+                .await
+            }
         }
     }
+}
+
+fn run_chat_session(
+    initial_model: &str,
+    backend: BackendArg,
+    gpu: Option<&str>,
+    weights: Option<&str>,
+    prompt: Option<&str>,
+    models_dir: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let backend_str = backend.as_str();
+    let mut current_model = initial_model.to_string();
+    tracing::info!(
+        "Starting Oxide-Tech Chat | Model: {} | Backend: {:?} | Target Device: {:?}",
+        current_model,
+        backend,
+        gpu.unwrap_or("Auto-Detect / System Native")
+    );
+    let mut pipeline =
+        SpecializedPipeline::from_model_or_path(&current_model, backend_str, gpu, 1, weights)?;
+
+    println!("Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str}");
+
+    if let Some(p) = prompt {
+        println!("Prompt: {p}");
+        let cmd = StepCommand::new(1, 1, 0, true);
+        let step_res = pipeline.step(&cmd)?;
+        println!(
+            "Assistant (Token {} generated via zero-allocation DAG): Response ready.",
+            step_res.sampled_token
+        );
+        return Ok(());
+    }
+
+    println!("Interactive REPL mode (llama.cpp compatible).");
+    println!("Type '/help' for command options or '/model <path_or_name>' to hot-swap models.");
+    let stdin = std::io::stdin();
+    loop {
+        use std::io::Write;
+        print!("\n[{current_model}] > ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("exit")
+            || trimmed.eq_ignore_ascii_case("quit")
+            || trimmed.eq_ignore_ascii_case("/exit")
+            || trimmed.eq_ignore_ascii_case("/quit")
+        {
+            break;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("/help") {
+            println!("Interactive Options:");
+            println!(
+                "  /model <name_or_path> - Hot-swap active model without restarting or recompiling"
+            );
+            println!("  /models or /list      - List available models from directory & catalog");
+            println!("  /info                 - Show active model and hardware backend");
+            println!("  /exit or /quit        - Exit chat session");
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("/info") {
+            println!("Active Model: {current_model}");
+            println!("Hardware Backend: {backend_str}");
+            println!("Target Device Profile: {}", gpu.unwrap_or("Native / Auto"));
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("/models") || trimmed.eq_ignore_ascii_case("/list") {
+            println!("Scanning discoverable models:");
+            let mgr = oxide_engine::DynamicModelManager::new(
+                &current_model,
+                SpecializedPipeline::from_model_or_path(
+                    &current_model,
+                    backend_str,
+                    gpu,
+                    1,
+                    weights,
+                )?,
+                backend_str,
+                gpu.map(std::string::ToString::to_string),
+                1,
+                models_dir.map(std::path::PathBuf::from),
+            );
+            for (idx, m) in mgr.list_available().iter().enumerate() {
+                let marker = if m == &current_model { "*" } else { " " };
+                println!(" [{marker}] {idx}: {m}");
+            }
+            continue;
+        }
+        if let Some(target) = trimmed
+            .strip_prefix("/model ")
+            .or_else(|| trimmed.strip_prefix("/load "))
+        {
+            let target = target.trim();
+            if target.is_empty() {
+                println!("Usage: /model <model_name_or_path>");
+                continue;
+            }
+            println!("Hot-swapping model to '{target}'...");
+            match SpecializedPipeline::from_model_or_path(target, backend_str, gpu, 1, None) {
+                Ok(new_pipe) => {
+                    pipeline = new_pipe;
+                    current_model = target.to_string();
+                    println!("Successfully loaded and switched model to: {current_model}");
+                }
+                Err(err) => {
+                    println!("Failed to load model '{target}': {err}");
+                }
+            }
+            continue;
+        }
+
+        let cmd = StepCommand::new(1, 1, 0, true);
+        let step_res = pipeline.step(&cmd)?;
+        println!(
+            "Assistant (Token {}): Response ready.",
+            step_res.sampled_token
+        );
+    }
+
+    Ok(())
 }
 
 async fn run_server_with_options(
