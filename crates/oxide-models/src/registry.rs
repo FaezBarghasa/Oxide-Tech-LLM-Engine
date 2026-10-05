@@ -48,6 +48,7 @@ pub enum ModelFamily {
     Clef,
     Trellis3D,
     Cube3D,
+    KronosTrading,
 }
 
 /// Modality and Task Type for Model Inference & Serving.
@@ -68,6 +69,7 @@ pub enum ModelModality {
     ScientificBioMath,
     DecisionAgentic,
     Asset3DGeneration,
+    FinancialTradingTimeSeries,
 }
 
 /// Core Model Architecture Class.
@@ -83,6 +85,7 @@ pub enum ModelArchitectureType {
     VlaActionTransformer,
     WorldModelPredictor,
     DecisionEngine,
+    FinancialCausalTransformer,
 }
 
 /// Quantization and Weights Precision Class.
@@ -671,6 +674,48 @@ impl ModelSpecification {
                 head_dim: 128,
                 vocab_size: 32000,
                 max_context_tokens: 1024,
+                rope_theta: 10000.0,
+                supports_nvfp4: true,
+                optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
+            },
+            Self {
+                name: "Kronos (shiyu-coder/Kronos Trading Foundation Model)",
+                identifier: "kronos",
+                family: ModelFamily::KronosTrading,
+                modality: ModelModality::FinancialTradingTimeSeries,
+                architecture: ModelArchitectureType::FinancialCausalTransformer,
+                default_quantization: QuantizationClass::Fp16Precision,
+                total_parameters_billion: 1.5,
+                active_parameters_billion: 1.5,
+                hidden_dim: 2048,
+                intermediate_dim: 5632,
+                num_layers: 24,
+                num_heads: 16,
+                num_kv_heads: 16,
+                head_dim: 128,
+                vocab_size: 8192, // Financial token discrete bins
+                max_context_tokens: 8192,
+                rope_theta: 10000.0,
+                supports_nvfp4: true,
+                optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
+            },
+            Self {
+                name: "Kronos-3B (shiyu-coder/Kronos-3B Quantitative HFT)",
+                identifier: "kronos-3b",
+                family: ModelFamily::KronosTrading,
+                modality: ModelModality::FinancialTradingTimeSeries,
+                architecture: ModelArchitectureType::FinancialCausalTransformer,
+                default_quantization: QuantizationClass::Fp16Precision,
+                total_parameters_billion: 3.2,
+                active_parameters_billion: 3.2,
+                hidden_dim: 3072,
+                intermediate_dim: 8192,
+                num_layers: 32,
+                num_heads: 24,
+                num_kv_heads: 8,
+                head_dim: 128,
+                vocab_size: 8192,
+                max_context_tokens: 16384,
                 rope_theta: 10000.0,
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,

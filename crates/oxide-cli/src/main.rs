@@ -50,6 +50,7 @@ enum ModelArg {
     Diffusion,
     AudioTts,
     AudioAsr,
+    Kronos,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -297,6 +298,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let backend = HailoBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
             let config = Llama3Config::default();
             SpecializedPipeline::Llama3Hailo(OxideEngine::new(backend, config))
+        }
+
+        // Quantitative Trading & Financial Time-Series Foundation Model (Kronos)
+        (ModelArg::Kronos, _) => {
+            let engine = oxide_models::KronosTradingEngine::new(2048, 60, 10, 1.0);
+            SpecializedPipeline::KronosTradingPipeline(engine)
         }
         (m, b) => {
             tracing::warn!(

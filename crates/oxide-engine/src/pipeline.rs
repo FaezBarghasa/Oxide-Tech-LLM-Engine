@@ -74,9 +74,10 @@ pub enum SpecializedPipeline {
     Llama3Rknn(OxideEngine<RknnBackend, Llama3Config, NvFp4>),
     Llama3Hailo(OxideEngine<HailoBackend, Llama3Config, NvFp4>),
 
-    // Multi-Modal - Latent Diffusion & Audio Serving
+    // Multi-Modal - Latent Diffusion, Audio Serving & Quantitative Trading
     DiffusionPipeline(DiffusionEngine),
     AudioPipeline(AudioServingEngine),
+    KronosTradingPipeline(oxide_models::KronosTradingEngine),
 }
 
 impl SpecializedPipeline {
@@ -127,6 +128,30 @@ impl SpecializedPipeline {
                 let tokens = engine.process_streaming_asr_chunk(&pcm_chunk)?;
                 let next_token = tokens.first().copied().unwrap_or(cmd.input_token + 1);
                 Ok(StepCompletion::new(cmd.sequence_id, next_token, false))
+            }
+            Self::KronosTradingPipeline(engine) => {
+                let dummy_bar = oxide_models::FinancialMarketBar {
+                    timestamp_epoch_ms: 1_700_000_000_000,
+                    open: 100.0,
+                    high: 105.0,
+                    low: 99.5,
+                    close: 104.2,
+                    volume: 15_000.0,
+                    vwap: 102.8,
+                    bid_ask_spread_bps: 1.5,
+                    order_flow_imbalance: 0.35,
+                };
+                let bars = vec![dummy_bar; engine.context_bars.max(1)];
+                let forecast = engine.evaluate_market_bars(&bars)?;
+                let action_token = match forecast.signal {
+                    oxide_models::TradingSignal::StrongBuy => 1,
+                    oxide_models::TradingSignal::Buy => 2,
+                    oxide_models::TradingSignal::Hold => 3,
+                    oxide_models::TradingSignal::Sell => 4,
+                    oxide_models::TradingSignal::StrongSell => 5,
+                    oxide_models::TradingSignal::ClosePosition => 6,
+                };
+                Ok(StepCompletion::new(cmd.sequence_id, action_token, false))
             }
         }
     }
