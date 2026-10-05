@@ -334,6 +334,7 @@ pub enum ModelArchitectureType {
 
 /// Quantization and Weights Precision Class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
 pub enum QuantizationClass {
     Nvfp4Blackwell,
     Ptq1_0Ternary,

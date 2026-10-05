@@ -150,7 +150,14 @@ impl ComputeGraphExecutor {
                         storage[dst_offset + i] = silu * storage[src1_offset + i];
                     }
                 }
-                OpCode::Rope | OpCode::FlashAttn | OpCode::Softmax | OpCode::FusedSwiGluMul => {
+                OpCode::Rope
+                | OpCode::FlashAttn
+                | OpCode::Softmax
+                | OpCode::FusedSwiGluMul
+                | OpCode::FusedRopeAttention
+                | OpCode::FusedAddRmsNorm
+                | OpCode::FusedBiasGelu
+                | OpCode::FusedGateUpSwiGlu => {
                     for i in 0..node.dst_size {
                         storage[dst_offset + i] = storage[src0_offset + i];
                     }

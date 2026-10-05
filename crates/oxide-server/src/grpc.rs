@@ -49,7 +49,7 @@ impl OxideGrpcService {
 
     /// Processes an RPC inference step.
     #[must_use]
-    pub fn process_step(&self, req: &GrpcInferenceRequest, step_token: u32, text: &str) -> GrpcTokenResponse {
+    pub fn process_step(&self, _req: &GrpcInferenceRequest, step_token: u32, text: &str) -> GrpcTokenResponse {
         GrpcTokenResponse {
             token_id: step_token,
             text: text.to_string(),

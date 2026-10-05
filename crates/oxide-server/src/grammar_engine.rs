@@ -53,10 +53,14 @@ impl StructuredOutputEngine {
             let mut valid = true;
 
             for &b in token_bytes {
-                state = self.grammar.transition(state, b);
-                if state == DFA_ERROR_STATE {
-                    valid = false;
-                    break;
+                match self.grammar.transition(state, b) {
+                    Ok(next) if next != DFA_ERROR_STATE => {
+                        state = next;
+                    }
+                    _ => {
+                        valid = false;
+                        break;
+                    }
                 }
             }
 

@@ -8,9 +8,7 @@ use axum::{
     response::{sse::Event, IntoResponse, Sse},
     Json,
 };
-use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, sync::Arc};
 
 use crate::ServerState;
 
@@ -87,7 +85,7 @@ pub async fn messages_handler(
                     "usage": { "input_tokens": 10, "output_tokens": 0 }
                 }
             });
-            yield Ok(Event::default().event("message_start").data(start_json.to_string()));
+            yield Ok::<Event, std::convert::Infallible>(Event::default().event("message_start").data(start_json.to_string()));
 
             // 2. content_block_start event
             let block_start_json = serde_json::json!({
@@ -95,7 +93,7 @@ pub async fn messages_handler(
                 "index": 0,
                 "content_block": { "type": "text", "text": "" }
             });
-            yield Ok(Event::default().event("content_block_start").data(block_start_json.to_string()));
+            yield Ok::<Event, std::convert::Infallible>(Event::default().event("content_block_start").data(block_start_json.to_string()));
 
             // 3. content_block_delta event
             let delta_json = serde_json::json!({
@@ -103,23 +101,23 @@ pub async fn messages_handler(
                 "index": 0,
                 "delta": { "type": "text_delta", "text": "Oxide Engine response via Anthropic Messages API." }
             });
-            yield Ok(Event::default().event("content_block_delta").data(delta_json.to_string()));
+            yield Ok::<Event, std::convert::Infallible>(Event::default().event("content_block_delta").data(delta_json.to_string()));
 
             // 4. content_block_stop event
-            yield Ok(Event::default().event("content_block_stop").data(serde_json::json!({
+            yield Ok::<Event, std::convert::Infallible>(Event::default().event("content_block_stop").data(serde_json::json!({
                 "type": "content_block_stop",
                 "index": 0
             }).to_string()));
 
             // 5. message_delta event
-            yield Ok(Event::default().event("message_delta").data(serde_json::json!({
+            yield Ok::<Event, std::convert::Infallible>(Event::default().event("message_delta").data(serde_json::json!({
                 "type": "message_delta",
                 "delta": { "stop_reason": "end_turn" },
                 "usage": { "output_tokens": 12 }
             }).to_string()));
 
             // 6. message_stop event
-            yield Ok(Event::default().event("message_stop").data(serde_json::json!({
+            yield Ok::<Event, std::convert::Infallible>(Event::default().event("message_stop").data(serde_json::json!({
                 "type": "message_stop"
             }).to_string()));
         };

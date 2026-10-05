@@ -34,7 +34,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use dfa::DfaSchemaGrammar;
-use oxide_alloc::HierarchicalKvCache;
 use oxide_core::worker::StepCommand;
 use oxide_engine::{ContinuousBatchingSlotManager, SlotRequest, SpecializedPipeline};
 use oxide_models::{ChatMessage, ChatTemplateFormat, ChatTemplateParser, ModelSpecification};
