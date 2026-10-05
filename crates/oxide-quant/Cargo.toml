@@ -8,4 +8,5 @@ license.workspace = true
 [dependencies]
 oxide-core.workspace = true
 bytemuck.workspace = true
+serde.workspace = true
 thiserror.workspace = true

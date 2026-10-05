@@ -27,6 +27,7 @@ pub mod error;
 pub mod hardware;
 pub mod macros;
 pub mod memory;
+pub mod sampler;
 pub mod traits;
 pub mod typestate;
 pub mod worker;
@@ -38,8 +39,12 @@ pub use hardware::{
     TensorCoreGeneration,
 };
 pub use memory::DevicePtr;
+pub use sampler::{
+    AcademicSamplerEngine, GbnfGrammarEngine, GbnfRule, MirostatMode, SamplerState, SamplingConfig,
+};
 pub use traits::{
     HardwareBackend, HardwareSupports, ModelConfig, OpticalComputeFabric, QuantScheme,
 };
 pub use typestate::{Allocated, Decoding, Prefilling, SequenceRequest, Terminal, Unallocated};
 pub use worker::{ExecutionWorker, StepCommand, StepCompletion};
+

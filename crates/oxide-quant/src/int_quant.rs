@@ -424,6 +424,7 @@ impl BlockQ6_K {
 /// Minimal 16-bit float representation without external dependencies.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
 pub struct f16(pub u16);
 
 impl f16 {

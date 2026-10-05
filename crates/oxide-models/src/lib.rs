@@ -21,16 +21,27 @@
 
 pub mod audio;
 pub mod bonsai2;
+pub mod chat_template;
 pub mod diffusion;
 pub mod engram;
+pub mod flash_attn;
 pub mod formats;
 pub mod llama3;
+pub mod lora;
 pub mod manifest;
 pub mod moe;
 pub mod monarch;
 pub mod needle;
+pub mod projector;
 pub mod registry;
+pub mod rope;
 pub mod specialized;
+
+pub use chat_template::{ChatMessage, ChatRole, ChatTemplateFormat, ChatTemplateParser};
+pub use flash_attn::{FlashAttentionConfig, FlashAttentionEngine};
+pub use lora::{LoraConfig, LoraHotSwapRegistry, LoraLayerWeights};
+pub use projector::{MultiModalProjector, ProjectorConfig, ProjectorType};
+pub use rope::{RopeConfig, RopeScalingEngine, RopeScalingType};
 
 pub use audio::{AudioEngineMode, AudioModelConfig, AudioServingEngine};
 pub use bonsai2::TernaryBonsai2Config;
@@ -55,10 +66,11 @@ pub use specialized::{
     AtmosphericForecastGrid, AtomAgentsPhysicsEngine, AutomatedTestingQeEngine,
     AutonomousScientificAgentEngine, BimanualActionChunk, BimanualRoboticsEngine,
     CadCoderVlmEngine, CadFeatureOperation, CadParametricGeometry, CadQueryCodeArtifact,
-    CaeStressAnalysisResult, ClinicalDecisionEngine, ClinicalRecommendation,
-    CompositionalDesignGraph, DataInsightVisualization, DataWorkflowAutomationEngine,
-    DataWorkflowPipelineStep, DesignGraphNode, DesignGraphPatch, DexterousHandState,
-    DexterousRoboticsEngine, EdaPcbEngine, ElementWeightFraction, EmbeddingEngine,
+    CaeStressAnalysisResult, ClefCausalInferenceResult, ClinicalDecisionEngine,
+    ClinicalRecommendation, CompositionalDesignGraph, DataInsightVisualization,
+    DataWorkflowAutomationEngine, DataWorkflowPipelineStep, DecisionMakingModelEngine,
+    DesignGraphNode, DesignGraphPatch, DexterousHandState, DexterousRoboticsEngine,
+    EdaPcbEngine, ElementWeightFraction, EmbeddingEngine,
     FinancialMarketBar, FunctionalRequirementNode, GamepadControllerState, GameplayWhamEngine,
     GeospatialEcosystemEngine, GeospatialEcosystemMetrics, KronosTradingEngine,
     LammpsSimulationTask, MambaMoeHybridEngine, MaterialsMetallurgyEngine,

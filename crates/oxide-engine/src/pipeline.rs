@@ -78,6 +78,9 @@ pub enum SpecializedPipeline {
     DiffusionPipeline(DiffusionEngine),
     AudioPipeline(AudioServingEngine),
     KronosTradingPipeline(oxide_models::KronosTradingEngine),
+
+    // Multi-Device & Heterogeneous Hybrid Pipeline (CPU+GPU, GPU+GPU+CPU)
+    HybridMultiDevice(crate::hybrid::HybridMultiDevicePipeline),
 }
 
 impl SpecializedPipeline {
@@ -153,6 +156,7 @@ impl SpecializedPipeline {
                 };
                 Ok(StepCompletion::new(cmd.sequence_id, action_token, false))
             }
+            Self::HybridMultiDevice(pipeline) => pipeline.step_hybrid(cmd),
         }
     }
 }

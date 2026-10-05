@@ -318,9 +318,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let dfa_grammar = Arc::new(DfaSchemaGrammar::new_simple_json_validator());
+    let slot_manager = Arc::new(Mutex::new(oxide_engine::ContinuousBatchingSlotManager::new(cli.max_slots)));
     let state = ServerState {
         pipeline: Arc::new(Mutex::new(pipeline)),
         dfa_grammar,
+        slot_manager,
     };
 
     start_server(cli.serve, state).await?;

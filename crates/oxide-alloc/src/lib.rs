@@ -23,6 +23,7 @@
 pub mod device_arena;
 pub mod hierarchical_kv;
 pub mod host_arena;
+pub mod kv_advanced;
 pub mod transactional;
 
 pub use device_arena::DeviceMemoryArena;
@@ -31,4 +32,9 @@ pub use hierarchical_kv::{
     TOKENS_PER_KV_BLOCK,
 };
 pub use host_arena::HostPinnedArena;
+pub use kv_advanced::{
+    ContextShiftManager, KvCacheDumpContainer, KvQuantizationPrecision, PromptCacheRegistry,
+    QuantizedKvBlock,
+};
 pub use transactional::TransactionalBlockTable;
+

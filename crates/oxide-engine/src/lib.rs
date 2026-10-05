@@ -21,8 +21,20 @@
 pub mod engine;
 pub mod hybrid;
 pub mod pipeline;
+pub mod slot_manager;
+pub mod speculative;
+pub mod tensor_split;
 
 pub use engine::OxideEngine;
 pub use hybrid::{DeviceRole, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition};
 pub use pipeline::SpecializedPipeline;
+pub use slot_manager::{
+    ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState,
+};
+pub use speculative::{
+    SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeVerificationResult,
+};
+pub use tensor_split::{
+    AcceleratorKind, TensorSliceDescriptor, TensorSplitDistributionEngine, TensorSplitMode,
+};
 

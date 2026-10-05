@@ -628,6 +628,7 @@ dependencies = [
  "memmap2",
  "oxide-core",
  "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]
@@ -824,6 +825,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "oxide-core",
+ "serde",
  "thiserror",
 ]
 
@@ -837,6 +839,7 @@ dependencies = [
  "oxide-alloc",
  "oxide-core",
  "oxide-engine",
+ "oxide-models",
  "serde",
  "serde_json",
  "thiserror",
