@@ -667,6 +667,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-backend-rocm"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "oxide-alloc",
+ "oxide-core",
+ "oxide-quant",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "oxide-cli"
 version = "0.1.0"
 dependencies = [
@@ -675,6 +687,7 @@ dependencies = [
  "oxide-backend-cpu",
  "oxide-backend-cuda",
  "oxide-backend-metal",
+ "oxide-backend-rocm",
  "oxide-core",
  "oxide-engine",
  "oxide-models",
@@ -711,6 +724,7 @@ dependencies = [
  "oxide-backend-cpu",
  "oxide-backend-cuda",
  "oxide-backend-metal",
+ "oxide-backend-rocm",
  "oxide-core",
  "oxide-models",
  "oxide-quant",

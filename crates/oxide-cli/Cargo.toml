@@ -13,6 +13,7 @@ path = "src/main.rs"
 oxide-core.workspace = true
 oxide-alloc.workspace = true
 oxide-backend-cuda.workspace = true
+oxide-backend-rocm.workspace = true
 oxide-backend-metal.workspace = true
 oxide-backend-cpu.workspace = true
 oxide-models.workspace = true

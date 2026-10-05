@@ -1,17 +1,17 @@
 {
   "app": "oxide-embed",
   "kind": "project-memory",
-  "project_id": "01a10b31-d7f6-704b-9362-c48dbfc13a37",
+  "project_id": "01a10b55-21a0-7180-919a-956fb7d77e38",
   "project_name": "Oxide-Tech-LLM-Engine",
   "schema_version": 1,
   "min_supported_schema_version": 1,
   "created_by": {
     "oxide_embed_version": "0.4.0",
-    "timestamp": "2026-10-05T08:32:58.358298381Z"
+    "timestamp": "2026-10-05T09:11:30.976967800Z"
   },
   "updated_by": {
     "oxide_embed_version": "0.4.0",
-    "timestamp": "2026-10-05T08:32:58.358317378Z"
+    "timestamp": "2026-10-05T09:11:30.976987984Z"
   },
   "storage": {
     "engine": "surrealdb",

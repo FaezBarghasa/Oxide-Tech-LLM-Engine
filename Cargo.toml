@@ -4,6 +4,7 @@ members = [
     "crates/oxide-core",
     "crates/oxide-alloc",
     "crates/oxide-hardware/oxide-backend-cuda",
+    "crates/oxide-hardware/oxide-backend-rocm",
     "crates/oxide-hardware/oxide-backend-metal",
     "crates/oxide-hardware/oxide-backend-cpu",
     "crates/oxide-models",
@@ -24,6 +25,7 @@ repository = "https://github.com/FaezBarghasa/Oxide-Tech-LLM-Engine"
 oxide-core = { path = "crates/oxide-core" }
 oxide-alloc = { path = "crates/oxide-alloc" }
 oxide-backend-cuda = { path = "crates/oxide-hardware/oxide-backend-cuda" }
+oxide-backend-rocm = { path = "crates/oxide-hardware/oxide-backend-rocm" }
 oxide-backend-metal = { path = "crates/oxide-hardware/oxide-backend-metal" }
 oxide-backend-cpu = { path = "crates/oxide-hardware/oxide-backend-cpu" }
 oxide-models = { path = "crates/oxide-models" }

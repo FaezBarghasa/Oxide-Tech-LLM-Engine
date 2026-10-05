@@ -1,7 +1,6 @@
-use oxide_core::hardware::{
-    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
-    TensorCoreGeneration,
-};
+#![allow(clippy::struct_excessive_bools)]
+
+use oxide_core::hardware::{GpuArchitecture, GpuDeviceProfile};
 
 /// Autonomic Kernel Configuration tuned for a specific hardware target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +55,7 @@ impl KernelExecutionPlan {
                 use_nvfp4_microscaling: false,
                 unroll_factor: 4,
             },
-            GpuArchitecture::Turing | GpuArchitecture::Volta => Self {
+            _ => Self {
                 threadblock_size: 64,
                 shared_memory_bytes: 32_768, // 32 KB
                 warps_per_block: 2,
