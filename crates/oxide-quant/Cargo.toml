@@ -1,0 +1,11 @@
+[package]
+name = "oxide-quant"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide-core.workspace = true
+bytemuck.workspace = true
+thiserror.workspace = true

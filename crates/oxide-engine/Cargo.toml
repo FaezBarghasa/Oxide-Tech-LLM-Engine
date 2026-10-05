@@ -1,0 +1,19 @@
+[package]
+name = "oxide-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide-core.workspace = true
+oxide-alloc.workspace = true
+oxide-backend-cuda.workspace = true
+oxide-backend-metal.workspace = true
+oxide-backend-cpu.workspace = true
+oxide-models.workspace = true
+oxide-quant.workspace = true
+rtrb.workspace = true
+crossbeam.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

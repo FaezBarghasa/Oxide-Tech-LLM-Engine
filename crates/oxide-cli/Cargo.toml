@@ -1,0 +1,25 @@
+[package]
+name = "oxide-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "oxide"
+path = "src/main.rs"
+
+[dependencies]
+oxide-core.workspace = true
+oxide-alloc.workspace = true
+oxide-backend-cuda.workspace = true
+oxide-backend-metal.workspace = true
+oxide-backend-cpu.workspace = true
+oxide-models.workspace = true
+oxide-quant.workspace = true
+oxide-engine.workspace = true
+oxide-server.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

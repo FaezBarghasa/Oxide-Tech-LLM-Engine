@@ -1,0 +1,16 @@
+[package]
+name = "oxide-models"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide-core.workspace = true
+oxide-alloc.workspace = true
+oxide-quant.workspace = true
+bytemuck.workspace = true
+memmap2.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
