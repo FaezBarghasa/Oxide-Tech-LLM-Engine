@@ -1647,7 +1647,7 @@ impl MusubiCadGraphEngine {
         }
 
         Ok(DesignGraphPatch {
-            patch_id: format!("patch_{:x}", base_hash ^ 0xDEADBEEF),
+            patch_id: format!("patch_{:x}", base_hash ^ 0xDEAD_BEEF),
             base_graph_hash: base_hash,
             proposed_nodes: nodes,
             verified_manifold: self.verify_euler_poincare,

@@ -1,4 +1,4 @@
-use oxide_models::formats::{GgufHeader, ModelFileFormat, Nvfp4Block, SafeTensorsHeader};
+use oxide_models::formats::{GgufHeader, Nvfp4Block, SafeTensorsHeader};
 use oxide_models::moe::{MoELayer, MoERouterConfig};
 use oxide_models::registry::{
     ModelArchitectureType, ModelFamily, ModelModality, ModelSpecification, QuantizationClass,
@@ -1003,12 +1003,12 @@ fn test_extended_eda_cad_materials_cae_and_qa_suites() {
         (
             "cad-coder",
             oxide_models::registry::ModelFamily::CadCoderVlm,
-            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+            oxide_models::registry::ModelModality::VisionLanguage,
         ),
         (
             "mentaagent",
             oxide_models::registry::ModelFamily::MentaAgentBi,
-            oxide_models::registry::ModelModality::DataWorkflowAutomation,
+            oxide_models::registry::ModelModality::DecisionAgentic,
         ),
         (
             "academic-writing-skills",
