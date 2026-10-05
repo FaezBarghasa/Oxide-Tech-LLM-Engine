@@ -1,7 +1,6 @@
 use oxide_backend_intel::{IntelBackend, IntelExecutionPlan, LevelZeroCommunicator};
 use oxide_core::hardware::{
-    GpuArchitecture, GpuDeviceProfile, MemoryTechnology,
-    TensorCoreGeneration,
+    GpuArchitecture, GpuDeviceProfile, MemoryTechnology, TensorCoreGeneration,
 };
 
 #[test]
@@ -22,7 +21,8 @@ fn test_intel_arc_b_series_battlemage() {
     assert!(plan_b580.use_fp8_xmx);
     assert!(!plan_b580.use_amx_tile_engine);
 
-    let pro_b60 = GpuDeviceProfile::from_known_device_name("Intel Arc Pro B60").expect("Arc Pro B60");
+    let pro_b60 =
+        GpuDeviceProfile::from_known_device_name("Intel Arc Pro B60").expect("Arc Pro B60");
     assert_eq!(pro_b60.vram_capacity_bytes, 24 * 1024 * 1024 * 1024);
     assert_eq!(pro_b60.architecture, GpuArchitecture::IntelXe2Battlemage);
 }

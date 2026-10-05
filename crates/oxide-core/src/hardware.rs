@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// GPU / Accelerator Microarchitecture Family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GpuArchitecture {
     // NVIDIA Architectures
     Volta,     // SM 7.0 (V100)
@@ -38,12 +39,12 @@ pub enum GpuArchitecture {
     GoogleEdgeTpu,        // Google Coral Edge TPU (4 TOPS INT8, PCIe/USB/M.2)
 
     // Intel Arc GPU & Xeon Scalable Architectures
-    IntelXe2Battlemage,           // Intel Arc B-Series (B580, B570, Arc Pro B60/B50) & Lunar Lake Xe2-LPG
-    IntelXe1Alchemist,            // Intel Arc A-Series (A770, A750, Arc Pro A60/A50)
-    IntelXeHpcPonteVecchio,       // Intel Data Center GPU Max (Max 1550, Max 1100)
-    IntelXeonGraniteRapids,       // Intel Xeon 6 6900P / 6700P (AMX FP16/BF16/INT8 + 12-ch DDR5/MCR)
-    IntelXeonSierraForest,        // Intel Xeon 6 6700E / 6900E (up to 288 E-cores + AVX-VNNI)
-    IntelXeonEmeraldSapphireRapids,// Intel Xeon 5th/4th Gen Scalable & Xeon Max (64GB HBM2e)
+    IntelXe2Battlemage, // Intel Arc B-Series (B580, B570, Arc Pro B60/B50) & Lunar Lake Xe2-LPG
+    IntelXe1Alchemist,  // Intel Arc A-Series (A770, A750, Arc Pro A60/A50)
+    IntelXeHpcPonteVecchio, // Intel Data Center GPU Max (Max 1550, Max 1100)
+    IntelXeonGraniteRapids, // Intel Xeon 6 6900P / 6700P (AMX FP16/BF16/INT8 + 12-ch DDR5/MCR)
+    IntelXeonSierraForest, // Intel Xeon 6 6700E / 6900E (up to 288 E-cores + AVX-VNNI)
+    IntelXeonEmeraldSapphireRapids, // Intel Xeon 5th/4th Gen Scalable & Xeon Max (64GB HBM2e)
 
     // Apple Silicon Mac Architectures (Metal / MLX)
     AppleSiliconM1, // Apple M1 / M1 Pro / M1 Max / M1 Ultra (Metal 2.4/3.0, 16-core ANE, FP16 SIMD-matrix)
@@ -65,7 +66,7 @@ pub enum GpuArchitecture {
 }
 
 /// Compute Capability / Target ISA Version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ComputeCapability {
     pub major: u32,
     pub minor: u32,
@@ -364,7 +365,7 @@ impl fmt::Display for ComputeCapability {
 }
 
 /// Physical and Deployment Hardware Form Factor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HardwareFormFactor {
     DesktopWorkstation, // Standard Desktop PCIe (e.g. N1X Workstations, custom rigs, Radeon RX, Arc B580)
     LaptopMobile,       // High-efficiency Mobile Max-Q / Laptop GPUs / Lunar Lake Xe2-LPG
@@ -374,21 +375,21 @@ pub enum HardwareFormFactor {
     DatacenterTpuPod3dTorus, // Google Cloud TPU v4/v5p 3D Torus OCS Pod
     DatacenterTpuPod2dTorus, // Google Cloud TPU v2/v3/v5e/v6e 2D Torus Pod
     DatacenterIntelXeonSocket, // Multi-socket Intel Xeon 6 Enterprise Server (1S/2S/4S/8S)
-    DatacenterIntelMaxPvc,     // OAM / PCIe Intel Data Center GPU Max Node
+    DatacenterIntelMaxPvc, // OAM / PCIe Intel Data Center GPU Max Node
     EdgeEmbedded,       // Jetson Orin / Embedded APU Modules
     EdgeTpuModule,      // Google Coral Edge TPU USB/PCIe/M.2
     DgxStationSpark,    // NVIDIA DGX Spark / Station AI nodes
     SuperchipGraceBlackwell, // Grace-Blackwell Coherent Memory Substrate
     ApuUnifiedMemoryWithNpu, // AMD Ryzen AI / Strix Point / MI300A Coherent Unified APU + XDNA NPU
-    UnifiedAppleSiliconMac,  // Apple Silicon Mac (MacBook Pro, Mac Studio, Mac mini, Mac Pro, iMac)
-    UnifiedSnapdragonSoc,    // Snapdragon X Elite / X Plus / X2 / 8 Elite Unified SoC
-    SingleBoardComputerAiHat,// Raspberry Pi 5 AI HAT+, Orange Pi 6 Plus / Orange Pi 5 RK3588
-    ExternalPcieM2Accelerator,// External M.2 / PCIe NPU / TPU Accelerator
-    ExternalUsbAccelerator,  // External USB NPU / TPU Accelerator (Coral USB, Intel NCS2)
+    UnifiedAppleSiliconMac, // Apple Silicon Mac (MacBook Pro, Mac Studio, Mac mini, Mac Pro, iMac)
+    UnifiedSnapdragonSoc, // Snapdragon X Elite / X Plus / X2 / 8 Elite Unified SoC
+    SingleBoardComputerAiHat, // Raspberry Pi 5 AI HAT+, Orange Pi 6 Plus / Orange Pi 5 RK3588
+    ExternalPcieM2Accelerator, // External M.2 / PCIe NPU / TPU Accelerator
+    ExternalUsbAccelerator, // External USB NPU / TPU Accelerator (Coral USB, Intel NCS2)
 }
 
 /// Memory silicon technology.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MemoryTechnology {
     Gddr6,
     Gddr6X,
@@ -410,42 +411,42 @@ pub enum MemoryTechnology {
 }
 
 /// Tensor / Matrix Core hardware generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TensorCoreGeneration {
-    Gen1Volta,               // NVIDIA FP16 MMA
-    Gen2Turing,              // NVIDIA INT4, INT8, FP16
-    Gen3Ampere,              // NVIDIA BF16, TF32, Structured 2:4 Sparsity
-    Gen4HopperAda,           // NVIDIA FP8 E4M3/E5M2, DPX, Async TMA
-    Gen5Blackwell,           // NVIDIA NVFP4, Microscaling MXFP4/MXFP8
-    AmdMfmaCdna3,            // AMD CDNA 3 MFMA (MI300X/MI325X: FP8, BF16, INT8, FP16)
-    AmdMfmaCdna4,            // AMD CDNA 4 MFMA (MI350X/MI355X: FP4, FP6, FP8, Microscaling)
-    AmdRdnaWmma,             // AMD RDNA 3/3.5/4 WMMA Matrix Accelerator
-    AmdXdnaNpuEngine,        // AMD XDNA 1 / XDNA 2 Spatial NPU Tile Array
-    GoogleTpuMxuV2,          // Google TPU v2 128x128 BF16 Matrix Multiply Unit
-    GoogleTpuMxuV3,          // Google TPU v3 Dual 128x128 BF16 MXU
-    GoogleTpuMxuV4,          // Google TPU v4 Quad 128x128 BF16/INT8 MXU + SparseCore
-    GoogleTpuMxuV5,          // Google TPU v5e/v5p MXU + 2nd Gen SparseCore
-    GoogleTpuMxuV6Trillium,  // Google TPU v6e Trillium FP8/BF16/INT8 MXU + 3rd Gen SparseCore
+    Gen1Volta,                      // NVIDIA FP16 MMA
+    Gen2Turing,                     // NVIDIA INT4, INT8, FP16
+    Gen3Ampere,                     // NVIDIA BF16, TF32, Structured 2:4 Sparsity
+    Gen4HopperAda,                  // NVIDIA FP8 E4M3/E5M2, DPX, Async TMA
+    Gen5Blackwell,                  // NVIDIA NVFP4, Microscaling MXFP4/MXFP8
+    AmdMfmaCdna3,                   // AMD CDNA 3 MFMA (MI300X/MI325X: FP8, BF16, INT8, FP16)
+    AmdMfmaCdna4,                   // AMD CDNA 4 MFMA (MI350X/MI355X: FP4, FP6, FP8, Microscaling)
+    AmdRdnaWmma,                    // AMD RDNA 3/3.5/4 WMMA Matrix Accelerator
+    AmdXdnaNpuEngine,               // AMD XDNA 1 / XDNA 2 Spatial NPU Tile Array
+    GoogleTpuMxuV2,                 // Google TPU v2 128x128 BF16 Matrix Multiply Unit
+    GoogleTpuMxuV3,                 // Google TPU v3 Dual 128x128 BF16 MXU
+    GoogleTpuMxuV4,                 // Google TPU v4 Quad 128x128 BF16/INT8 MXU + SparseCore
+    GoogleTpuMxuV5,                 // Google TPU v5e/v5p MXU + 2nd Gen SparseCore
+    GoogleTpuMxuV6Trillium, // Google TPU v6e Trillium FP8/BF16/INT8 MXU + 3rd Gen SparseCore
     GoogleEdgeTpuInt8Engine, // Google Coral Edge TPU 4 TOPS INT8 Systolic Engine
-    IntelXmxGen2Battlemage,  // Intel Xe2 Gen2 XMX Matrix Engine (FP8/BF16/INT8/INT4/INT2)
-    IntelXmxGen1Alchemist,   // Intel Xe1 Gen1 XMX Matrix Engine
-    IntelXmxPonteVecchio,    // Intel Xe-HPC Systolic Matrix Engine
-    IntelAmxTileEngine,      // Intel AMX (Advanced Matrix Extensions TMUL FP16/BF16/INT8)
-    IntelAvxVnni,            // Intel AVX-512 / AVX10 VNNI Vector Engine
-    AppleSimdgroupMatrixM1,  // Apple M1 SIMD-group Matrix (Metal 2.4 / 16-core ANE)
-    AppleSimdgroupMatrixM2,  // Apple M2 SIMD-group Matrix (Metal 3.0 / BF16 / 15.8 TOPS ANE)
-    AppleSimdgroupMatrixM3,  // Apple M3 SIMD-group Matrix (Metal 3.1 / Dynamic Caching)
-    AppleSimdgroupMatrixM4,  // Apple M4 SIMD-group Matrix (Metal 3.2 / 38 TOPS Neural Engine)
-    AppleNeuralEngine,       // Apple Neural Engine (ANE Dedicated Subsystem)
+    IntelXmxGen2Battlemage, // Intel Xe2 Gen2 XMX Matrix Engine (FP8/BF16/INT8/INT4/INT2)
+    IntelXmxGen1Alchemist,  // Intel Xe1 Gen1 XMX Matrix Engine
+    IntelXmxPonteVecchio,   // Intel Xe-HPC Systolic Matrix Engine
+    IntelAmxTileEngine,     // Intel AMX (Advanced Matrix Extensions TMUL FP16/BF16/INT8)
+    IntelAvxVnni,           // Intel AVX-512 / AVX10 VNNI Vector Engine
+    AppleSimdgroupMatrixM1, // Apple M1 SIMD-group Matrix (Metal 2.4 / 16-core ANE)
+    AppleSimdgroupMatrixM2, // Apple M2 SIMD-group Matrix (Metal 3.0 / BF16 / 15.8 TOPS ANE)
+    AppleSimdgroupMatrixM3, // Apple M3 SIMD-group Matrix (Metal 3.1 / Dynamic Caching)
+    AppleSimdgroupMatrixM4, // Apple M4 SIMD-group Matrix (Metal 3.2 / 38 TOPS Neural Engine)
+    AppleNeuralEngine,      // Apple Neural Engine (ANE Dedicated Subsystem)
     QualcommHexagonTensorProcessor, // Qualcomm Hexagon HTP Tensor Processor (45-55 TOPS INT4/INT8/FP16)
-    RockchipRknnNpuCore,     // Rockchip NPU (6 TOPS tri-core/dual-core INT4/INT8/FP16/BF16)
+    RockchipRknnNpuCore,            // Rockchip NPU (6 TOPS tri-core/dual-core INT4/INT8/FP16/BF16)
     Hailo8SystolicNpuEngine, // Hailo-8 / Hailo-8L (13-26 TOPS StructSparsity Dataflow Engine)
     Hailo10GenAiEngine,      // Hailo-10 (40 TOPS Generative AI Co-processor)
     ExternalNpuEngine,       // Generic External NPU/TPU Systolic Accelerator
 }
 
 /// Comprehensive hardware profiling descriptor for target GPU / accelerator / APU.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GpuDeviceProfile {
     pub name: String,
     pub compute_capability: ComputeCapability,
@@ -1483,7 +1484,7 @@ impl GpuDeviceProfile {
                 form_factor: HardwareFormFactor::DatacenterIntelXeonSocket,
                 memory_tech: MemoryTechnology::UnifiedDdr5Coherent,
                 tensor_core_gen: TensorCoreGeneration::IntelAvxVnni,
-                sm_count: 288,                                  // 288 Crestmont E-Cores
+                sm_count: 288,                                 // 288 Crestmont E-Cores
                 vram_capacity_bytes: 256 * 1024 * 1024 * 1024, // 256 GB System DDR5 Pool
                 memory_bus_width_bits: 512,
                 memory_bandwidth_gbps: 512.0,
@@ -1514,10 +1515,10 @@ impl GpuDeviceProfile {
                 form_factor: HardwareFormFactor::DatacenterIntelXeonSocket,
                 memory_tech: MemoryTechnology::McrDdr5,
                 tensor_core_gen: TensorCoreGeneration::IntelAmxTileEngine,
-                sm_count: 128,                                  // 128 Redwood Cove P-Cores
+                sm_count: 128, // 128 Redwood Cove P-Cores
                 vram_capacity_bytes: 512 * 1024 * 1024 * 1024, // 512 GB 12-Channel MCR DDR5-8800 Pool
-                memory_bus_width_bits: 768,                     // 12x 64-bit channels
-                memory_bandwidth_gbps: 1536.0,                  // 1.5 TB/s MCR bandwidth
+                memory_bus_width_bits: 768,                    // 12x 64-bit channels
+                memory_bandwidth_gbps: 1536.0,                 // 1.5 TB/s MCR bandwidth
                 l2_cache_bytes: 256 * 1024 * 1024,             // 256 MB L3 Cache
                 smem_per_sm_bytes: 128 * 1024,
                 smem_per_block_bytes: 128 * 1024,
@@ -1758,7 +1759,11 @@ impl GpuDeviceProfile {
         }
 
         // Apple M1 Ultra / M1 Max / M1 Pro / M1 (Metal 2.4/3.0, 16-core ANE)
-        if n.contains("m1") || n.contains("apple m1") || n.contains("apple silicon") || n.contains("metal") {
+        if n.contains("m1")
+            || n.contains("apple m1")
+            || n.contains("apple silicon")
+            || n.contains("metal")
+        {
             let is_ultra = n.contains("ultra");
             let is_max = n.contains("max");
             let is_pro = n.contains("pro");
@@ -1921,7 +1926,11 @@ impl GpuDeviceProfile {
         }
 
         // Snapdragon 8 Gen 3 / Gen 2 / Gen 1 / Other Snapdragon NPUs
-        if n.contains("snapdragon") || n.contains("hexagon") || n.contains("8 gen") || n.contains("qcom") {
+        if n.contains("snapdragon")
+            || n.contains("hexagon")
+            || n.contains("8 gen")
+            || n.contains("qcom")
+        {
             return Some(Self {
                 name: name.to_string(),
                 compute_capability: ComputeCapability::QUALCOMM_HEXAGON_V73,
@@ -1982,7 +1991,11 @@ impl GpuDeviceProfile {
         }
 
         // Rockchip RK3576 (6 TOPS dual-core NPU) / RK3568 / RK3566 / RV1106
-        if n.contains("rk3576") || n.contains("rk3568") || n.contains("rk3566") || n.contains("rockchip") {
+        if n.contains("rk3576")
+            || n.contains("rk3568")
+            || n.contains("rk3566")
+            || n.contains("rockchip")
+        {
             return Some(Self {
                 name: name.to_string(),
                 compute_capability: ComputeCapability::ROCKCHIP_RKNN_RK3576,

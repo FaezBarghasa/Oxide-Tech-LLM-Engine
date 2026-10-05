@@ -5,14 +5,14 @@ use oxide_core::hardware::{GpuArchitecture, GpuDeviceProfile};
 /// Autonomic Kernel Execution Plan for Intel Arc GPUs (XMX) and Intel Xeon Scalable CPUs (AMX/AVX).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IntelExecutionPlan {
-    pub simd_width: u32,               // SIMD16 / SIMD32 for Xe; 512-bit vector for AVX-512/AMX
-    pub workgroup_threads: u32,        // 128 / 256
-    pub slm_shared_memory_bytes: usize,// Shared Local Memory buffer (64KB - 128KB)
-    pub use_xmx_matrix_engine: bool,   // Hardware XMX systolic matrix accelerator
-    pub use_amx_tile_engine: bool,     // Hardware AMX-TMUL 1KB matrix tiles (TMM0-TMM7)
-    pub use_fp8_xmx: bool,             // Native FP8 (E4M3/E5M2) support on Gen2 XMX (Battlemage)
-    pub use_bf16: bool,                // BF16 matrix multiply
-    pub use_int8_systolic: bool,       // INT8 dot-product / DPAS / VNNI
+    pub simd_width: u32, // SIMD16 / SIMD32 for Xe; 512-bit vector for AVX-512/AMX
+    pub workgroup_threads: u32, // 128 / 256
+    pub slm_shared_memory_bytes: usize, // Shared Local Memory buffer (64KB - 128KB)
+    pub use_xmx_matrix_engine: bool, // Hardware XMX systolic matrix accelerator
+    pub use_amx_tile_engine: bool, // Hardware AMX-TMUL 1KB matrix tiles (TMM0-TMM7)
+    pub use_fp8_xmx: bool, // Native FP8 (E4M3/E5M2) support on Gen2 XMX (Battlemage)
+    pub use_bf16: bool,  // BF16 matrix multiply
+    pub use_int8_systolic: bool, // INT8 dot-product / DPAS / VNNI
     pub unroll_factor: u32,
 }
 

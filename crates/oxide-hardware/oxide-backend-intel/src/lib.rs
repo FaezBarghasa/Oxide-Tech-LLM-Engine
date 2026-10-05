@@ -70,9 +70,8 @@ impl IntelBackend {
         custom_device_name: Option<&str>,
     ) -> Self {
         let name = custom_device_name.unwrap_or("Intel Arc B580");
-        let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_else(|| {
-            GpuDeviceProfile::from_known_device_name("b580").unwrap()
-        });
+        let profile = GpuDeviceProfile::from_known_device_name(name)
+            .unwrap_or_else(|| GpuDeviceProfile::from_known_device_name("b580").unwrap());
         let execution_plan = IntelExecutionPlan::for_profile(&profile);
 
         Self {

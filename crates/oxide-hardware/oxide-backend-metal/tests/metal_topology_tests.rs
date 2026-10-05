@@ -16,7 +16,10 @@ fn test_apple_silicon_m4_max_profile() {
     assert_eq!(profile.sm_count, 40);
     assert_eq!(profile.vram_capacity_bytes, 128 * 1024 * 1024 * 1024);
     assert!(profile.supports_fp8);
-    assert_eq!(profile.form_factor, HardwareFormFactor::UnifiedAppleSiliconMac);
+    assert_eq!(
+        profile.form_factor,
+        HardwareFormFactor::UnifiedAppleSiliconMac
+    );
     assert_eq!(
         profile.tensor_core_gen,
         TensorCoreGeneration::AppleSimdgroupMatrixM4

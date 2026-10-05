@@ -1,3 +1,5 @@
+#![allow(dead_code, clippy::needless_range_loop)]
+
 use oxide_core::error::{EngineError, Result};
 use serde::{Deserialize, Serialize};
 

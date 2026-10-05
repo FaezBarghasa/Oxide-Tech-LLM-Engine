@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unreadable_literal,
+    clippy::too_many_lines,
+    clippy::manual_find
+)]
+
 use oxide_core::hardware::HardwareFormFactor;
 use serde::{Deserialize, Serialize};
 
@@ -285,7 +291,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 2. Multimodal Models (VLMs, Diffusion, Audio, Omni)
             // ----------------------------------------------------
@@ -499,7 +504,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 3. Specialized & Niche Model Types
             // ----------------------------------------------------

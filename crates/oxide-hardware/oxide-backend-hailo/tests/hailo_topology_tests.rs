@@ -10,7 +10,10 @@ fn test_rpi5_ai_hat_plus_profile() {
     let profile = GpuDeviceProfile::from_known_device_name("RPi5 with AI HAT+ 26 TOPS")
         .expect("Profile found");
     assert_eq!(profile.architecture, GpuArchitecture::HailoNpu);
-    assert_eq!(profile.compute_capability, ComputeCapability::HAILO_8_26TOPS);
+    assert_eq!(
+        profile.compute_capability,
+        ComputeCapability::HAILO_8_26TOPS
+    );
     assert_eq!(
         profile.form_factor,
         HardwareFormFactor::SingleBoardComputerAiHat
@@ -23,8 +26,7 @@ fn test_rpi5_ai_hat_plus_profile() {
 
 #[test]
 fn test_rpi5_ai_hat_plus_2_profile() {
-    let profile =
-        GpuDeviceProfile::from_known_device_name("ai-hat-plus-2").expect("Profile found");
+    let profile = GpuDeviceProfile::from_known_device_name("ai-hat-plus-2").expect("Profile found");
     assert_eq!(profile.architecture, GpuArchitecture::HailoNpu);
     assert_eq!(
         profile.compute_capability,

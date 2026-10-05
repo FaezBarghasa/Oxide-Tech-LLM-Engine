@@ -1,3 +1,9 @@
+#![allow(
+    clippy::chunks_exact_to_as_chunks,
+    clippy::manual_assert_eq,
+    clippy::manual_is_multiple_of
+)]
+
 use oxide_core::error::{EngineError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,6 +18,7 @@ pub enum ModelFileFormat {
 
 /// GGUF Quantization Precision Formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
 pub enum GgufQuantType {
     F32,
     F16,
@@ -59,11 +66,14 @@ impl SafeTensorsHeader {
         }
 
         let json_slice = &bytes[8..8 + header_len];
-        let json_str = std::str::from_utf8(json_slice)
-            .map_err(|e| EngineError::BackendError(format!("Invalid UTF-8 in SafeTensors header: {e}")))?;
+        let json_str = std::str::from_utf8(json_slice).map_err(|e| {
+            EngineError::BackendError(format!("Invalid UTF-8 in SafeTensors header: {e}"))
+        })?;
 
-        let raw_map: HashMap<String, serde_json::Value> = serde_json::from_str(json_str)
-            .map_err(|e| EngineError::BackendError(format!("Failed to parse SafeTensors JSON: {e}")))?;
+        let raw_map: HashMap<String, serde_json::Value> =
+            serde_json::from_str(json_str).map_err(|e| {
+                EngineError::BackendError(format!("Failed to parse SafeTensors JSON: {e}"))
+            })?;
 
         let mut tensors = HashMap::new();
         let mut metadata = HashMap::new();
@@ -78,19 +88,38 @@ impl SafeTensorsHeader {
                     }
                 }
             } else if let Some(obj) = v.as_object() {
-                let dtype = obj.get("dtype").and_then(|d| d.as_str()).unwrap_or("F32").to_string();
-                let shape = obj.get("shape").and_then(|s| s.as_array()).map_or_else(Vec::new, |arr| {
-                    arr.iter().filter_map(|x| x.as_u64().map(|v| v as usize)).collect()
-                });
-                let offsets = obj.get("data_offsets").and_then(|o| o.as_array()).map_or((0, 0), |arr| {
-                    if arr.len() == 2 {
-                        (arr[0].as_u64().unwrap_or(0), arr[1].as_u64().unwrap_or(0))
-                    } else {
-                        (0, 0)
-                    }
-                });
+                let dtype = obj
+                    .get("dtype")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("F32")
+                    .to_string();
+                let shape =
+                    obj.get("shape")
+                        .and_then(|s| s.as_array())
+                        .map_or_else(Vec::new, |arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_u64().map(|v| v as usize))
+                                .collect()
+                        });
+                let offsets =
+                    obj.get("data_offsets")
+                        .and_then(|o| o.as_array())
+                        .map_or((0, 0), |arr| {
+                            if arr.len() == 2 {
+                                (arr[0].as_u64().unwrap_or(0), arr[1].as_u64().unwrap_or(0))
+                            } else {
+                                (0, 0)
+                            }
+                        });
 
-                tensors.insert(k, SafeTensorInfo { dtype, shape, data_offsets: offsets });
+                tensors.insert(
+                    k,
+                    SafeTensorInfo {
+                        dtype,
+                        shape,
+                        data_offsets: offsets,
+                    },
+                );
             }
         }
 
@@ -147,7 +176,11 @@ impl Nvfp4Block {
     #[must_use]
     pub fn quantize(values: &[f32]) -> Self {
         assert!(values.len() % 2 == 0);
-        let max_abs = values.iter().copied().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-6);
+        let max_abs = values
+            .iter()
+            .copied()
+            .fold(0.0f32, |m, v| m.max(v.abs()))
+            .max(1e-6);
         let scale = max_abs / 6.0; // Max representable value in E2M1 (1.5 * 2^2 = 6.0)
 
         let mut packed = Vec::with_capacity(values.len() / 2);
@@ -180,16 +213,22 @@ impl Nvfp4Block {
     fn float_to_nvfp4(v: f32) -> u8 {
         let sign = if v < 0.0 { 0x08 } else { 0x00 };
         let abs_v = v.abs();
-        let mag = if abs_v < 0.5 {
+        let mag = if abs_v < 0.25 {
             0
-        } else if abs_v < 1.25 {
+        } else if abs_v < 0.75 {
             1
-        } else if abs_v < 2.5 {
+        } else if abs_v < 1.25 {
             2
-        } else if abs_v < 4.5 {
+        } else if abs_v < 1.75 {
+            3
+        } else if abs_v < 2.5 {
             4
-        } else {
+        } else if abs_v < 3.5 {
+            5
+        } else if abs_v < 5.0 {
             6
+        } else {
+            7
         };
         sign | (mag & 0x07)
     }
@@ -199,13 +238,13 @@ impl Nvfp4Block {
         let sign = if (nibble & 0x08) != 0 { -1.0 } else { 1.0 };
         let mag = match nibble & 0x07 {
             0 => 0.0,
-            1 => 1.0,
-            2 => 2.0,
-            3 => 3.0,
-            4 => 4.0,
-            5 => 5.0,
-            6 => 6.0,
-            _ => 7.0,
+            1 => 0.5,
+            2 => 1.0,
+            3 => 1.5,
+            4 => 2.0,
+            5 => 3.0,
+            6 => 4.0,
+            _ => 6.0,
         };
         sign * mag
     }

@@ -53,7 +53,7 @@ impl QualcommExecutionPlan {
                 native_int4_enabled: true,
                 native_fp8_enabled: true,
                 zero_copy_ion_shared_memory: true,
-                peak_npu_tops: if is_x_series { 45.0 } else { 45.0 },
+                peak_npu_tops: if is_x_series { 45.0 } else { 38.0 },
                 hvx_thread_count: 8,
                 qnn_graph_dispatch_threads: 4,
             }

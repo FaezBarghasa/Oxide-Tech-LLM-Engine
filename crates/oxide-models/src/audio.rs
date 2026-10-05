@@ -122,7 +122,11 @@ impl AudioServingEngine {
     /// Synthesizes streaming audio PCM frames from input text tokens for TTS.
     pub fn synthesize_streaming_tts_chunk(&mut self, text_tokens: &[u32]) -> Result<&[i16]> {
         for (i, pcm) in self.audio_pcm_buffer.iter_mut().enumerate() {
-            let tone = if text_tokens.is_empty() { 0 } else { (text_tokens[0] as i16).wrapping_mul(100) };
+            let tone = if text_tokens.is_empty() {
+                0
+            } else {
+                (text_tokens[0] as i16).wrapping_mul(100)
+            };
             *pcm = tone.wrapping_add((i % 256) as i16);
         }
         Ok(&self.audio_pcm_buffer)

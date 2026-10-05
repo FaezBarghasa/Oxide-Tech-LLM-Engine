@@ -44,4 +44,7 @@ pub enum EngineError {
 
     #[error("Unsupported hardware capability or model configuration")]
     UnsupportedCapability,
+
+    #[error("Tensor shape or dimension mismatch")]
+    ShapeMismatch,
 }

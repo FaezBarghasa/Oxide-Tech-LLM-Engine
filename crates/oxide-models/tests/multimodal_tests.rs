@@ -1,5 +1,7 @@
 use oxide_models::audio::{AudioEngineMode, AudioModelConfig, AudioServingEngine};
-use oxide_models::diffusion::{DiffusionEngine, DiffusionSchedulerType, DiffusionTransformerConfig};
+use oxide_models::diffusion::{
+    DiffusionEngine, DiffusionSchedulerType, DiffusionTransformerConfig,
+};
 
 #[test]
 fn test_diffusion_image_and_video_generation() {

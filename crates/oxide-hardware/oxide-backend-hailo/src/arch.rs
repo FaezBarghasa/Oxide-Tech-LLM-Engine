@@ -22,6 +22,7 @@ use oxide_core::hardware::GpuDeviceProfile;
 
 /// Execution plan for Hailo-8 / Hailo-10 / External NPU / External TPU accelerators.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct HailoExecutionPlan {
     pub pcie_gen: u32,
     pub native_int8_enabled: bool,

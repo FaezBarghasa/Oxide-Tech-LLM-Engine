@@ -21,7 +21,11 @@ pub struct RoboticsVlaEngine {
 
 impl RoboticsVlaEngine {
     #[must_use]
-    pub fn new(hidden_dim: usize, action_horizon: usize, use_hybrid_linear_attention: bool) -> Self {
+    pub fn new(
+        hidden_dim: usize,
+        action_horizon: usize,
+        use_hybrid_linear_attention: bool,
+    ) -> Self {
         Self {
             hidden_dim,
             action_horizon,
@@ -30,7 +34,10 @@ impl RoboticsVlaEngine {
     }
 
     /// Predicts real-time continuous control action chunks from visual-token embeddings.
-    pub fn predict_action_chunk(&self, visual_tokens: &[f32]) -> Result<Vec<RoboticsVlaActionChunk>> {
+    pub fn predict_action_chunk(
+        &self,
+        visual_tokens: &[f32],
+    ) -> Result<Vec<RoboticsVlaActionChunk>> {
         if visual_tokens.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }
@@ -79,14 +86,19 @@ impl EmbeddingEngine {
     }
 
     /// Computes dense L2-normalized vector embedding via mean pooling over sequence tokens.
-    pub fn compute_dense_embedding(&self, token_hidden_states: &[f32], seq_len: usize) -> Result<Vec<f32>> {
+    pub fn compute_dense_embedding(
+        &self,
+        token_hidden_states: &[f32],
+        seq_len: usize,
+    ) -> Result<Vec<f32>> {
         if token_hidden_states.len() != seq_len * self.embedding_dim || seq_len == 0 {
             return Err(EngineError::ShapeMismatch);
         }
 
         let mut embedding = vec![0.0f32; self.embedding_dim];
         for t in 0..seq_len {
-            let token_slice = &token_hidden_states[t * self.embedding_dim..(t + 1) * self.embedding_dim];
+            let token_slice =
+                &token_hidden_states[t * self.embedding_dim..(t + 1) * self.embedding_dim];
             for i in 0..self.embedding_dim {
                 embedding[i] += token_slice[i];
             }
@@ -154,7 +166,9 @@ pub struct AgenticDeciderEngine {
 impl AgenticDeciderEngine {
     #[must_use]
     pub fn new(decision_categories: Vec<String>) -> Self {
-        Self { decision_categories }
+        Self {
+            decision_categories,
+        }
     }
 
     /// Evaluates probabilistic decision action from reasoning logit outputs.

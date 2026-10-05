@@ -17,7 +17,10 @@ fn test_snapdragon_x_elite_profile() {
     assert_eq!(profile.vram_capacity_bytes, 64 * 1024 * 1024 * 1024);
     assert_eq!(profile.memory_bandwidth_gbps, 135.0);
     assert!(profile.supports_fp8);
-    assert_eq!(profile.form_factor, HardwareFormFactor::UnifiedSnapdragonSoc);
+    assert_eq!(
+        profile.form_factor,
+        HardwareFormFactor::UnifiedSnapdragonSoc
+    );
     assert_eq!(
         profile.tensor_core_gen,
         TensorCoreGeneration::QualcommHexagonTensorProcessor

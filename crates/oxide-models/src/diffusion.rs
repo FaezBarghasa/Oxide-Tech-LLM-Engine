@@ -110,7 +110,9 @@ impl DiffusionEngine {
     pub fn initialize_noise(&mut self, seed: u64) {
         let mut state = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
         for x in &mut self.latent_buffer {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             let val = ((state >> 32) as i32 as f32) / (i32::MAX as f32);
             *x = val;
         }

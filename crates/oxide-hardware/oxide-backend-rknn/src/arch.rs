@@ -22,6 +22,7 @@ use oxide_core::hardware::GpuDeviceProfile;
 
 /// Execution plan for Rockchip RKNN NPU (Orange Pi 6 Plus / Orange Pi 5 / RK3588 / RK3576).
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct RknnExecutionPlan {
     pub npu_core_count: u32,
     pub native_int8_enabled: bool,
