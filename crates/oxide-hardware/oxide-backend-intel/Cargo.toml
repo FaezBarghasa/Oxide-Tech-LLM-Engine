@@ -1,0 +1,13 @@
+[package]
+name = "oxide-backend-intel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide-core.workspace = true
+oxide-alloc.workspace = true
+oxide-quant.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

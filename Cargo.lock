@@ -655,6 +655,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-backend-intel"
+version = "0.1.0"
+dependencies = [
+ "oxide-alloc",
+ "oxide-core",
+ "oxide-quant",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "oxide-backend-metal"
 version = "0.1.0"
 dependencies = [

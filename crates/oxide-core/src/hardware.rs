@@ -36,6 +36,14 @@ pub enum GpuArchitecture {
     GoogleTpuV5p,         // TPU v5p (95GB HBM2e, 459 TFLOPS BF16, 4800 Gbps 3D Torus ICI)
     GoogleTpuV6eTrillium, // TPU v6e Trillium (32GB HBM3, 920 TFLOPS BF16/FP8, 3rd Gen SparseCore)
     GoogleEdgeTpu,        // Google Coral Edge TPU (4 TOPS INT8, PCIe/USB/M.2)
+
+    // Intel Arc GPU & Xeon Scalable Architectures
+    IntelXe2Battlemage,           // Intel Arc B-Series (B580, B570, Arc Pro B60/B50) & Lunar Lake Xe2-LPG
+    IntelXe1Alchemist,            // Intel Arc A-Series (A770, A750, Arc Pro A60/A50)
+    IntelXeHpcPonteVecchio,       // Intel Data Center GPU Max (Max 1550, Max 1100)
+    IntelXeonGraniteRapids,       // Intel Xeon 6 6900P / 6700P (AMX FP16/BF16/INT8 + 12-ch DDR5/MCR)
+    IntelXeonSierraForest,        // Intel Xeon 6 6700E / 6900E (up to 288 E-cores + AVX-VNNI)
+    IntelXeonEmeraldSapphireRapids,// Intel Xeon 5th/4th Gen Scalable & Xeon Max (64GB HBM2e)
 }
 
 /// Compute Capability / Target ISA Version.
@@ -128,6 +136,32 @@ impl ComputeCapability {
         minor: 1,
     };
 
+    // Intel Arc GPU & Xeon Targets
+    pub const INTEL_XE2_BATTLEMAGE: Self = Self {
+        major: 30,
+        minor: 20,
+    };
+    pub const INTEL_XE1_ALCHEMIST: Self = Self {
+        major: 30,
+        minor: 10,
+    };
+    pub const INTEL_XE_HPC_PVC: Self = Self {
+        major: 30,
+        minor: 90,
+    };
+    pub const INTEL_XEON_6_GRANITE_RAPIDS: Self = Self {
+        major: 30,
+        minor: 69,
+    };
+    pub const INTEL_XEON_6_SIERRA_FOREST: Self = Self {
+        major: 30,
+        minor: 67,
+    };
+    pub const INTEL_XEON_MAX_HBM: Self = Self {
+        major: 30,
+        minor: 40,
+    };
+
     #[must_use]
     pub const fn new(major: u32, minor: u32) -> Self {
         Self { major, minor }
@@ -157,6 +191,12 @@ impl ComputeCapability {
             (20, 50) => GpuArchitecture::GoogleTpuV5e,
             (20, 51) => GpuArchitecture::GoogleTpuV5p,
             (20, 60) => GpuArchitecture::GoogleTpuV6eTrillium,
+            (30, 20) => GpuArchitecture::IntelXe2Battlemage,
+            (30, 10) => GpuArchitecture::IntelXe1Alchemist,
+            (30, 90) => GpuArchitecture::IntelXeHpcPonteVecchio,
+            (30, 69) => GpuArchitecture::IntelXeonGraniteRapids,
+            (30, 67) => GpuArchitecture::IntelXeonSierraForest,
+            (30, 40) => GpuArchitecture::IntelXeonEmeraldSapphireRapids,
             _ => GpuArchitecture::Ampere,
         }
     }
@@ -164,7 +204,17 @@ impl ComputeCapability {
 
 impl fmt::Display for ComputeCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.major == 20 {
+        if self.major == 30 {
+            match self.minor {
+                20 => write!(f, "intel_xe2_battlemage"),
+                10 => write!(f, "intel_xe1_alchemist"),
+                90 => write!(f, "intel_xe_hpc_pvc"),
+                69 => write!(f, "intel_xeon_6_granite_rapids"),
+                67 => write!(f, "intel_xeon_6_sierra_forest"),
+                40 => write!(f, "intel_xeon_max_hbm"),
+                _ => write!(f, "intel_gen{}", self.minor),
+            }
+        } else if self.major == 20 {
             match self.minor {
                 1 => write!(f, "tpu_edge"),
                 2 => write!(f, "tpu_v2"),
@@ -193,13 +243,15 @@ impl fmt::Display for ComputeCapability {
 /// Physical and Deployment Hardware Form Factor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HardwareFormFactor {
-    DesktopWorkstation, // Standard Desktop PCIe (e.g. N1X Workstations, custom rigs, Radeon RX)
-    LaptopMobile,       // High-efficiency Mobile Max-Q / Laptop GPUs / APUs
+    DesktopWorkstation, // Standard Desktop PCIe (e.g. N1X Workstations, custom rigs, Radeon RX, Arc B580)
+    LaptopMobile,       // High-efficiency Mobile Max-Q / Laptop GPUs / Lunar Lake Xe2-LPG
     EnterpriseRackServer, // 1U-8U Enterprise Server (e.g. N1X Servers)
     DatacenterSxmNvl,   // SXM5 / SXM6 / NVL72 High-Density Multi-GPU
     DatacenterOamInstinct, // OAM / UBB AMD Instinct Datacenter Module
     DatacenterTpuPod3dTorus, // Google Cloud TPU v4/v5p 3D Torus OCS Pod
     DatacenterTpuPod2dTorus, // Google Cloud TPU v2/v3/v5e/v6e 2D Torus Pod
+    DatacenterIntelXeonSocket, // Multi-socket Intel Xeon 6 Enterprise Server (1S/2S/4S/8S)
+    DatacenterIntelMaxPvc,     // OAM / PCIe Intel Data Center GPU Max Node
     EdgeEmbedded,       // Jetson Orin / Embedded APU Modules
     EdgeTpuModule,      // Google Coral Edge TPU USB/PCIe/M.2
     DgxStationSpark,    // NVIDIA DGX Spark / Station AI nodes
@@ -220,6 +272,8 @@ pub enum MemoryTechnology {
     Hbm3e,
     UnifiedLpddr5X,
     UnifiedDdr5Coherent,
+    McrDdr5,
+    Hbm2eOnPackageCpu,
     SramOnChip,
 }
 
@@ -241,6 +295,11 @@ pub enum TensorCoreGeneration {
     GoogleTpuMxuV5,          // Google TPU v5e/v5p MXU + 2nd Gen SparseCore
     GoogleTpuMxuV6Trillium,  // Google TPU v6e Trillium FP8/BF16/INT8 MXU + 3rd Gen SparseCore
     GoogleEdgeTpuInt8Engine, // Google Coral Edge TPU 4 TOPS INT8 Systolic Engine
+    IntelXmxGen2Battlemage,  // Intel Xe2 Gen2 XMX Matrix Engine (FP8/BF16/INT8/INT4/INT2)
+    IntelXmxGen1Alchemist,   // Intel Xe1 Gen1 XMX Matrix Engine
+    IntelXmxPonteVecchio,    // Intel Xe-HPC Systolic Matrix Engine
+    IntelAmxTileEngine,      // Intel AMX (Advanced Matrix Extensions TMUL FP16/BF16/INT8)
+    IntelAvxVnni,            // Intel AVX-512 / AVX10 VNNI Vector Engine
 }
 
 /// Comprehensive hardware profiling descriptor for target GPU / accelerator / APU.
@@ -1151,6 +1210,227 @@ impl GpuDeviceProfile {
             });
         }
 
+        // ==========================================
+        // 6. INTEL ARC / ARC PRO GPUS & XEON CPUS
+        // ==========================================
+
+        // Intel Arc B-Series GPUs (Battlemage: Xe2-HPG / Xe2-LPG, 20 Xe-cores, Gen2 XMX FP8/INT8/INT4/INT2)
+        if n.contains("b580")
+            || n.contains("b570")
+            || n.contains("battlemage")
+            || n.contains("arc b")
+            || n.contains("arc pro b")
+            || n.contains("b60")
+            || n.contains("b50")
+        {
+            let is_b60 = n.contains("b60") || n.contains("pro");
+            let is_b580 = n.contains("b580") || is_b60;
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::INTEL_XE2_BATTLEMAGE,
+                architecture: GpuArchitecture::IntelXe2Battlemage,
+                form_factor: if is_b60 {
+                    HardwareFormFactor::EnterpriseRackServer
+                } else {
+                    HardwareFormFactor::DesktopWorkstation
+                },
+                memory_tech: MemoryTechnology::Gddr6,
+                tensor_core_gen: TensorCoreGeneration::IntelXmxGen2Battlemage,
+                sm_count: if is_b580 { 20 } else { 18 }, // Xe2-Cores / XMX engines
+                vram_capacity_bytes: if is_b60 {
+                    24 * 1024 * 1024 * 1024
+                } else if is_b580 {
+                    12 * 1024 * 1024 * 1024
+                } else {
+                    10 * 1024 * 1024 * 1024
+                },
+                memory_bus_width_bits: if is_b580 { 192 } else { 160 },
+                memory_bandwidth_gbps: if is_b580 { 456.0 } else { 380.0 },
+                l2_cache_bytes: 16 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true, // Gen2 XMX native FP8 (E4M3/E5M2)
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Intel Arc A-Series GPUs (Alchemist: Xe-HPG, Arc A770, Arc A750, Arc Pro A60)
+        if n.contains("a770")
+            || n.contains("a750")
+            || n.contains("a580")
+            || n.contains("a380")
+            || n.contains("alchemist")
+            || n.contains("arc a")
+            || n.contains("arc pro a")
+        {
+            let is_a770 = n.contains("a770") || n.contains("a60");
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::INTEL_XE1_ALCHEMIST,
+                architecture: GpuArchitecture::IntelXe1Alchemist,
+                form_factor: HardwareFormFactor::DesktopWorkstation,
+                memory_tech: MemoryTechnology::Gddr6,
+                tensor_core_gen: TensorCoreGeneration::IntelXmxGen1Alchemist,
+                sm_count: if is_a770 { 32 } else { 28 }, // Xe-Cores
+                vram_capacity_bytes: if is_a770 {
+                    16 * 1024 * 1024 * 1024
+                } else {
+                    8 * 1024 * 1024 * 1024
+                },
+                memory_bus_width_bits: 256,
+                memory_bandwidth_gbps: 560.0,
+                l2_cache_bytes: 16 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Intel Data Center GPU Max (Ponte Vecchio: Xe-HPC, 128 Xe-cores, 128GB HBM2e)
+        if n.contains("ponte vecchio")
+            || n.contains("pvc")
+            || n.contains("max 1550")
+            || n.contains("max 1100")
+            || n.contains("data center gpu max")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::INTEL_XE_HPC_PVC,
+                architecture: GpuArchitecture::IntelXeHpcPonteVecchio,
+                form_factor: HardwareFormFactor::DatacenterIntelMaxPvc,
+                memory_tech: MemoryTechnology::Hbm2e,
+                tensor_core_gen: TensorCoreGeneration::IntelXmxPonteVecchio,
+                sm_count: 128, // 128 Xe-Cores / 512 XMX Engines
+                vram_capacity_bytes: 128 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 8192,
+                memory_bandwidth_gbps: 3276.0,
+                l2_cache_bytes: 408 * 1024 * 1024, // 408 MB Rambo L2 Cache
+                smem_per_sm_bytes: 128 * 1024,
+                smem_per_block_bytes: 128 * 1024,
+                max_threads_per_sm: 2048,
+                supports_tma: true,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // Xe Link
+                nvlink_bandwidth_gbps: 1280.0,
+            });
+        }
+
+        // Intel Xeon 6 Scalable Processors (Granite Rapids: 6900P / 6700P, 128 Cores, AMX FP16/BF16/INT8, 12-ch DDR5/MCR)
+        if n.contains("6980p")
+            || n.contains("6900p")
+            || n.contains("6700p")
+            || n.contains("granite rapids")
+            || n.contains("xeon 6")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::INTEL_XEON_6_GRANITE_RAPIDS,
+                architecture: GpuArchitecture::IntelXeonGraniteRapids,
+                form_factor: HardwareFormFactor::DatacenterIntelXeonSocket,
+                memory_tech: MemoryTechnology::McrDdr5,
+                tensor_core_gen: TensorCoreGeneration::IntelAmxTileEngine,
+                sm_count: 128,                                  // 128 Redwood Cove P-Cores
+                vram_capacity_bytes: 512 * 1024 * 1024 * 1024, // 512 GB 12-Channel MCR DDR5-8800 Pool
+                memory_bus_width_bits: 768,                     // 12x 64-bit channels
+                memory_bandwidth_gbps: 1536.0,                  // 1.5 TB/s MCR bandwidth
+                l2_cache_bytes: 256 * 1024 * 1024,             // 256 MB L3 Cache
+                smem_per_sm_bytes: 128 * 1024,
+                smem_per_block_bytes: 128 * 1024,
+                max_threads_per_sm: 2048,
+                supports_tma: true,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // Intel UPI 2.0 Multi-Socket Links
+                nvlink_bandwidth_gbps: 256.0,
+            });
+        }
+
+        // Intel Xeon 6 Sierra Forest (6700E / 6900E: up to 288 Crestmont E-Cores, AVX-VNNI INT8)
+        if n.contains("sierra forest")
+            || n.contains("6780e")
+            || n.contains("6700e")
+            || n.contains("6900e")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::INTEL_XEON_6_SIERRA_FOREST,
+                architecture: GpuArchitecture::IntelXeonSierraForest,
+                form_factor: HardwareFormFactor::DatacenterIntelXeonSocket,
+                memory_tech: MemoryTechnology::UnifiedDdr5Coherent,
+                tensor_core_gen: TensorCoreGeneration::IntelAvxVnni,
+                sm_count: 288,                                  // 288 Crestmont E-Cores
+                vram_capacity_bytes: 256 * 1024 * 1024 * 1024, // 256 GB System DDR5 Pool
+                memory_bus_width_bits: 512,
+                memory_bandwidth_gbps: 512.0,
+                l2_cache_bytes: 144 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true,
+                nvlink_bandwidth_gbps: 128.0,
+            });
+        }
+
+        // Intel Xeon Max / Emerald Rapids / Sapphire Rapids (Xeon Max 9480 with 64GB on-package HBM2e + AMX)
+        if n.contains("xeon max")
+            || n.contains("9480")
+            || n.contains("9468")
+            || n.contains("sapphire rapids")
+            || n.contains("emerald rapids")
+            || n.contains("xeon platinum")
+            || n.contains("xeon")
+        {
+            let is_hbm_max = n.contains("max") || n.contains("9480") || n.contains("9468");
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::INTEL_XEON_MAX_HBM,
+                architecture: GpuArchitecture::IntelXeonEmeraldSapphireRapids,
+                form_factor: HardwareFormFactor::DatacenterIntelXeonSocket,
+                memory_tech: if is_hbm_max {
+                    MemoryTechnology::Hbm2eOnPackageCpu
+                } else {
+                    MemoryTechnology::UnifiedDdr5Coherent
+                },
+                tensor_core_gen: TensorCoreGeneration::IntelAmxTileEngine,
+                sm_count: 64, // 64 P-Cores with AMX-TMUL tiles
+                vram_capacity_bytes: if is_hbm_max {
+                    64 * 1024 * 1024 * 1024 // 64 GB HBM2e on-package
+                } else {
+                    128 * 1024 * 1024 * 1024
+                },
+                memory_bus_width_bits: if is_hbm_max { 4096 } else { 512 },
+                memory_bandwidth_gbps: if is_hbm_max { 1024.0 } else { 307.2 },
+                l2_cache_bytes: 112 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // UPI Links
+                nvlink_bandwidth_gbps: 128.0,
+            });
+        }
+
         None
     }
 
@@ -1158,14 +1438,20 @@ impl GpuDeviceProfile {
     #[must_use]
     pub const fn optimal_gemv_threads(&self) -> u32 {
         match self.architecture {
-            GpuArchitecture::GoogleTpuV6eTrillium
+            GpuArchitecture::IntelXeHpcPonteVecchio
+            | GpuArchitecture::IntelXeonGraniteRapids
+            | GpuArchitecture::GoogleTpuV6eTrillium
             | GpuArchitecture::GoogleTpuV5p
             | GpuArchitecture::GoogleTpuV4
             | GpuArchitecture::Cdna4
             | GpuArchitecture::Cdna3
             | GpuArchitecture::Blackwell
-            | GpuArchitecture::Hopper => 256, // 8 warps / Wave64 x 4 / High-throughput 128x128 MXU
-            GpuArchitecture::GoogleTpuV5e
+            | GpuArchitecture::Hopper => 256, // 8 warps / Wave64 x 4 / High-throughput 128x128 MXU / AMX 1KB tiles
+            GpuArchitecture::IntelXe2Battlemage
+            | GpuArchitecture::IntelXe1Alchemist
+            | GpuArchitecture::IntelXeonSierraForest
+            | GpuArchitecture::IntelXeonEmeraldSapphireRapids
+            | GpuArchitecture::GoogleTpuV5e
             | GpuArchitecture::GoogleTpuV3
             | GpuArchitecture::GoogleTpuV2
             | GpuArchitecture::Rdna3
@@ -1176,7 +1462,7 @@ impl GpuDeviceProfile {
             | GpuArchitecture::Orin
             | GpuArchitecture::Cdna2
             | GpuArchitecture::Cdna1
-            | GpuArchitecture::XdnaNpu => 128, // 4 warps / Wave32 x 4 / Standard MXU
+            | GpuArchitecture::XdnaNpu => 128, // 4 warps / Wave32 x 4 / Standard MXU / Xe-core
             GpuArchitecture::GoogleEdgeTpu
             | GpuArchitecture::Turing
             | GpuArchitecture::Volta
