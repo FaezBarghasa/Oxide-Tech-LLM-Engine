@@ -45,7 +45,9 @@ impl TreeNode {
 }
 
 /// Shared physical KV block with atomic lock-free reference counting for O(1) branching.
+/// Aligned to 64 bytes to eliminate cache-line false sharing across multiple processor cores.
 #[derive(Debug)]
+#[repr(C, align(64))]
 pub struct SharedPhysicalBlock {
     pub block_id: PhysicalBlockId,
     pub ref_count: AtomicU32,

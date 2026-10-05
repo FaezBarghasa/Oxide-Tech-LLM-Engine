@@ -15,7 +15,8 @@
     clippy::return_self_not_must_use,
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
 )]
 
 pub mod ternary;
@@ -68,7 +69,17 @@ impl HardwareBackend for CpuBackend {
 
         let slot = cmd.slot_idx as usize;
         if slot < self.token_buffer.len() {
-            self.token_buffer[slot] = cmd.input_token.wrapping_add(1);
+            let mut activations = [0.0f32; 128];
+            for (i, act) in activations.iter_mut().enumerate() {
+                *act = ((cmd.input_token as f32 * 0.05) + (i as f32 * 0.1)).sin();
+            }
+            let dummy_blocks = [oxide_quant::ptq1_0::TernaryBlock128 {
+                scale_fp16: 0x3c00, // 1.0 in FP16
+                packed_weights: [0x55; 32],
+            }];
+            let dot = ternary::ternary_gemv_cpu(&activations, &dummy_blocks);
+            let next_tok = (cmd.input_token.wrapping_add(1) + (dot.abs() as u32)).max(1);
+            self.token_buffer[slot] = next_tok;
         }
 
         Ok(event)

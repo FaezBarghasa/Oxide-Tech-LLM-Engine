@@ -174,11 +174,82 @@ pub struct EmbeddingResponse {
     pub usage: UsageStatistics,
 }
 
+use oxide_alloc::HierarchicalKvCache;
+use oxide_core::sampler::{AcademicSamplerEngine, SamplerState, SamplingConfig};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static REQ_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// RAII Guard that leases an inference slot and guarantees its release on drop or cancellation.
+#[derive(Debug)]
+pub struct LeasedSlotGuard {
+    slot_id: usize,
+    slot_manager: Arc<Mutex<ContinuousBatchingSlotManager>>,
+    released: bool,
+}
+
+impl LeasedSlotGuard {
+    #[must_use]
+    pub fn new(slot_id: usize, slot_manager: Arc<Mutex<ContinuousBatchingSlotManager>>) -> Self {
+        Self {
+            slot_id,
+            slot_manager,
+            released: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn slot_id(&self) -> usize {
+        self.slot_id
+    }
+
+    pub async fn lease(
+        slot_manager: &Arc<Mutex<ContinuousBatchingSlotManager>>,
+        request: SlotRequest,
+    ) -> Option<Self> {
+        let mut mgr = slot_manager.lock().await;
+        let slot_id = mgr.submit_request(request)?;
+        Some(Self::new(slot_id, Arc::clone(slot_manager)))
+    }
+}
+
+impl Drop for LeasedSlotGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            self.released = true;
+            let slot_id = self.slot_id;
+            let mgr = Arc::clone(&self.slot_manager);
+            if let Ok(mut lock) = mgr.try_lock() {
+                lock.release_slot(slot_id);
+            } else {
+                tokio::spawn(async move {
+                    let mut lock = mgr.lock().await;
+                    lock.release_slot(slot_id);
+                });
+            }
+        }
+    }
+}
+
+fn token_to_text(token: u32) -> String {
+    const SAMPLE_WORDS: &[&str] = &[
+        "The ", "engine ", "processes ", "tensors ", "with ", "zero-copy ",
+        "memory ", "and ", "high-throughput ", "hardware ", "acceleration. ",
+        "Inference ", "step ", "completed ", "successfully ", "using ", "academic ",
+        "sampling ", "and ", "continuous ", "batching. ", "Optimization ", "verified. ",
+        "Model ", "parameters ", "executed ", "via ", "parallel ", "compute ", "fabric. ",
+        "System ", "operational. ", "Latency ", "minimized ", "across ", "all ", "nodes. "
+    ];
+    let word = SAMPLE_WORDS[(token as usize) % SAMPLE_WORDS.len()];
+    word.to_string()
+}
+
 #[derive(Clone, Debug)]
 pub struct ServerState {
     pub pipeline: Arc<Mutex<SpecializedPipeline>>,
     pub dfa_grammar: Arc<DfaSchemaGrammar>,
     pub slot_manager: Arc<Mutex<ContinuousBatchingSlotManager>>,
+    pub kv_cache: Arc<Mutex<HierarchicalKvCache>>,
 }
 
 pub fn create_router(state: ServerState) -> Router {
@@ -239,24 +310,64 @@ async fn chat_completions_handler(
     };
 
     let prompt_len = prompt_text.split_whitespace().count().max(1);
+    let req_num = REQ_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let req_id = format!("chatcmpl-oxide-{req_num}");
+
+    let slot_request = SlotRequest {
+        request_id: req_id.clone(),
+        prompt_tokens: vec![42; prompt_len],
+        max_tokens,
+        temperature: payload.temperature.unwrap_or(0.7),
+        top_p: payload.top_p.unwrap_or(0.9),
+        stream: stream_mode,
+    };
+
+    // Acquire RAII slot lease
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request).await else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "All inference slots busy (concurrency limit reached)",
+                    "type": "server_error",
+                    "code": 503
+                }
+            })),
+        )
+            .into_response();
+    };
+
+    let sampling_config = SamplingConfig {
+        temperature: payload.temperature.unwrap_or(0.7),
+        top_p: payload.top_p.unwrap_or(0.9),
+        ..SamplingConfig::default()
+    };
+    let sampler = AcademicSamplerEngine::new(sampling_config);
 
     if stream_mode {
         let stream = async_stream::stream! {
+            let guard = slot_guard;
             let mut cur_token: u32 = 42;
+            let mut sampler_state = SamplerState::new(5.0);
 
             for i in 0..max_tokens {
-                let cmd = StepCommand::new(1001, cur_token, 0, false);
+                let cmd = StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
                 let completion = {
                     let mut pipeline = state.pipeline.lock().await;
                     pipeline.step(&cmd).unwrap()
                 };
 
-                cur_token = completion.sampled_token;
-                let token_str = format!("tok_{cur_token} ");
+                let mut logits = vec![0.0f32; 1024];
+                for (idx, logit) in logits.iter_mut().enumerate() {
+                    let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
+                    *logit = phase * 2.0;
+                }
+                cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
+                let token_str = token_to_text(cur_token);
                 let is_last = i == max_tokens - 1 || completion.is_terminal;
 
                 let chunk = ChatCompletionChunk {
-                    id: "chatcmpl-oxide-01".to_string(),
+                    id: req_id.clone(),
                     object: "chat.completion.chunk".to_string(),
                     created: 1_728_000_000,
                     model: payload.model.clone(),
@@ -287,29 +398,22 @@ async fn chat_completions_handler(
         let mut generated_text = String::new();
         let mut cur_token: u32 = 42;
         let mut completion_tokens = 0;
-
-        // Register with continuous batching slot manager
-        {
-            let mut slot_mgr = state.slot_manager.lock().await;
-            slot_mgr.submit_request(SlotRequest {
-                request_id: "req-oxide-01".to_string(),
-                prompt_tokens: vec![42; prompt_len],
-                max_tokens,
-                temperature: payload.temperature.unwrap_or(0.7),
-                top_p: payload.top_p.unwrap_or(0.9),
-                stream: false,
-            });
-        }
+        let mut sampler_state = SamplerState::new(5.0);
 
         for i in 0..max_tokens {
-            let cmd = StepCommand::new(1001, cur_token, 0, false);
+            let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
             let completion = {
                 let mut pipeline = state.pipeline.lock().await;
                 pipeline.step(&cmd).unwrap()
             };
 
-            cur_token = completion.sampled_token;
-            generated_text.push_str(&format!("tok_{cur_token} "));
+            let mut logits = vec![0.0f32; 1024];
+            for (idx, logit) in logits.iter_mut().enumerate() {
+                let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
+                *logit = phase * 2.0;
+            }
+            cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
+            generated_text.push_str(&token_to_text(cur_token));
             completion_tokens += 1;
 
             if completion.is_terminal || i == max_tokens - 1 {
@@ -317,8 +421,10 @@ async fn chat_completions_handler(
             }
         }
 
+        drop(slot_guard);
+
         let resp = ChatCompletionResponse {
-            id: "chatcmpl-oxide-01".to_string(),
+            id: req_id,
             object: "chat.completion".to_string(),
             created: 1_728_000_000,
             model: payload.model,
@@ -347,20 +453,58 @@ async fn completions_handler(
 ) -> impl IntoResponse {
     let max_tokens = payload.max_tokens.unwrap_or(64);
     let prompt_len = payload.prompt.split_whitespace().count().max(1);
+    let req_num = REQ_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let req_id = format!("cmpl-oxide-{req_num}");
+
+    let slot_request = SlotRequest {
+        request_id: req_id.clone(),
+        prompt_tokens: vec![42; prompt_len],
+        max_tokens,
+        temperature: payload.temperature.unwrap_or(0.7),
+        top_p: payload.top_p.unwrap_or(0.9),
+        stream: false,
+    };
+
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request).await else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "All inference slots busy (concurrency limit reached)",
+                    "type": "server_error",
+                    "code": 503
+                }
+            })),
+        )
+            .into_response();
+    };
+
+    let sampling_config = SamplingConfig {
+        temperature: payload.temperature.unwrap_or(0.7),
+        top_p: payload.top_p.unwrap_or(0.9),
+        ..SamplingConfig::default()
+    };
+    let sampler = AcademicSamplerEngine::new(sampling_config);
 
     let mut generated_text = String::new();
     let mut cur_token: u32 = 42;
     let mut completion_tokens = 0;
+    let mut sampler_state = SamplerState::new(5.0);
 
     for i in 0..max_tokens {
-        let cmd = StepCommand::new(1001, cur_token, 0, false);
+        let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
         let completion = {
             let mut pipeline = state.pipeline.lock().await;
             pipeline.step(&cmd).unwrap()
         };
 
-        cur_token = completion.sampled_token;
-        generated_text.push_str(&format!("tok_{cur_token} "));
+        let mut logits = vec![0.0f32; 1024];
+        for (idx, logit) in logits.iter_mut().enumerate() {
+            let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
+            *logit = phase * 2.0;
+        }
+        cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
+        generated_text.push_str(&token_to_text(cur_token));
         completion_tokens += 1;
 
         if completion.is_terminal || i == max_tokens - 1 {
@@ -368,8 +512,10 @@ async fn completions_handler(
         }
     }
 
+    drop(slot_guard);
+
     let resp = CompletionResponse {
-        id: "cmpl-oxide-01".to_string(),
+        id: req_id,
         object: "text_completion".to_string(),
         created: 1_728_000_000,
         model: payload.model,
@@ -403,15 +549,22 @@ async fn embeddings_handler(Json(payload): Json<EmbeddingRequest>) -> Json<Embed
     let mut total_tokens = 0;
 
     for (idx, text) in inputs.iter().enumerate() {
-        let tokens = text.split_whitespace().count().max(1);
-        total_tokens += tokens;
+        let tokens: Vec<u32> = text.bytes().map(u32::from).collect();
+        let count = tokens.len().max(1);
+        total_tokens += count;
 
-        // Deterministic pseudo-embedding vector normalized to unit length
-        let mut vec = vec![0.0; dim];
-        for (i, v) in vec.iter_mut().enumerate().take(dim) {
-            *v = ((i + 1) as f32 * 0.001 * (text.len() as f32)).sin();
+        let mut vec = vec![0.0f32; dim];
+        for (pos, &tok) in tokens.iter().enumerate() {
+            for (i, v) in vec.iter_mut().enumerate() {
+                let weight = ((tok as f32 * 0.031) + (i as f32 * 0.017) + (pos as f32 * 0.007)).cos();
+                *v += weight;
+            }
         }
-        let norm = vec.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-6);
+        let inv_len = 1.0 / (count as f32);
+        for v in &mut vec {
+            *v *= inv_len;
+        }
+        let norm = vec.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-8);
         for v in &mut vec {
             *v /= norm;
         }

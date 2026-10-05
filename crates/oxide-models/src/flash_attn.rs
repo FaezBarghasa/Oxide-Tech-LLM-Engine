@@ -80,18 +80,24 @@ impl FlashAttentionEngine {
         let num_q_blocks = (seq_len_q + br - 1) / br;
         let num_kv_blocks = (seq_len_kv + bc - 1) / bc;
 
+        let mut tile_states = vec![
+            OnlineSoftmaxTile {
+                max_score: f32::NEG_INFINITY,
+                sum_exp: 0.0,
+            };
+            br
+        ];
+        let mut s_row = vec![0.0f32; bc];
+
         for q_blk in 0..num_q_blocks {
             let q_start = q_blk * br;
             let q_end = (q_start + br).min(seq_len_q);
             let q_len = q_end - q_start;
 
-            let mut tile_states = vec![
-                OnlineSoftmaxTile {
-                    max_score: f32::NEG_INFINITY,
-                    sum_exp: 0.0,
-                };
-                q_len
-            ];
+            for state in tile_states.iter_mut().take(q_len) {
+                state.max_score = f32::NEG_INFINITY;
+                state.sum_exp = 0.0;
+            }
 
             for kv_blk in 0..num_kv_blocks {
                 let kv_start = kv_blk * bc;
@@ -102,13 +108,12 @@ impl FlashAttentionEngine {
                     let global_q_idx = q_start + i;
                     let q_vec = &q[global_q_idx * head_dim..(global_q_idx + 1) * head_dim];
 
-                    let mut s_row = Vec::with_capacity(kv_len);
                     let mut tile_local_max = f32::NEG_INFINITY;
 
                     for j in 0..kv_len {
                         let global_kv_idx = kv_start + j;
                         if self.config.is_causal && global_kv_idx > global_q_idx {
-                            s_row.push(f32::NEG_INFINITY);
+                            s_row[j] = f32::NEG_INFINITY;
                             continue;
                         }
 
@@ -118,7 +123,7 @@ impl FlashAttentionEngine {
                         if score > tile_local_max {
                             tile_local_max = score;
                         }
-                        s_row.push(score);
+                        s_row[j] = score;
                     }
 
                     if tile_local_max == f32::NEG_INFINITY {
@@ -129,7 +134,7 @@ impl FlashAttentionEngine {
                     let scale_old = (row_state.max_score - new_max).exp();
 
                     let mut tile_sum_exp = 0.0;
-                    for score in &mut s_row {
+                    for score in &mut s_row[..kv_len] {
                         if *score != f32::NEG_INFINITY {
                             let p = (*score - new_max).exp();
                             *score = p;
