@@ -21,11 +21,16 @@
 )]
 
 pub mod cq2;
+pub mod int_quant;
 pub mod nvfp4;
 pub mod pq2_0;
 pub mod ptq1_0;
 
 pub use cq2::NeedleCQ2;
+pub use int_quant::{
+    BlockQ2_K, BlockQ3_K, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ6_K, BlockQ8_0, f16,
+};
 pub use nvfp4::NvFp4;
 pub use pq2_0::PackedQuant2_0;
 pub use ptq1_0::{Ternary1_58Bit, TernaryBlock128};
+

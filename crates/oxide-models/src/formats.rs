@@ -138,8 +138,45 @@ pub struct GgufHeader {
 
 pub const GGUF_MAGIC: &[u8; 4] = b"GGUF";
 
-impl GgufHeader {
-    /// Validates GGUF v3 header from raw buffer.
+/// GGUF Metadata Value Types.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GgufValue {
+    Uint8(u8),
+    Int8(i8),
+    Uint16(u16),
+    Int16(i16),
+    Uint32(u32),
+    Int32(i32),
+    Float32(f32),
+    Bool(bool),
+    String(String),
+    Array(Vec<GgufValue>),
+    Uint64(u64),
+    Int64(i64),
+    Float64(f64),
+}
+
+/// GGUF Tensor Information Entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GgufTensorInfo {
+    pub name: String,
+    pub n_dimensions: u32,
+    pub dimensions: Vec<u64>,
+    pub quant_type: GgufQuantType,
+    pub offset: u64,
+}
+
+/// Universal GGUF File Container.
+#[derive(Debug, Clone, Default)]
+pub struct GgufFile {
+    pub header: Option<GgufHeader>,
+    pub metadata: HashMap<String, GgufValue>,
+    pub tensors: HashMap<String, GgufTensorInfo>,
+    pub tensor_data_offset: usize,
+}
+
+impl GgufFile {
+    /// Parses any GGUF (v1, v2, v3) file binary stream.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 24 {
             return Err(EngineError::InvalidArtifactHeader);
@@ -154,14 +191,251 @@ impl GgufHeader {
         let tensor_count = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
         let metadata_kv_count = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
 
-        Ok(Self {
+        let header = GgufHeader {
             magic,
             version,
             tensor_count,
             metadata_kv_count,
+        };
+
+        let mut offset = 24;
+        let mut metadata = HashMap::new();
+
+        for _ in 0..metadata_kv_count {
+            if offset + 8 > bytes.len() {
+                break;
+            }
+            let (key, new_offset) = Self::read_gguf_string(bytes, offset)?;
+            offset = new_offset;
+
+            if offset + 4 > bytes.len() {
+                break;
+            }
+            let val_type = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            offset += 4;
+
+            let (val, new_offset) = Self::read_gguf_value(bytes, offset, val_type)?;
+            offset = new_offset;
+            metadata.insert(key, val);
+        }
+
+        let mut tensors = HashMap::new();
+        for _ in 0..tensor_count {
+            if offset + 8 > bytes.len() {
+                break;
+            }
+            let (t_name, new_offset) = Self::read_gguf_string(bytes, offset)?;
+            offset = new_offset;
+
+            if offset + 4 > bytes.len() {
+                break;
+            }
+            let n_dims = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            offset += 4;
+
+            let mut dims = Vec::new();
+            for _ in 0..n_dims {
+                if offset + 8 > bytes.len() {
+                    break;
+                }
+                let d = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                dims.push(d);
+            }
+
+            if offset + 4 > bytes.len() {
+                break;
+            }
+            let qtype_code = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            offset += 4;
+
+            let qtype = match qtype_code {
+                0 => GgufQuantType::F32,
+                1 => GgufQuantType::F16,
+                2 => GgufQuantType::Q4_0,
+                3 => GgufQuantType::Q4_1,
+                6 => GgufQuantType::Q5_0,
+                7 => GgufQuantType::Q5_1,
+                8 => GgufQuantType::Q8_0,
+                9 => GgufQuantType::Q8_1,
+                10 => GgufQuantType::Q2_K,
+                11 => GgufQuantType::Q3_K,
+                12 => GgufQuantType::Q4_K_M,
+                13 => GgufQuantType::Q5_K_M,
+                14 => GgufQuantType::Q6_K,
+                _ => GgufQuantType::F32,
+            };
+
+            if offset + 8 > bytes.len() {
+                break;
+            }
+            let t_offset = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+
+            tensors.insert(
+                t_name.clone(),
+                GgufTensorInfo {
+                    name: t_name,
+                    n_dimensions: n_dims,
+                    dimensions: dims,
+                    quant_type: qtype,
+                    offset: t_offset,
+                },
+            );
+        }
+
+        // Align offset to 32 bytes (default GGUF alignment)
+        let alignment = metadata
+            .get("general.alignment")
+            .and_then(|v| match v {
+                GgufValue::Uint32(a) => Some(*a as usize),
+                GgufValue::Uint64(a) => Some(*a as usize),
+                _ => None,
+            })
+            .unwrap_or(32);
+
+        let tensor_data_offset = (offset + alignment - 1) & !(alignment - 1);
+
+        Ok(Self {
+            header: Some(header),
+            metadata,
+            tensors,
+            tensor_data_offset,
         })
     }
+
+    fn read_gguf_string(bytes: &[u8], mut offset: usize) -> Result<(String, usize)> {
+        if offset + 8 > bytes.len() {
+            return Err(EngineError::InvalidArtifactHeader);
+        }
+        let len = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        offset += 8;
+        if offset + len > bytes.len() {
+            return Err(EngineError::InvalidArtifactHeader);
+        }
+        let s = std::str::from_utf8(&bytes[offset..offset + len])
+            .map_err(|e| EngineError::BackendError(format!("Invalid UTF-8: {e}")))?
+            .to_string();
+        Ok((s, offset + len))
+    }
+
+    fn read_gguf_value(
+        bytes: &[u8],
+        mut offset: usize,
+        val_type: u32,
+    ) -> Result<(GgufValue, usize)> {
+        match val_type {
+            0 => {
+                // UINT8
+                let v = bytes[offset];
+                Ok((GgufValue::Uint8(v), offset + 1))
+            }
+            1 => {
+                // INT8
+                let v = bytes[offset] as i8;
+                Ok((GgufValue::Int8(v), offset + 1))
+            }
+            2 => {
+                // UINT16
+                let v = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                Ok((GgufValue::Uint16(v), offset + 2))
+            }
+            3 => {
+                // INT16
+                let v = i16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                Ok((GgufValue::Int16(v), offset + 2))
+            }
+            4 => {
+                // UINT32
+                let v = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                Ok((GgufValue::Uint32(v), offset + 4))
+            }
+            5 => {
+                // INT32
+                let v = i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                Ok((GgufValue::Int32(v), offset + 4))
+            }
+            6 => {
+                // FLOAT32
+                let v = f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                Ok((GgufValue::Float32(v), offset + 4))
+            }
+            7 => {
+                // BOOL
+                let v = bytes[offset] != 0;
+                Ok((GgufValue::Bool(v), offset + 1))
+            }
+            8 => {
+                // STRING
+                let (s, new_offset) = Self::read_gguf_string(bytes, offset)?;
+                Ok((GgufValue::String(s), new_offset))
+            }
+            9 => {
+                // ARRAY
+                if offset + 12 > bytes.len() {
+                    return Err(EngineError::InvalidArtifactHeader);
+                }
+                let item_type =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                let count =
+                    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+                offset += 8;
+
+                let mut arr = Vec::with_capacity(count.min(1024));
+                for _ in 0..count {
+                    let (item, new_off) = Self::read_gguf_value(bytes, offset, item_type)?;
+                    offset = new_off;
+                    arr.push(item);
+                }
+                Ok((GgufValue::Array(arr), offset))
+            }
+            10 => {
+                // UINT64
+                let v = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                Ok((GgufValue::Uint64(v), offset + 8))
+            }
+            11 => {
+                // INT64
+                let v = i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                Ok((GgufValue::Int64(v), offset + 8))
+            }
+            12 => {
+                // FLOAT64
+                let v = f64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                Ok((GgufValue::Float64(v), offset + 8))
+            }
+            _ => Ok((GgufValue::Uint32(0), offset)),
+        }
+    }
+
+    #[must_use]
+    pub fn get_string(&self, key: &str) -> Option<&str> {
+        match self.metadata.get(key) {
+            Some(GgufValue::String(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn get_u32(&self, key: &str) -> Option<u32> {
+        match self.metadata.get(key) {
+            Some(GgufValue::Uint32(v)) => Some(*v),
+            Some(GgufValue::Int32(v)) => Some(*v as u32),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn get_u64(&self, key: &str) -> Option<u64> {
+        match self.metadata.get(key) {
+            Some(GgufValue::Uint64(v)) => Some(*v),
+            Some(GgufValue::Uint32(v)) => Some(*v as u64),
+            _ => None,
+        }
+    }
 }
+
 
 /// NVIDIA NVFP4 (E2M1 4-bit float) Tensor Block with 2x memory reduction for Blackwell MoE.
 /// Each byte encodes two 4-bit floats with a per-block FP8 scale factor.
