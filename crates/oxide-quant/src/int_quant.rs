@@ -113,6 +113,124 @@ impl BlockQ4_1 {
     }
 }
 
+/// Q1_0: 32 weights per block. 1x FP16 scale + 4 bytes (32 1-bit weights).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockQ1_0 {
+    pub scale: f16,
+    pub qs: [u8; 4],
+}
+
+impl BlockQ1_0 {
+    #[must_use]
+    pub fn quantize(values: &[f32; 32]) -> Self {
+        let mut max_abs = 0.0f32;
+        for &v in values {
+            max_abs = max_abs.max(v.abs());
+        }
+        let scale = max_abs;
+        let mut qs = [0u8; 4];
+        for i in 0..32 {
+            if values[i] >= 0.0 {
+                qs[i / 8] |= 1 << (i % 8);
+            }
+        }
+        Self {
+            scale: f16::from_f32(scale),
+            qs,
+        }
+    }
+
+    pub fn dequantize(&self, output: &mut [f32; 32]) {
+        let d = self.scale.to_f32();
+        for i in 0..32 {
+            let bit = (self.qs[i / 8] >> (i % 8)) & 1;
+            output[i] = if bit == 1 { d } else { -d };
+        }
+    }
+}
+
+/// Q2_0: 32 weights per block. 1x FP16 scale + 8 bytes (32 2-bit weights).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockQ2_0 {
+    pub scale: f16,
+    pub qs: [u8; 8],
+}
+
+impl BlockQ2_0 {
+    #[must_use]
+    pub fn quantize(values: &[f32; 32]) -> Self {
+        let mut max_abs = 0.0f32;
+        for &v in values {
+            max_abs = max_abs.max(v.abs());
+        }
+        let scale = max_abs / 1.5;
+        let inv_scale = if scale > 0.0 { 1.0 / scale } else { 0.0 };
+        let mut qs = [0u8; 8];
+        for i in 0..32 {
+            let q = (values[i] * inv_scale).round().clamp(-2.0, 1.0) as i8 + 2;
+            qs[i / 4] |= ((q as u8) & 0x03) << ((i % 4) * 2);
+        }
+        Self {
+            scale: f16::from_f32(scale),
+            qs,
+        }
+    }
+
+    pub fn dequantize(&self, output: &mut [f32; 32]) {
+        let d = self.scale.to_f32();
+        for i in 0..32 {
+            let q = ((self.qs[i / 4] >> ((i % 4) * 2)) & 0x03) as i8 - 2;
+            output[i] = (q as f32) * d;
+        }
+    }
+}
+
+/// Q4_2: Legacy 4-bit block quantization format.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockQ4_2 {
+    pub scale: f16,
+    pub qs: [u8; 16],
+}
+
+impl BlockQ4_2 {
+    pub fn dequantize(&self, output: &mut [f32; 32]) {
+        let d = self.scale.to_f32();
+        for i in 0..16 {
+            let byte = self.qs[i];
+            let q0 = (byte & 0x0F) as i8 - 8;
+            let q1 = ((byte >> 4) & 0x0F) as i8 - 8;
+            output[i] = (q0 as f32) * d;
+            output[i + 16] = (q1 as f32) * d;
+        }
+    }
+}
+
+/// Q4_3: Legacy 4-bit block quantization format with scale and min.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockQ4_3 {
+    pub scale: f16,
+    pub min: f16,
+    pub qs: [u8; 16],
+}
+
+impl BlockQ4_3 {
+    pub fn dequantize(&self, output: &mut [f32; 32]) {
+        let d = self.scale.to_f32();
+        let m = self.min.to_f32();
+        for i in 0..16 {
+            let byte = self.qs[i];
+            let q0 = byte & 0x0F;
+            let q1 = (byte >> 4) & 0x0F;
+            output[i] = (q0 as f32) * d + m;
+            output[i + 16] = (q1 as f32) * d + m;
+        }
+    }
+}
+
 // ============================================================================
 // 5-bit Quantization: Q5_0 and Q5_1
 // ============================================================================
@@ -181,6 +299,73 @@ impl BlockQ5_0 {
     }
 }
 
+/// Q5_1: 32 weights per block. 1x FP16 scale + 1x FP16 min + 4 bytes high bits + 16 bytes low bits = 24 bytes.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockQ5_1 {
+    pub scale: f16,
+    pub min: f16,
+    pub qh: [u8; 4],
+    pub qs: [u8; 16],
+}
+
+impl BlockQ5_1 {
+    #[must_use]
+    pub fn quantize(values: &[f32; 32]) -> Self {
+        let mut min_val = f32::MAX;
+        let mut max_val = f32::MIN;
+        for &v in values {
+            min_val = min_val.min(v);
+            max_val = max_val.max(v);
+        }
+
+        let scale = (max_val - min_val) / 31.0;
+        let inv_scale = if scale > 0.0 { 1.0 / scale } else { 0.0 };
+
+        let mut qs = [0u8; 16];
+        let mut qh = [0u8; 4];
+
+        for i in 0..16 {
+            let q0 = ((values[i] - min_val) * inv_scale).round().clamp(0.0, 31.0) as u8;
+            let q1 = ((values[i + 16] - min_val) * inv_scale).round().clamp(0.0, 31.0) as u8;
+
+            qs[i] = (q0 & 0x0F) | ((q1 & 0x0F) << 4);
+
+            let h0 = (q0 >> 4) & 1;
+            let h1 = (q1 >> 4) & 1;
+
+            let bit_idx0 = i;
+            let bit_idx1 = i + 16;
+
+            qh[bit_idx0 / 8] |= h0 << (bit_idx0 % 8);
+            qh[bit_idx1 / 8] |= h1 << (bit_idx1 % 8);
+        }
+
+        Self {
+            scale: f16::from_f32(scale),
+            min: f16::from_f32(min_val),
+            qh,
+            qs,
+        }
+    }
+
+    pub fn dequantize(&self, output: &mut [f32; 32]) {
+        let d = self.scale.to_f32();
+        let m = self.min.to_f32();
+        for i in 0..16 {
+            let byte = self.qs[i];
+            let h0 = (self.qh[i / 8] >> (i % 8)) & 1;
+            let h1 = (self.qh[(i + 16) / 8] >> ((i + 16) % 8)) & 1;
+
+            let q0 = (byte & 0x0F) | (h0 << 4);
+            let q1 = ((byte >> 4) & 0x0F) | (h1 << 4);
+
+            output[i] = (q0 as f32) * d + m;
+            output[i + 16] = (q1 as f32) * d + m;
+        }
+    }
+}
+
 // ============================================================================
 // 8-bit Quantization: Q8_0 and Q8_1
 // ============================================================================
@@ -210,6 +395,57 @@ impl BlockQ8_0 {
 
         Self {
             scale: f16::from_f32(scale),
+            qs,
+        }
+    }
+
+    pub fn dequantize(&self, output: &mut [f32; 32]) {
+        let d = self.scale.to_f32();
+        for i in 0..32 {
+            output[i] = (self.qs[i] as f32) * d;
+        }
+    }
+
+    #[must_use]
+    pub fn dot_product(&self, activations: &[f32; 32]) -> f32 {
+        let d = self.scale.to_f32();
+        let mut sum = 0.0f32;
+        for i in 0..32 {
+            sum += (self.qs[i] as f32) * activations[i];
+        }
+        sum * d
+    }
+}
+
+/// Q8_1: 32 weights per block. 1x FP16 scale + 1x FP16 sum (for dot product bias) + 32 signed int8 values = 36 bytes.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockQ8_1 {
+    pub scale: f16,
+    pub sum: f16,
+    pub qs: [i8; 32],
+}
+
+impl BlockQ8_1 {
+    #[must_use]
+    pub fn quantize(values: &[f32; 32]) -> Self {
+        let mut max_abs = 0.0f32;
+        let mut total_sum = 0.0f32;
+        for &v in values {
+            max_abs = max_abs.max(v.abs());
+            total_sum += v;
+        }
+        let scale = max_abs / 127.0;
+        let inv_scale = if scale > 0.0 { 1.0 / scale } else { 0.0 };
+
+        let mut qs = [0i8; 32];
+        for i in 0..32 {
+            qs[i] = (values[i] * inv_scale).round().clamp(-128.0, 127.0) as i8;
+        }
+
+        Self {
+            scale: f16::from_f32(scale),
+            sum: f16::from_f32(total_sum),
             qs,
         }
     }
@@ -447,6 +683,65 @@ impl BlockQ6_K {
             output[i] = (q0 as f32) * d;
             output[i + 128] = (q1 as f32) * d;
         }
+    }
+}
+
+/// Q8_K: 256 weights per super-block (8-bit quantization with FP32/FP16 scale, 8.5 bpw).
+#[repr(C, align(32))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockQ8_K {
+    pub d: f32,          // Super-block scale
+    pub qs: [i8; 256],   // 256 signed 8-bit quantized weights
+    pub bsums: [i16; 16], // Sum of weights per 16-element sub-block
+}
+
+impl Default for BlockQ8_K {
+    fn default() -> Self {
+        Self {
+            d: 0.0,
+            qs: [0i8; 256],
+            bsums: [0i16; 16],
+        }
+    }
+}
+
+impl BlockQ8_K {
+    #[must_use]
+    pub fn quantize(values: &[f32; 256]) -> Self {
+        let mut max_abs = 0.0f32;
+        for &v in values {
+            max_abs = max_abs.max(v.abs());
+        }
+
+        let d = max_abs / 127.0;
+        let inv_d = if d > 0.0 { 1.0 / d } else { 0.0 };
+
+        let mut qs = [0i8; 256];
+        let mut bsums = [0i16; 16];
+
+        for i in 0..256 {
+            let q = (values[i] * inv_d).round().clamp(-128.0, 127.0) as i8;
+            qs[i] = q;
+            bsums[i / 16] += q as i16;
+        }
+
+        Self { d, qs, bsums }
+    }
+
+    pub fn dequantize(&self, output: &mut [f32; 256]) {
+        let d = self.d;
+        for i in 0..256 {
+            output[i] = (self.qs[i] as f32) * d;
+        }
+    }
+
+    #[must_use]
+    pub fn dot_product(&self, activations: &[f32; 256]) -> f32 {
+        let mut sum = 0.0f32;
+        for i in 0..256 {
+            sum += (self.qs[i] as f32) * activations[i];
+        }
+        sum * self.d
     }
 }
 

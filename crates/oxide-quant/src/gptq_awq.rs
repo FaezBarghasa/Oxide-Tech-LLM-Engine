@@ -29,6 +29,40 @@ impl QuantGroupSize {
     }
 }
 
+/// Supported bit-widths for GPTQ weight quantization (2, 3, 4, 8 bits).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GptqBitWidth {
+    Bits2,
+    Bits3,
+    Bits4,
+    Bits8,
+}
+
+impl GptqBitWidth {
+    #[must_use]
+    pub fn bits(self) -> usize {
+        match self {
+            Self::Bits2 => 2,
+            Self::Bits3 => 3,
+            Self::Bits4 => 4,
+            Self::Bits8 => 8,
+        }
+    }
+}
+
+/// Precision modes for AWQ (W4A16, W4A8, W8A16, BF16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AwqPrecisionMode {
+    /// 4-bit weights, 16-bit activations (standard AWQ).
+    W4A16,
+    /// 4-bit weights, FP8 activations.
+    W4A8,
+    /// 8-bit weights, 16-bit activations.
+    W8A16,
+    /// BF16 precision.
+    Bf16,
+}
+
 /// ZST marker for GPTQ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GptqQuant;

@@ -336,39 +336,116 @@ pub enum ModelArchitectureType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum QuantizationClass {
+    // NVIDIA & Microscaling
     Nvfp4Blackwell,
-    Ptq1_0Ternary,
-    GgufQ4KM,
-    GgufQ8_0,
-    GgufQ4_0,
-    GgufQ5_0,
-    GgufQ6_K,
-    GgufQ2_K,
-    GgufQ3_K,
-    GgufIQ4_XS,
-    GgufIQ3_XXS,
-    Fp8E4M3,
-    Fp8E5M2,
     MxFp8,
     MxFp4,
     MxFp6,
     MxInt8,
+    MxFp4Moe,
+
+    // GGUF Legacy & Integer
+    GgufQ1_0,
+    GgufQ2_0,
+    GgufQ4_0,
+    GgufQ4_1,
+    GgufQ4_2,
+    GgufQ4_3,
+    GgufQ5_0,
+    GgufQ5_1,
+    GgufQ8_0,
+    GgufQ8_1,
+
+    // GGUF K-Quants
+    GgufQ2_K,
+    GgufQ2_K_S,
+    GgufQ3_K,
+    GgufQ3_K_S,
+    GgufQ3_K_M,
+    GgufQ3_K_L,
+    GgufQ4_K,
+    GgufQ4_K_S,
+    GgufQ4_K_M,
+    GgufQ4KM,
+    GgufQ5_K,
+    GgufQ5_K_S,
+    GgufQ5_K_M,
+    GgufQ6_K,
+    GgufQ8_K,
+
+    // GGUF I-Quants
+    GgufIQ1_S,
+    GgufIQ1_M,
+    GgufIQ2_XXS,
+    GgufIQ2_XS,
+    GgufIQ2_S,
+    GgufIQ2_M,
+    GgufIQ3_XXS,
+    GgufIQ3_XS,
+    GgufIQ3_S,
+    GgufIQ3_M,
+    GgufIQ4_XS,
+    GgufIQ4_NL,
+
+    // GGUF Ternary & BitNet
+    GgufTQ1_0,
+    GgufTQ2_0,
+    Ptq1_0Ternary,
+    BitNet1_58,
+
+    // GPTQ (2, 3, 4, 8-bit)
+    Gptq2Bit,
+    Gptq3Bit,
+    GptqW4A16,
+    Gptq8Bit,
+
+    // AWQ
+    AwqW4A16,
+    AwqW4A8,
+    AwqW8A16,
+    AwqBf16,
+
+    // EXL2 (ExLlamaV2)
+    Exl2_2_0bpw,
+    Exl2_3_0bpw,
+    Exl2_3_5bpw,
+    Exl2_4_0bpw,
+    Exl2_4_25bpw,
+    Exl2_5_0bpw,
+    Exl2_6_0bpw,
+    Exl2_6_5bpw,
+    Exl2_8_0bpw,
+
+    // bitsandbytes
+    BnbInt8,
+    Nf4QLoRA,
+    BnbFp4,
+    BnbFp8E4M3,
+
+    // Standard Float & Brain Float Formats
+    Fp64Precision,
+    Fp32Precision,
+    Tf32Precision,
+    Bf16Precision,
+    Fp16Precision,
+    Fp8E4M3,
+    Fp8E5M2,
+    Fp4E2M1,
+
+    // Uniform & Standard Integer
     Int8Uniform,
     Int8Asym,
     Int4Uniform,
     Int4Asym,
-    GptqW4A16,
-    AwqW4A16,
+
+    // Neural Magic / vLLM / ModelOpt / TorchAO / Marlin
     CompressedTensorsW8A8,
     CompressedTensorsW4A16,
     ModelOptNvfp4,
     ModelOptFp8,
     TorchAoInt4,
     TorchAoFloat8,
-    Nf4QLoRA,
     MarlinW4A16,
-    Bf16Precision,
-    Fp16Precision,
 }
 
 /// Complete Structural Specification for Supported Open-Weight Models.

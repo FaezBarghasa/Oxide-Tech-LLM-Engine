@@ -26,6 +26,7 @@
 pub mod bitsandbytes;
 pub mod compressed_tensors;
 pub mod cq2;
+pub mod exl2;
 pub mod fp8;
 pub mod gguf_quants;
 pub mod gptq_awq;
@@ -40,22 +41,30 @@ pub mod ptq1_0;
 pub mod torchao;
 
 // High-level re-exports
-pub use bitsandbytes::{BlockNf4_64, NF4_TABLE};
+pub use bitsandbytes::{BlockFp4Bnb_64, BlockNf4_64, BnbInt8, FP4_TABLE, NF4_TABLE};
 pub use compressed_tensors::{
     dequantize_compressed_slice, CompressedQuantType, CompressedTensorsConfig, CompressionFormat,
     QuantizationStrategy,
 };
 pub use cq2::NeedleCQ2;
+pub use exl2::{Exl2BitsPerWeight, Exl2Quant, Exl2WeightMatrix};
 pub use fp8::{BlockFp8E4M3, Fp8E4M3, Fp8E5M2};
 pub use gguf_quants::{
-    BlockIQ1_S, BlockIQ2_XXS, BlockIQ3_XXS, BlockIQ4_NL, BlockIQ4_XS, BlockQ4_K, BlockQ5_K,
+    BlockIQ1_M, BlockIQ1_S, BlockIQ2_M, BlockIQ2_S, BlockIQ2_XS, BlockIQ2_XXS, BlockIQ3_M,
+    BlockIQ3_S, BlockIQ3_XS, BlockIQ3_XXS, BlockIQ4_NL, BlockIQ4_XS, BlockQ2_K_S, BlockQ3_K_L,
+    BlockQ3_K_M, BlockQ3_K_S, BlockQ4_K, BlockQ4_K_M, BlockQ4_K_S, BlockQ5_K, BlockQ5_K_M,
+    BlockQ5_K_S, BlockTQ1_0, BlockTQ2_0,
 };
-pub use gptq_awq::{AwqWeightMatrix, GptqWeightMatrix, QuantGroupSize};
+pub use gptq_awq::{
+    AwqPrecisionMode, AwqQuant, AwqWeightMatrix, GptqBitWidth, GptqQuant, GptqWeightMatrix,
+    QuantGroupSize,
+};
 pub use int_quant::{
-    BlockQ2_K, BlockQ3_K, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ6_K, BlockQ8_0, f16,
+    BlockQ1_0, BlockQ2_0, BlockQ2_K, BlockQ3_K, BlockQ4_0, BlockQ4_1, BlockQ4_2, BlockQ4_3,
+    BlockQ5_0, BlockQ5_1, BlockQ6_K, BlockQ8_0, BlockQ8_1, BlockQ8_K, f16,
 };
 pub use int_standard::{Int4Asym, Int4Sym, Int8Asym, Int8Sym};
-pub use marlin::MarlinWeightMatrix;
+pub use marlin::{MarlinQuant, MarlinWeightMatrix};
 pub use modelopt::{apply_smoothquant_weights, ModelOptAlgorithm, ModelOptConfig};
 pub use mxfp::{BlockMxFp4, BlockMxFp6, BlockMxFp8, BlockMxInt8, E8M0Scale};
 pub use nvfp4::{BlockNvFp4_16, NvFp4};
@@ -64,3 +73,4 @@ pub use ptq1_0::{Ternary1_58Bit, TernaryBlock128};
 pub use torchao::{
     dequantize_fp6_e3m2, TorchAoLinearDescriptor, TorchAoQuantType,
 };
+
