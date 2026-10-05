@@ -23,16 +23,29 @@ pub mod audio;
 pub mod bonsai2;
 pub mod diffusion;
 pub mod engram;
+pub mod formats;
 pub mod llama3;
 pub mod manifest;
+pub mod moe;
 pub mod monarch;
 pub mod needle;
+pub mod registry;
+pub mod specialized;
 
 pub use audio::{AudioEngineMode, AudioModelConfig, AudioServingEngine};
 pub use bonsai2::TernaryBonsai2Config;
 pub use diffusion::{DiffusionEngine, DiffusionSchedulerType, DiffusionTransformerConfig};
 pub use engram::EngramGatherTable;
+pub use formats::{GgufHeader, GgufQuantType, ModelFileFormat, Nvfp4Block, SafeTensorsHeader};
 pub use llama3::Llama3Config;
 pub use manifest::OxideModelHeader;
+pub use moe::{ExpertRoutingDecision, MoELayer, MoERouterConfig};
 pub use monarch::MonarchMlp;
 pub use needle::{CactusNeedleConfig, NeedleSubnetwork};
+pub use registry::{
+    ModelArchitectureType, ModelFamily, ModelModality, ModelSpecification, QuantizationClass,
+};
+pub use specialized::{
+    AgenticDeciderEngine, EmbeddingEngine, RoboticsVlaActionChunk, RoboticsVlaEngine,
+    TimeSeriesEngine,
+};

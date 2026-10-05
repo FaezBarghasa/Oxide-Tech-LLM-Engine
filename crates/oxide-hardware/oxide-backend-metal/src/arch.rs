@@ -22,6 +22,7 @@ use oxide_core::hardware::{GpuArchitecture, GpuDeviceProfile, TensorCoreGenerati
 
 /// Microarchitectural Execution Plan for Apple Silicon Metal & MLX unified engines.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct MetalExecutionPlan {
     pub simdgroup_matrix_enabled: bool,
     pub dynamic_caching_enabled: bool,

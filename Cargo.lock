@@ -813,6 +813,7 @@ dependencies = [
  "oxide-core",
  "oxide-quant",
  "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

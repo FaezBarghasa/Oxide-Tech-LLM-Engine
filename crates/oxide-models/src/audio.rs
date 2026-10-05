@@ -15,7 +15,8 @@
     clippy::return_self_not_must_use,
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
 )]
 
 use oxide_core::error::Result;

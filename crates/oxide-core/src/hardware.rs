@@ -1470,6 +1470,36 @@ impl GpuDeviceProfile {
             });
         }
 
+        // Intel Xeon 6 Sierra Forest (6700E / 6900E: up to 288 Crestmont E-Cores, AVX-VNNI INT8)
+        if n.contains("sierra forest")
+            || n.contains("6780e")
+            || n.contains("6700e")
+            || n.contains("6900e")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::INTEL_XEON_6_SIERRA_FOREST,
+                architecture: GpuArchitecture::IntelXeonSierraForest,
+                form_factor: HardwareFormFactor::DatacenterIntelXeonSocket,
+                memory_tech: MemoryTechnology::UnifiedDdr5Coherent,
+                tensor_core_gen: TensorCoreGeneration::IntelAvxVnni,
+                sm_count: 288,                                  // 288 Crestmont E-Cores
+                vram_capacity_bytes: 256 * 1024 * 1024 * 1024, // 256 GB System DDR5 Pool
+                memory_bus_width_bits: 512,
+                memory_bandwidth_gbps: 512.0,
+                l2_cache_bytes: 144 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true,
+                nvlink_bandwidth_gbps: 128.0,
+            });
+        }
+
         // Intel Xeon 6 Scalable Processors (Granite Rapids: 6900P / 6700P, 128 Cores, AMX FP16/BF16/INT8, 12-ch DDR5/MCR)
         if n.contains("6980p")
             || n.contains("6900p")
@@ -1498,36 +1528,6 @@ impl GpuDeviceProfile {
                 supports_async_copy: true,
                 supports_nvlink: true, // Intel UPI 2.0 Multi-Socket Links
                 nvlink_bandwidth_gbps: 256.0,
-            });
-        }
-
-        // Intel Xeon 6 Sierra Forest (6700E / 6900E: up to 288 Crestmont E-Cores, AVX-VNNI INT8)
-        if n.contains("sierra forest")
-            || n.contains("6780e")
-            || n.contains("6700e")
-            || n.contains("6900e")
-        {
-            return Some(Self {
-                name: name.to_string(),
-                compute_capability: ComputeCapability::INTEL_XEON_6_SIERRA_FOREST,
-                architecture: GpuArchitecture::IntelXeonSierraForest,
-                form_factor: HardwareFormFactor::DatacenterIntelXeonSocket,
-                memory_tech: MemoryTechnology::UnifiedDdr5Coherent,
-                tensor_core_gen: TensorCoreGeneration::IntelAvxVnni,
-                sm_count: 288,                                  // 288 Crestmont E-Cores
-                vram_capacity_bytes: 256 * 1024 * 1024 * 1024, // 256 GB System DDR5 Pool
-                memory_bus_width_bits: 512,
-                memory_bandwidth_gbps: 512.0,
-                l2_cache_bytes: 144 * 1024 * 1024,
-                smem_per_sm_bytes: 64 * 1024,
-                smem_per_block_bytes: 64 * 1024,
-                max_threads_per_sm: 1024,
-                supports_tma: false,
-                supports_fp8: false,
-                supports_nvfp4: false,
-                supports_async_copy: true,
-                supports_nvlink: true,
-                nvlink_bandwidth_gbps: 128.0,
             });
         }
 
@@ -2013,12 +2013,15 @@ impl GpuDeviceProfile {
 
         // Raspberry Pi AI HAT+ 2 / Hailo-10 (40 TOPS Generative AI Co-processor)
         if n.contains("ai-hat-plus-2")
-            || n.contains("ai hat+ 2 ")
-            || n.contains("ai hat+ 2")
-            || n.contains("ai_hat_plus_2")
             || n.contains("ai-hat-2")
+            || n.contains("ai_hat_2")
+            || n.contains("ai_hat_plus_2")
+            || n.contains("hat+ 2") && !n.contains("26")
+            || n.contains("hat 2") && !n.contains("26")
             || n.contains("hailo-10")
             || n.contains("hailo10")
+            || n.contains("40 tops")
+            || n.contains("40tops")
         {
             return Some(Self {
                 name: name.to_string(),

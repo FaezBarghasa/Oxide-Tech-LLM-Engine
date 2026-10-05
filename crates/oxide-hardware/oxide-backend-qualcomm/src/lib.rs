@@ -51,7 +51,7 @@ impl fmt::Debug for QualcommBackend {
             .field("device_id", &self.device_id)
             .field("profile", &self.profile.name)
             .field("execution_plan", &self.execution_plan)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

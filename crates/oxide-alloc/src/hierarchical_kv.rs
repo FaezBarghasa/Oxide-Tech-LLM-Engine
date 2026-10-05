@@ -205,42 +205,38 @@ impl HierarchicalKvCache {
 
     /// Evicts cold blocks down the hierarchy (Tier 1 $\rightarrow$ Tier 2 $\rightarrow$ Tier 3).
     fn ensure_device_capacity(&mut self) {
-        if self.device_blocks.len() >= self.tier1_device_capacity_blocks {
-            if let Some((&victim_id, _)) = self
+        if self.device_blocks.len() >= self.tier1_device_capacity_blocks
+            && let Some((&victim_id, _)) = self
                 .block_registry
                 .iter()
                 .filter(|(_, d)| d.location == CacheTierLocation::Tier1DeviceVram)
                 .min_by_key(|(_, d)| d.access_counter)
-            {
-                if let Some(data) = self.device_blocks.remove(&victim_id) {
-                    self.ensure_host_capacity();
-                    self.host_blocks.insert(victim_id, data);
-                    if let Some(desc) = self.block_registry.get_mut(&victim_id) {
-                        desc.location = CacheTierLocation::Tier2HostRam;
-                    }
-                }
+            && let Some(data) = self.device_blocks.remove(&victim_id)
+        {
+            self.ensure_host_capacity();
+            self.host_blocks.insert(victim_id, data);
+            if let Some(desc) = self.block_registry.get_mut(&victim_id) {
+                desc.location = CacheTierLocation::Tier2HostRam;
             }
         }
     }
 
     fn ensure_host_capacity(&mut self) {
-        if self.host_blocks.len() >= self.tier2_host_capacity_blocks {
-            if let Some((&victim_id, _)) = self
+        if self.host_blocks.len() >= self.tier2_host_capacity_blocks
+            && let Some((&victim_id, _)) = self
                 .block_registry
                 .iter()
                 .filter(|(_, d)| d.location == CacheTierLocation::Tier2HostRam)
                 .min_by_key(|(_, d)| d.access_counter)
-            {
-                if let Some(data) = self.host_blocks.remove(&victim_id) {
-                    if self.storage_blocks.len() < self.tier3_storage_capacity_blocks {
-                        self.storage_blocks.insert(victim_id, data);
-                        if let Some(desc) = self.block_registry.get_mut(&victim_id) {
-                            desc.location = CacheTierLocation::Tier3ExternalStorage;
-                        }
-                    } else if let Some(desc) = self.block_registry.remove(&victim_id) {
-                        self.prefix_index.remove(&desc.prefix_hash);
-                    }
+            && let Some(data) = self.host_blocks.remove(&victim_id)
+        {
+            if self.storage_blocks.len() < self.tier3_storage_capacity_blocks {
+                self.storage_blocks.insert(victim_id, data);
+                if let Some(desc) = self.block_registry.get_mut(&victim_id) {
+                    desc.location = CacheTierLocation::Tier3ExternalStorage;
                 }
+            } else if let Some(desc) = self.block_registry.remove(&victim_id) {
+                self.prefix_index.remove(&desc.prefix_hash);
             }
         }
     }
@@ -279,7 +275,7 @@ impl HierarchicalKvCache {
     }
 
     /// Imports a distributed cache block from a remote node with integrity verification.
-    pub fn import_distributed_block(&mut self, payload: DistributedKvBlockPayload) -> Result<u32> {
+    pub fn import_distributed_block(&mut self, payload: &DistributedKvBlockPayload) -> Result<u32> {
         if !payload.verify_integrity() {
             return Err(EngineError::BackendError(
                 "Distributed KV payload checksum mismatch".into(),

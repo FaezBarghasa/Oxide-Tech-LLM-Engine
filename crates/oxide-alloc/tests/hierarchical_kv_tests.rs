@@ -54,7 +54,7 @@ fn test_distributed_kv_export_import() {
     assert!(payload.verify_integrity());
 
     let imported_id = cache_dst
-        .import_distributed_block(payload)
+        .import_distributed_block(&payload)
         .expect("Import successful");
     assert!(imported_id > 0);
 

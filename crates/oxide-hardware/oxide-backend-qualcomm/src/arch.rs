@@ -22,6 +22,7 @@ use oxide_core::hardware::GpuDeviceProfile;
 
 /// Execution plan for Qualcomm Snapdragon Hexagon NPU & HTP (Hexagon Tensor Processor).
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct QualcommExecutionPlan {
     pub htp_vector_lanes: u32,
     pub native_fp16_enabled: bool,
