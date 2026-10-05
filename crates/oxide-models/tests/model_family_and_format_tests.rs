@@ -368,39 +368,171 @@ fn test_microsoft_research_suites() {
 fn test_opensource_music_robotics_clinical_and_experimental_suites() {
     // 1. Model Registry catalog lookups for all open-source & experimental foundation models
     let os_models = [
-        ("heartmula", oxide_models::registry::ModelFamily::HeartMuLa, oxide_models::registry::ModelModality::MusicSongFullGeneration),
-        ("ace-step", oxide_models::registry::ModelFamily::AceStep, oxide_models::registry::ModelModality::MusicSongFullGeneration),
-        ("yue2-studio", oxide_models::registry::ModelFamily::YuE2Studio, oxide_models::registry::ModelModality::MusicSongFullGeneration),
-        ("open-qwen-music", oxide_models::registry::ModelFamily::OpenQwenMusic, oxide_models::registry::ModelModality::MusicSongFullGeneration),
-        ("songgen", oxide_models::registry::ModelFamily::SongGen, oxide_models::registry::ModelModality::MusicSongFullGeneration),
-        ("datapilot", oxide_models::registry::ModelFamily::DataPilotPolars, oxide_models::registry::ModelModality::TimeSeriesTabular),
-        ("datasight", oxide_models::registry::ModelFamily::DatasightSqlAgent, oxide_models::registry::ModelModality::DecisionAgentic),
-        ("ai-data-science-team", oxide_models::registry::ModelFamily::AiDataScienceTeam, oxide_models::registry::ModelModality::DecisionAgentic),
-        ("glin", oxide_models::registry::ModelFamily::GlinBoostingMachine, oxide_models::registry::ModelModality::TimeSeriesTabular),
-        ("xiaomi-robotics-0", oxide_models::registry::ModelFamily::XiaomiRobotics0, oxide_models::registry::ModelModality::RoboticsActionVla),
-        ("kairos-3.0-4b", oxide_models::registry::ModelFamily::KairosEmbodiedWorldModel, oxide_models::registry::ModelModality::WorldModelSimulation),
-        ("rldx-1", oxide_models::registry::ModelFamily::RldxDexterousManipulation, oxide_models::registry::ModelModality::DexterousFiveFingerRobotics),
-        ("a1", oxide_models::registry::ModelFamily::A1AdaptiveVla, oxide_models::registry::ModelModality::RoboticsActionVla),
-        ("pyhealth-2.0", oxide_models::registry::ModelFamily::PyHealthClinical, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
-        ("aidiva", oxide_models::registry::ModelFamily::AiDivaRareDisease, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
-        ("pie-med", oxide_models::registry::ModelFamily::PieMedGcnCdss, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
-        ("realphe", oxide_models::registry::ModelFamily::RealPheCriticalCare, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
-        ("chatenv", oxide_models::registry::ModelFamily::ChatEnvEcosystem, oxide_models::registry::ModelModality::VisionLanguage),
-        ("lite", oxide_models::registry::ModelFamily::LiteEnvironmentalVlm, oxide_models::registry::ModelModality::VisionLanguage),
-        ("planaura", oxide_models::registry::ModelFamily::PlanauraGeospatial, oxide_models::registry::ModelModality::SatelliteDisasterAssessment),
-        ("multimodal-auv", oxide_models::registry::ModelFamily::MultimodalAuvMapping, oxide_models::registry::ModelModality::UnderwaterAuvMapping),
-        ("accessbridge-ai", oxide_models::registry::ModelFamily::AccessBridgeUniversalWeb, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
-        ("visionassist", oxide_models::registry::ModelFamily::VisionAssistMobile, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
-        ("sightlineai", oxide_models::registry::ModelFamily::SightlineSmartGlasses, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
-        ("tinynarrator", oxide_models::registry::ModelFamily::TinyNarratorScreenReader, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
-        ("sutradhar", oxide_models::registry::ModelFamily::SutradharMultimodalAssist, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
-        ("sorbet", oxide_models::registry::ModelFamily::SorbetNeuromorphicSpiking, oxide_models::registry::ModelModality::NeuromorphicSpikingInference),
-        ("aetheris", oxide_models::registry::ModelFamily::AetherisMambaMoe, oxide_models::registry::ModelModality::MambaMoeStateSpace),
-        ("trm", oxide_models::registry::ModelFamily::TinyRecursionModelTrm, oxide_models::registry::ModelModality::RecursiveSmallReasoning),
-        ("ddn", oxide_models::registry::ModelFamily::DiscreteDistributionNetworkDdn, oxide_models::registry::ModelModality::TextOnly),
-        ("brillm", oxide_models::registry::ModelFamily::BriLlmBrainInspired, oxide_models::registry::ModelModality::NeuromorphicSpikingInference),
-        ("ixlinx-8b", oxide_models::registry::ModelFamily::IXlinxRecurrentMultimodal, oxide_models::registry::ModelModality::VisionLanguage),
-        ("functional-graph-agi", oxide_models::registry::ModelFamily::FunctionalGraphAgi, oxide_models::registry::ModelModality::FunctionalGraphCognition),
+        (
+            "heartmula",
+            oxide_models::registry::ModelFamily::HeartMuLa,
+            oxide_models::registry::ModelModality::MusicSongFullGeneration,
+        ),
+        (
+            "ace-step",
+            oxide_models::registry::ModelFamily::AceStep,
+            oxide_models::registry::ModelModality::MusicSongFullGeneration,
+        ),
+        (
+            "yue2-studio",
+            oxide_models::registry::ModelFamily::YuE2Studio,
+            oxide_models::registry::ModelModality::MusicSongFullGeneration,
+        ),
+        (
+            "open-qwen-music",
+            oxide_models::registry::ModelFamily::OpenQwenMusic,
+            oxide_models::registry::ModelModality::MusicSongFullGeneration,
+        ),
+        (
+            "songgen",
+            oxide_models::registry::ModelFamily::SongGen,
+            oxide_models::registry::ModelModality::MusicSongFullGeneration,
+        ),
+        (
+            "datapilot",
+            oxide_models::registry::ModelFamily::DataPilotPolars,
+            oxide_models::registry::ModelModality::TimeSeriesTabular,
+        ),
+        (
+            "datasight",
+            oxide_models::registry::ModelFamily::DatasightSqlAgent,
+            oxide_models::registry::ModelModality::DecisionAgentic,
+        ),
+        (
+            "ai-data-science-team",
+            oxide_models::registry::ModelFamily::AiDataScienceTeam,
+            oxide_models::registry::ModelModality::DecisionAgentic,
+        ),
+        (
+            "glin",
+            oxide_models::registry::ModelFamily::GlinBoostingMachine,
+            oxide_models::registry::ModelModality::TimeSeriesTabular,
+        ),
+        (
+            "xiaomi-robotics-0",
+            oxide_models::registry::ModelFamily::XiaomiRobotics0,
+            oxide_models::registry::ModelModality::RoboticsActionVla,
+        ),
+        (
+            "kairos-3.0-4b",
+            oxide_models::registry::ModelFamily::KairosEmbodiedWorldModel,
+            oxide_models::registry::ModelModality::WorldModelSimulation,
+        ),
+        (
+            "rldx-1",
+            oxide_models::registry::ModelFamily::RldxDexterousManipulation,
+            oxide_models::registry::ModelModality::DexterousFiveFingerRobotics,
+        ),
+        (
+            "a1",
+            oxide_models::registry::ModelFamily::A1AdaptiveVla,
+            oxide_models::registry::ModelModality::RoboticsActionVla,
+        ),
+        (
+            "pyhealth-2.0",
+            oxide_models::registry::ModelFamily::PyHealthClinical,
+            oxide_models::registry::ModelModality::ClinicalPhenotypingCdss,
+        ),
+        (
+            "aidiva",
+            oxide_models::registry::ModelFamily::AiDivaRareDisease,
+            oxide_models::registry::ModelModality::ClinicalPhenotypingCdss,
+        ),
+        (
+            "pie-med",
+            oxide_models::registry::ModelFamily::PieMedGcnCdss,
+            oxide_models::registry::ModelModality::ClinicalPhenotypingCdss,
+        ),
+        (
+            "realphe",
+            oxide_models::registry::ModelFamily::RealPheCriticalCare,
+            oxide_models::registry::ModelModality::ClinicalPhenotypingCdss,
+        ),
+        (
+            "chatenv",
+            oxide_models::registry::ModelFamily::ChatEnvEcosystem,
+            oxide_models::registry::ModelModality::VisionLanguage,
+        ),
+        (
+            "lite",
+            oxide_models::registry::ModelFamily::LiteEnvironmentalVlm,
+            oxide_models::registry::ModelModality::VisionLanguage,
+        ),
+        (
+            "planaura",
+            oxide_models::registry::ModelFamily::PlanauraGeospatial,
+            oxide_models::registry::ModelModality::SatelliteDisasterAssessment,
+        ),
+        (
+            "multimodal-auv",
+            oxide_models::registry::ModelFamily::MultimodalAuvMapping,
+            oxide_models::registry::ModelModality::UnderwaterAuvMapping,
+        ),
+        (
+            "accessbridge-ai",
+            oxide_models::registry::ModelFamily::AccessBridgeUniversalWeb,
+            oxide_models::registry::ModelModality::UniversalAccessibilityAssist,
+        ),
+        (
+            "visionassist",
+            oxide_models::registry::ModelFamily::VisionAssistMobile,
+            oxide_models::registry::ModelModality::UniversalAccessibilityAssist,
+        ),
+        (
+            "sightlineai",
+            oxide_models::registry::ModelFamily::SightlineSmartGlasses,
+            oxide_models::registry::ModelModality::UniversalAccessibilityAssist,
+        ),
+        (
+            "tinynarrator",
+            oxide_models::registry::ModelFamily::TinyNarratorScreenReader,
+            oxide_models::registry::ModelModality::UniversalAccessibilityAssist,
+        ),
+        (
+            "sutradhar",
+            oxide_models::registry::ModelFamily::SutradharMultimodalAssist,
+            oxide_models::registry::ModelModality::UniversalAccessibilityAssist,
+        ),
+        (
+            "sorbet",
+            oxide_models::registry::ModelFamily::SorbetNeuromorphicSpiking,
+            oxide_models::registry::ModelModality::NeuromorphicSpikingInference,
+        ),
+        (
+            "aetheris",
+            oxide_models::registry::ModelFamily::AetherisMambaMoe,
+            oxide_models::registry::ModelModality::MambaMoeStateSpace,
+        ),
+        (
+            "trm",
+            oxide_models::registry::ModelFamily::TinyRecursionModelTrm,
+            oxide_models::registry::ModelModality::RecursiveSmallReasoning,
+        ),
+        (
+            "ddn",
+            oxide_models::registry::ModelFamily::DiscreteDistributionNetworkDdn,
+            oxide_models::registry::ModelModality::TextOnly,
+        ),
+        (
+            "brillm",
+            oxide_models::registry::ModelFamily::BriLlmBrainInspired,
+            oxide_models::registry::ModelModality::NeuromorphicSpikingInference,
+        ),
+        (
+            "ixlinx-8b",
+            oxide_models::registry::ModelFamily::IXlinxRecurrentMultimodal,
+            oxide_models::registry::ModelModality::VisionLanguage,
+        ),
+        (
+            "functional-graph-agi",
+            oxide_models::registry::ModelFamily::FunctionalGraphAgi,
+            oxide_models::registry::ModelModality::FunctionalGraphCognition,
+        ),
     ];
 
     for (name, family, modality) in os_models {
@@ -459,7 +591,9 @@ fn test_opensource_music_robotics_clinical_and_experimental_suites() {
     // 7. Tiny Recursion Model TRM (7M Parameter Contraction Reasoner)
     let trm = oxide_models::TinyRecursionModelEngine::new(32, 10, 1e-3);
     let init_h = vec![0.5f32; 32];
-    let trm_res = trm.recursive_reason(&init_h).expect("TRM reasoning succeeded");
+    let trm_res = trm
+        .recursive_reason(&init_h)
+        .expect("TRM reasoning succeeded");
     assert!(trm_res.iterations_performed <= 10);
     assert_eq!(trm_res.contracted_hidden_state.len(), 32);
 

@@ -668,10 +668,7 @@ impl ClinicalDecisionEngine {
     }
 
     /// Evaluates clinical EHR time-series and diagnostic graphs to produce recommendations.
-    pub fn evaluate_patient_ehr(
-        &self,
-        ehr_features: &[f32],
-    ) -> Result<ClinicalRecommendation> {
+    pub fn evaluate_patient_ehr(&self, ehr_features: &[f32]) -> Result<ClinicalRecommendation> {
         if ehr_features.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }
@@ -732,7 +729,11 @@ impl GeospatialEcosystemEngine {
         }
 
         let nir = sensor_readings[0];
-        let red = if sensor_readings.len() > 1 { sensor_readings[1] } else { 0.1 };
+        let red = if sensor_readings.len() > 1 {
+            sensor_readings[1]
+        } else {
+            0.1
+        };
         let ndvi = if (nir + red).abs() > 1e-4 {
             (nir - red) / (nir + red)
         } else {
@@ -785,7 +786,8 @@ impl AssistiveVisionEngine {
         }
 
         let closest_dist = scene_tokens[0].abs() * 3.0 + 0.5;
-        let clock_dir = (((scene_tokens[scene_tokens.len().min(1) - 1] + 1.0) * 6.0) as u8).clamp(1, 12);
+        let clock_dir =
+            (((scene_tokens[scene_tokens.len().min(1) - 1] + 1.0) * 6.0) as u8).clamp(1, 12);
 
         Ok(AssistiveNavigationPrompt {
             spoken_guidance_text: format!(
@@ -858,7 +860,8 @@ impl NeuromorphicSpikingEngine {
             membrane_potentials: potentials,
             spike_events: spikes,
             total_spike_count: spike_count,
-            energy_efficiency_factor: 1.0 - (spike_count as f32) / (self.num_neurons as f32).max(1.0),
+            energy_efficiency_factor: 1.0
+                - (spike_count as f32) / (self.num_neurons as f32).max(1.0),
         })
     }
 }
@@ -946,12 +949,7 @@ impl MambaMoeHybridEngine {
     }
 
     /// Computes selective state-space scan and Top-K gated MoE feedforward step.
-    pub fn forward_step(
-        &self,
-        x: &[f32],
-        ssm_state: &mut [f32],
-        out: &mut [f32],
-    ) -> Result<()> {
+    pub fn forward_step(&self, x: &[f32], ssm_state: &mut [f32], out: &mut [f32]) -> Result<()> {
         if x.len() != self.d_model || out.len() != self.d_model || ssm_state.len() != self.d_state {
             return Err(EngineError::ShapeMismatch);
         }
@@ -988,10 +986,7 @@ impl PolarsStatisticalGutEngine {
     }
 
     /// Evaluates tabular row values against additive shape functions to generate System-1 gut scores.
-    pub fn evaluate_tabular_row(
-        &self,
-        row_values: &[f32],
-    ) -> Result<(f32, bool)> {
+    pub fn evaluate_tabular_row(&self, row_values: &[f32]) -> Result<(f32, bool)> {
         if row_values.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }

@@ -1359,7 +1359,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 10. Open-Source Music & Audio Foundation Models
             // ----------------------------------------------------
@@ -1468,7 +1467,6 @@ impl ModelSpecification {
                 supports_nvfp4: false,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 11. Data Science & Analytics
             // ----------------------------------------------------
@@ -1556,7 +1554,6 @@ impl ModelSpecification {
                 supports_nvfp4: false,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 12. Robotics & Embodied AI
             // ----------------------------------------------------
@@ -1644,7 +1641,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::EdgeEmbedded,
             },
-
             // ----------------------------------------------------
             // 13. Health & Life Sciences
             // ----------------------------------------------------
@@ -1732,7 +1728,6 @@ impl ModelSpecification {
                 supports_nvfp4: false,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 14. Environmental, Earth Sciences & Underwater
             // ----------------------------------------------------
@@ -1820,7 +1815,6 @@ impl ModelSpecification {
                 supports_nvfp4: false,
                 optimal_form_factor: HardwareFormFactor::EdgeEmbedded,
             },
-
             // ----------------------------------------------------
             // 15. Accessibility & Assistive Technology
             // ----------------------------------------------------
@@ -1929,7 +1923,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::UnifiedSnapdragonSoc,
             },
-
             // ----------------------------------------------------
             // 16. Unique & Experimental AI Architectures
             // ----------------------------------------------------
