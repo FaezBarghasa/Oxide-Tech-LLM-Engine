@@ -41,7 +41,7 @@ impl MarlinWeightMatrix {
         assert_eq!(rows % 16, 0);
         assert_eq!(cols % 64, 0);
 
-        let num_groups = (rows + group_size - 1) / group_size;
+        let num_groups = rows.div_ceil(group_size);
         let mut scales = vec![0.0f32; num_groups * cols];
 
         // 1. Calculate per-group scales

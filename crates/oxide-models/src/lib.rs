@@ -32,6 +32,7 @@
     clippy::unreadable_literal
 )]
 
+pub mod attention_kernels;
 pub mod audio;
 pub mod bonsai2;
 pub mod chat_template;
@@ -39,6 +40,7 @@ pub mod diffusion;
 pub mod engram;
 pub mod flash_attn;
 pub mod formats;
+pub mod hf_architectures;
 pub mod llama3;
 pub mod loader;
 pub mod lora;
@@ -50,6 +52,14 @@ pub mod projector;
 pub mod registry;
 pub mod rope;
 pub mod specialized;
+
+pub use attention_kernels::{
+    AttentionKernelBackend, FlashInferConfig, FlashInferEngine, FlashMlaEngine,
+};
+pub use hf_architectures::{
+    ColBertLateInteraction, DeepSeekV3MoeConfig, MambaSsmBlock, MultiModalVisionProjector,
+    RewardClassifierHead,
+};
 
 pub use chat_template::{ChatMessage, ChatRole, ChatTemplateFormat, ChatTemplateParser};
 pub use flash_attn::{FlashAttentionConfig, FlashAttentionEngine};

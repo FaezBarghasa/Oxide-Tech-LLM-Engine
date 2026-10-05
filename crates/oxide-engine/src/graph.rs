@@ -4,15 +4,19 @@ use oxide_models::loader::ModelMetadata;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OpCode {
-    MulMat,         // Matrix Multiplication (GEMV / GEMM)
-    Rope,           // Rotary Position Embedding
-    RmsNorm,        // RMS Normalization
-    FlashAttn,      // Paged Flash Attention
-    Softmax,        // Softmax
-    SwiGlu,         // SwiGLU FFN activation
-    Add,            // Residual addition
-    FusedRmsMulMat, // Secret weapon: Fused RMSNorm + GEMV
-    FusedSwiGluMul, // Fused SwiGLU + Down Projection
+    MulMat,             // Matrix Multiplication (GEMV / GEMM)
+    Rope,               // Rotary Position Embedding
+    RmsNorm,            // RMS Normalization
+    FlashAttn,          // Paged Flash Attention
+    Softmax,            // Softmax
+    SwiGlu,             // SwiGLU FFN activation
+    Add,                // Residual addition
+    FusedRmsMulMat,     // Fused RMSNorm + GEMV
+    FusedSwiGluMul,     // Fused SwiGLU + Down Projection
+    FusedRopeAttention, // Fused RoPE + Paged Flash Attention
+    FusedAddRmsNorm,    // Fused Residual Add + RMSNorm
+    FusedBiasGelu,      // Fused Bias Addition + GELU
+    FusedGateUpSwiGlu,  // Fused Gate + Up projection with inline SwiGLU
 }
 
 pub type TensorId = u32;
@@ -104,6 +108,8 @@ impl ComputeGraph {
             if i + 1 < self.nodes.len() {
                 let n1 = &self.nodes[i];
                 let n2 = &self.nodes[i + 1];
+
+                // Fusion 1: RmsNorm + MulMat -> FusedRmsMulMat
                 if n1.op == OpCode::RmsNorm && n2.op == OpCode::MulMat && n1.dst == n2.src0 {
                     let mut params = n2.params.clone();
                     params.eps = n1.params.eps;
@@ -111,6 +117,38 @@ impl ComputeGraph {
                         op: OpCode::FusedRmsMulMat,
                         src0: n1.src0,
                         src1: n2.src1,
+                        dst: n2.dst,
+                        dst_size: n2.dst_size,
+                        weight_name: n2.weight_name.clone(),
+                        params,
+                    });
+                    i += 2;
+                    continue;
+                }
+
+                // Fusion 2: SwiGlu + MulMat -> FusedSwiGluMul
+                if n1.op == OpCode::SwiGlu && n2.op == OpCode::MulMat && n1.dst == n2.src0 {
+                    fused_nodes.push(GraphNode {
+                        op: OpCode::FusedSwiGluMul,
+                        src0: n1.src0,
+                        src1: n1.src1,
+                        dst: n2.dst,
+                        dst_size: n2.dst_size,
+                        weight_name: n2.weight_name.clone(),
+                        params: n2.params.clone(),
+                    });
+                    i += 2;
+                    continue;
+                }
+
+                // Fusion 3: Add + RmsNorm -> FusedAddRmsNorm
+                if n1.op == OpCode::Add && n2.op == OpCode::RmsNorm && n1.dst == n2.src0 {
+                    let mut params = n2.params.clone();
+                    params.aux_src = n1.src1;
+                    fused_nodes.push(GraphNode {
+                        op: OpCode::FusedAddRmsNorm,
+                        src0: n1.src0,
+                        src1: n1.src1,
                         dst: n2.dst,
                         dst_size: n2.dst_size,
                         weight_name: n2.weight_name.clone(),

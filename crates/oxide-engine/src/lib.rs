@@ -26,17 +26,26 @@
 )]
 
 pub mod arena;
+pub mod decoding;
+pub mod distributed;
 pub mod engine;
 pub mod executor;
 pub mod graph;
 pub mod hybrid;
 pub mod model_manager;
+pub mod moe_gemm;
+pub mod multi_lora;
 pub mod pipeline;
 pub mod slot_manager;
 pub mod speculative;
 pub mod tensor_split;
 
 pub use arena::GraphArena;
+pub use decoding::{
+    BeamHypothesis, BeamSearchConfig, BeamSearchEngine, ParallelSampleCandidate,
+    ParallelSamplingEngine,
+};
+pub use distributed::{MeshCoordinate, ParallelMeshConfig, RingAttentionStep, TpColumnLinear};
 pub use engine::OxideEngine;
 pub use executor::ComputeGraphExecutor;
 pub use graph::{
@@ -44,9 +53,13 @@ pub use graph::{
 };
 pub use hybrid::{DeviceRole, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition};
 pub use model_manager::DynamicModelManager;
+pub use moe_gemm::{CuTeLayout, FusedMoeGateEngine, MoERouteChoice};
+pub use multi_lora::{LoraAdapterWeights, MultiLoraManager};
 pub use pipeline::SpecializedPipeline;
 pub use slot_manager::{ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState};
-pub use speculative::{SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeVerificationResult};
+pub use speculative::{
+    SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeStrategy, SpeculativeVerificationResult,
+};
 pub use tensor_split::{
     AcceleratorKind, TensorSliceDescriptor, TensorSplitDistributionEngine, TensorSplitMode,
 };

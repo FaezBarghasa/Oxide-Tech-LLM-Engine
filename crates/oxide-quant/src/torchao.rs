@@ -25,8 +25,10 @@ impl TorchAoQuantType {
     pub fn bits_per_weight(&self) -> f32 {
         match *self {
             Self::Int4WeightOnly => 4.0,
-            Self::Int8WeightOnly | Self::Int8DynamicActivationInt8Weight => 8.0,
-            Self::Float8WeightOnly | Self::Float8DynamicActivationFloat8Weight => 8.0,
+            Self::Int8WeightOnly
+            | Self::Int8DynamicActivationInt8Weight
+            | Self::Float8WeightOnly
+            | Self::Float8DynamicActivationFloat8Weight => 8.0,
             Self::Fp6E3M2 | Self::Fp6E2M3 => 6.0,
             Self::Fp5 => 5.0,
             Self::UIntXWeightOnly(bits) => bits as f32,
