@@ -89,13 +89,7 @@ impl BlockQ4_K {
 
     #[must_use]
     pub fn dot_product(&self, activations: &[f32; 256]) -> f32 {
-        let mut deq = [0.0f32; 256];
-        self.dequantize(&mut deq);
-        let mut sum = 0.0f32;
-        for i in 0..256 {
-            sum += deq[i] * activations[i];
-        }
-        sum
+        crate::simd::dot_q4_k(&self.qs, activations, self.d.to_f32(), self.dmin.to_f32())
     }
 }
 

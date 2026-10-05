@@ -338,10 +338,11 @@ impl ContextShiftManager {
     }
 }
 
-/// Prompt Prefix Cache Registry with Hash Matching.
+/// Prompt Prefix Cache Registry with Hybrid Hash Matching and SGLang Radix Tree Traversal.
 #[derive(Debug, Clone, Default)]
 pub struct PromptCacheRegistry {
-    prefix_map: HashMap<u64, Vec<u32>>, // Hash -> Block IDs
+    prefix_map: HashMap<u64, Vec<u32>>, // Exact Hash -> Block IDs
+    pub radix: crate::radix_cache::RadixPrefixCache, // Longest-Prefix Tree
 }
 
 impl PromptCacheRegistry {
@@ -349,6 +350,7 @@ impl PromptCacheRegistry {
     pub fn new() -> Self {
         Self {
             prefix_map: HashMap::new(),
+            radix: crate::radix_cache::RadixPrefixCache::new(),
         }
     }
 
@@ -363,17 +365,27 @@ impl PromptCacheRegistry {
         h
     }
 
-    /// Registers cached block IDs for given prompt prefix.
+    /// Registers cached block IDs for given prompt prefix across both hash index and Radix tree.
     pub fn insert_cached_prefix(&mut self, prompt: &[u32], block_ids: &[u32]) {
         let hash = Self::compute_prefix_hash(prompt);
         self.prefix_map.insert(hash, block_ids.to_vec());
+        self.radix.insert(prompt, block_ids);
     }
 
-    /// Looks up cached block IDs for given prompt prefix.
+    /// Looks up exact cached block IDs for given prompt prefix.
     #[must_use]
     pub fn lookup_cached_prefix(&self, prompt: &[u32]) -> Option<&[u32]> {
         let hash = Self::compute_prefix_hash(prompt);
         self.prefix_map.get(&hash).map(|v| v.as_slice())
+    }
+
+    /// Matches the longest cached prefix using the Radix tree in O(L_prefix) time.
+    /// Returns `(matched_tokens, block_ids)`.
+    pub fn match_longest_prefix(&mut self, prompt: &[u32]) -> (usize, Vec<u32>) {
+        if let Some(blocks) = self.lookup_cached_prefix(prompt) {
+            return (prompt.len(), blocks.to_vec());
+        }
+        self.radix.match_longest_prefix(prompt)
     }
 }
 

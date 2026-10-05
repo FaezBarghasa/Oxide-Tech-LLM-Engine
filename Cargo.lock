@@ -1144,6 +1144,7 @@ name = "oxide-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "memmap2",
  "oxide-alloc",
  "oxide-backend-cpu",
  "oxide-backend-cuda",

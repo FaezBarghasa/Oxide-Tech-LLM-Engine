@@ -38,6 +38,7 @@ pub mod mxfp;
 pub mod nvfp4;
 pub mod pq2_0;
 pub mod ptq1_0;
+pub mod simd;
 pub mod torchao;
 
 // High-level re-exports

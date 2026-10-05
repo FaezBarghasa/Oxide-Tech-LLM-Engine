@@ -19,9 +19,11 @@
 )]
 
 pub mod arch;
+pub mod graph;
 pub mod nccl;
 
 pub use arch::KernelExecutionPlan;
+pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
 
 use oxide_core::error::Result;
 use oxide_core::hardware::GpuDeviceProfile;

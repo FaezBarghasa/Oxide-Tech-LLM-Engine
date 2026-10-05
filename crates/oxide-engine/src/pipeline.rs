@@ -78,6 +78,7 @@ pub enum SpecializedPipeline {
         model: oxide_models::Llama3Model,
         kv_cache: Vec<oxide_models::llama3::Llama3KvCacheLayer>,
         seq_positions: std::collections::HashMap<u64, usize>,
+        scratch: oxide_models::llama3::Llama3ScratchBuffers,
     },
 
     // Multi-Modal - Latent Diffusion, Audio Serving & Quantitative Trading
@@ -126,13 +127,14 @@ impl SpecializedPipeline {
                 model,
                 kv_cache,
                 seq_positions,
+                scratch,
             } => {
                 let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
-                let logits = model.forward_step(cmd.input_token, *pos, kv_cache)?;
+                model.forward_step_with_scratch(cmd.input_token, *pos, kv_cache, scratch)?;
                 *pos += 1;
                 let mut max_idx = 0;
                 let mut max_val = f32::NEG_INFINITY;
-                for (i, &l) in logits.iter().enumerate() {
+                for (i, &l) in scratch.logits.iter().enumerate() {
                     if l > max_val {
                         max_val = l;
                         max_idx = i;
@@ -212,10 +214,12 @@ impl SpecializedPipeline {
             let kv_cache = (0..model.config.num_layers)
                 .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
                 .collect();
+            let scratch = model.create_scratch();
             return Ok(Self::Llama3Dense {
                 model,
                 kv_cache,
                 seq_positions: std::collections::HashMap::new(),
+                scratch,
             });
         }
 
@@ -268,10 +272,12 @@ impl SpecializedPipeline {
             .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
             .collect();
 
+        let scratch = model.create_scratch();
         Ok(Self::Llama3Dense {
             model,
             kv_cache,
             seq_positions: std::collections::HashMap::new(),
+            scratch,
         })
     }
 }

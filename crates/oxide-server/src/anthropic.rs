@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Sse, sse::Event},
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::ServerState;
 
@@ -71,9 +72,24 @@ pub async fn messages_handler(
 ) -> impl IntoResponse {
     let stream_mode = payload.stream.unwrap_or(false);
 
-    // Resolve model if needed
+    let max_tokens = payload.max_tokens.min(4096);
+    let mut prompt_text = String::new();
+    if let Some(sys) = &payload.system {
+        prompt_text.push_str(sys);
+        prompt_text.push('\n');
+    }
+    for m in &payload.messages {
+        prompt_text.push_str(&format!("{}: {}\n", m.role, m.content));
+    }
+    prompt_text.push_str("Assistant: ");
+
+    let prompt_tokens = state.tokenizer.encode(&prompt_text);
+    let prompt_len = prompt_tokens.len().max(1);
+    let initial_token = prompt_tokens.last().copied().unwrap_or(1);
+
     let model_name = payload.model.clone();
-    let _ = state.resolve_pipeline(&model_name).await;
+    let target_pipeline = state.resolve_pipeline(&model_name).await;
+    let tokenizer = Arc::clone(&state.tokenizer);
 
     if stream_mode {
         let stream = async_stream::stream! {
@@ -88,7 +104,7 @@ pub async fn messages_handler(
                     "role": "assistant",
                     "content": [],
                     "model": &payload.model,
-                    "usage": { "input_tokens": 10, "output_tokens": 0 }
+                    "usage": { "input_tokens": prompt_len, "output_tokens": 0 }
                 }
             });
             yield Ok::<Event, std::convert::Infallible>(Event::default().event("message_start").data(start_json.to_string()));
@@ -101,13 +117,30 @@ pub async fn messages_handler(
             });
             yield Ok::<Event, std::convert::Infallible>(Event::default().event("content_block_start").data(block_start_json.to_string()));
 
-            // 3. content_block_delta event
-            let delta_json = serde_json::json!({
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": { "type": "text_delta", "text": "Oxide Engine response via Anthropic Messages API." }
-            });
-            yield Ok::<Event, std::convert::Infallible>(Event::default().event("content_block_delta").data(delta_json.to_string()));
+            let mut cur_token = initial_token;
+            let mut out_tokens = 0;
+
+            for i in 0..max_tokens {
+                let cmd = oxide_core::StepCommand::new(1001, cur_token, 0, false);
+                let completion = {
+                    let mut pipeline = target_pipeline.lock().await;
+                    pipeline.step(&cmd).unwrap()
+                };
+                cur_token = completion.sampled_token;
+                let token_str = tokenizer.decode_token(cur_token);
+                out_tokens += 1;
+
+                let delta_json = serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": { "type": "text_delta", "text": token_str }
+                });
+                yield Ok::<Event, std::convert::Infallible>(Event::default().event("content_block_delta").data(delta_json.to_string()));
+
+                if completion.is_terminal || i == max_tokens - 1 {
+                    break;
+                }
+            }
 
             // 4. content_block_stop event
             yield Ok::<Event, std::convert::Infallible>(Event::default().event("content_block_stop").data(serde_json::json!({
@@ -119,7 +152,7 @@ pub async fn messages_handler(
             yield Ok::<Event, std::convert::Infallible>(Event::default().event("message_delta").data(serde_json::json!({
                 "type": "message_delta",
                 "delta": { "stop_reason": "end_turn" },
-                "usage": { "output_tokens": 12 }
+                "usage": { "output_tokens": out_tokens }
             }).to_string()));
 
             // 6. message_stop event
@@ -131,18 +164,37 @@ pub async fn messages_handler(
         return Sse::new(stream).into_response();
     }
 
+    let mut cur_token = initial_token;
+    let mut generated_text = String::new();
+    let mut out_tokens = 0;
+
+    for i in 0..max_tokens {
+        let cmd = oxide_core::StepCommand::new(1001, cur_token, 0, false);
+        let completion = {
+            let mut pipeline = target_pipeline.lock().await;
+            pipeline.step(&cmd).unwrap()
+        };
+        cur_token = completion.sampled_token;
+        generated_text.push_str(&tokenizer.decode_token(cur_token));
+        out_tokens += 1;
+
+        if completion.is_terminal || i == max_tokens - 1 {
+            break;
+        }
+    }
+
     let response = AnthropicMessagesResponse {
         id: "msg_oxide_01".to_string(),
         object_type: "message".to_string(),
         role: "assistant".to_string(),
         content: vec![AnthropicContentBlock::Text {
-            text: "Oxide Engine response via Anthropic Messages API.".to_string(),
+            text: generated_text,
         }],
         model: payload.model,
         stop_reason: "end_turn".to_string(),
         usage: AnthropicUsage {
-            input_tokens: 14,
-            output_tokens: 12,
+            input_tokens: prompt_len,
+            output_tokens: out_tokens,
         },
     };
 

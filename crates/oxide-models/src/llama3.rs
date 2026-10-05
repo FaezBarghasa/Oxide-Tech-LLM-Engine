@@ -302,17 +302,154 @@ impl Llama3Model {
         Ok(())
     }
 
-    /// Loads tensor weights from GGUF binary container.
-    pub fn load_from_gguf(&mut self, gguf: &GgufFile, data_slice: &[u8]) -> Result<()> {
-        if let Some(info) = gguf.tensors.get("token_embd.weight") {
+    /// Helper to extract and dequantize a tensor from GGUF binary slice into a target f32 buffer.
+    fn extract_gguf_tensor_to_buffer(
+        gguf: &GgufFile,
+        tensor_name: &str,
+        data_slice: &[u8],
+        target: &mut [f32],
+    ) {
+        if let Some(info) = gguf.tensors.get(tensor_name) {
             let offset = gguf.tensor_data_offset + info.offset as usize;
-            let expected_bytes = self.token_embedding.len() * 4;
-            if offset + expected_bytes <= data_slice.len() {
-                let byte_slice = &data_slice[offset..offset + expected_bytes];
-                let floats: &[f32] = bytemuck::cast_slice(byte_slice);
-                self.token_embedding.copy_from_slice(floats);
+            if offset >= data_slice.len() {
+                return;
+            }
+            let avail = &data_slice[offset..];
+            match info.quant_type {
+                crate::formats::GgufQuantType::F32 => {
+                    let expected_bytes = target.len() * 4;
+                    if avail.len() >= expected_bytes {
+                        let floats: &[f32] = bytemuck::cast_slice(&avail[..expected_bytes]);
+                        target.copy_from_slice(floats);
+                    }
+                }
+                crate::formats::GgufQuantType::F16 => {
+                    let count = target.len().min(avail.len() / 2);
+                    for i in 0..count {
+                        let raw = u16::from_le_bytes([avail[i * 2], avail[i * 2 + 1]]);
+                        target[i] = oxide_quant::f16(raw).to_f32();
+                    }
+                }
+                crate::formats::GgufQuantType::Q8_0 => {
+                    let block_size = 34; // 2 bytes f16 scale + 32 bytes int8
+                    let num_blocks = (target.len() / 32).min(avail.len() / block_size);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                        let scale = oxide_quant::f16(scale_raw).to_f32();
+                        let start = b_idx * 32;
+                        for i in 0..32 {
+                            let q = block_raw[2 + i] as i8;
+                            target[start + i] = (q as f32) * scale;
+                        }
+                    }
+                }
+                crate::formats::GgufQuantType::Q4_0 => {
+                    let block_size = 18; // 2 bytes f16 scale + 16 bytes nibbles
+                    let num_blocks = (target.len() / 32).min(avail.len() / block_size);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                        let scale = oxide_quant::f16(scale_raw).to_f32();
+                        let start = b_idx * 32;
+                        for i in 0..16 {
+                            let byte = block_raw[2 + i];
+                            let q0 = (byte & 0x0F) as i8 - 8;
+                            let q1 = ((byte >> 4) & 0x0F) as i8 - 8;
+                            target[start + i] = (q0 as f32) * scale;
+                            target[start + i + 16] = (q1 as f32) * scale;
+                        }
+                    }
+                }
+                crate::formats::GgufQuantType::Q4_K_M | crate::formats::GgufQuantType::Q4_1 => {
+                    let block_size = 144; // 2+2+12+128 = 144 bytes per 256 weights
+                    let num_blocks = (target.len() / 256).min(avail.len() / block_size);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                        let dmin_raw = u16::from_le_bytes([block_raw[2], block_raw[3]]);
+                        let d = oxide_quant::f16(d_raw).to_f32();
+                        let dmin = oxide_quant::f16(dmin_raw).to_f32();
+                        let qs = &block_raw[16..144];
+                        let start = b_idx * 256;
+                        for i in 0..128 {
+                            let byte = qs[i];
+                            let q0 = (byte & 0x0F) as f32;
+                            let q1 = ((byte >> 4) & 0x0F) as f32;
+                            target[start + i] = q0 * d + dmin;
+                            target[start + i + 128] = q1 * d + dmin;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
+    }
+
+    /// Loads tensor weights from GGUF binary container.
+    pub fn load_from_gguf(&mut self, gguf: &GgufFile, data_slice: &[u8]) -> Result<()> {
+        // 1. Embeddings
+        Self::extract_gguf_tensor_to_buffer(
+            gguf,
+            "token_embd.weight",
+            data_slice,
+            &mut self.token_embedding,
+        );
+
+        // 2. Output norm
+        Self::extract_gguf_tensor_to_buffer(
+            gguf,
+            "output_norm.weight",
+            data_slice,
+            &mut self.output_norm,
+        );
+
+        // 3. LM Head (if distinct from embeddings)
+        if gguf.tensors.contains_key("output.weight") {
+            Self::extract_gguf_tensor_to_buffer(
+                gguf,
+                "output.weight",
+                data_slice,
+                &mut self.lm_head,
+            );
+        } else if self.lm_head.len() == self.token_embedding.len() {
+            // Tied weights fallback
+            self.lm_head.copy_from_slice(&self.token_embedding);
+        }
+
+        // 4. Transformer Decoder Layers
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            let q_name = format!("blk.{i}.attn_q.weight");
+            let k_name = format!("blk.{i}.attn_k.weight");
+            let v_name = format!("blk.{i}.attn_v.weight");
+            let o_name = format!("blk.{i}.attn_output.weight");
+            let gate_name = format!("blk.{i}.ffn_gate.weight");
+            let up_name = format!("blk.{i}.ffn_up.weight");
+            let down_name = format!("blk.{i}.ffn_down.weight");
+            let attn_norm_name = format!("blk.{i}.attn_norm.weight");
+            let ffn_norm_name = format!("blk.{i}.ffn_norm.weight");
+
+            Self::extract_gguf_tensor_to_buffer(gguf, &q_name, data_slice, &mut layer.q_proj);
+            Self::extract_gguf_tensor_to_buffer(gguf, &k_name, data_slice, &mut layer.k_proj);
+            Self::extract_gguf_tensor_to_buffer(gguf, &v_name, data_slice, &mut layer.v_proj);
+            Self::extract_gguf_tensor_to_buffer(gguf, &o_name, data_slice, &mut layer.o_proj);
+            Self::extract_gguf_tensor_to_buffer(gguf, &gate_name, data_slice, &mut layer.gate_proj);
+            Self::extract_gguf_tensor_to_buffer(gguf, &up_name, data_slice, &mut layer.up_proj);
+            Self::extract_gguf_tensor_to_buffer(gguf, &down_name, data_slice, &mut layer.down_proj);
+            Self::extract_gguf_tensor_to_buffer(
+                gguf,
+                &attn_norm_name,
+                data_slice,
+                &mut layer.attn_norm,
+            );
+            Self::extract_gguf_tensor_to_buffer(
+                gguf,
+                &ffn_norm_name,
+                data_slice,
+                &mut layer.ffn_norm,
+            );
+        }
+
         Ok(())
     }
 
@@ -325,22 +462,34 @@ impl Llama3Model {
     /// Load any model from disk (GGUF or SafeTensors) with automatic architecture discovery.
     pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let p = path.as_ref();
-        let bytes = std::fs::read(p).map_err(|e| {
+        let file = std::fs::File::open(p).map_err(|e| {
             oxide_core::error::EngineError::BackendError(format!(
-                "Failed to read model file {}: {e}",
+                "Failed to open model file {}: {e}",
                 p.display()
             ))
         })?;
 
+        // SAFETY: The underlying model file is mapped read-only and is immutable during process runtime.
+        let mmap = unsafe {
+            memmap2::Mmap::map(&file).map_err(|e| {
+                oxide_core::error::EngineError::BackendError(format!(
+                    "Failed to memory-map model file {}: {e}",
+                    p.display()
+                ))
+            })?
+        };
+
         let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if ext.eq_ignore_ascii_case("gguf") {
-            let gguf = GgufFile::parse(&bytes)?;
+        if ext.eq_ignore_ascii_case("gguf")
+            || (mmap.len() >= 4 && &mmap[0..4] == crate::formats::GGUF_MAGIC)
+        {
+            let gguf = GgufFile::parse(&mmap)?;
             let cfg = Llama3Config::from_gguf(&gguf);
             let mut model = Self::new(cfg);
-            model.load_from_gguf(&gguf, &bytes)?;
+            model.load_from_gguf(&gguf, &mmap)?;
             Ok(model)
         } else if ext.eq_ignore_ascii_case("safetensors") {
-            let (header, _) = SafeTensorsHeader::parse_from_bytes(&bytes)?;
+            let (header, _) = SafeTensorsHeader::parse_from_bytes(&mmap)?;
             let filename = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let cfg = if let Some(spec) = crate::registry::ModelSpecification::lookup(filename) {
                 Llama3Config::from_spec(&spec)
@@ -348,7 +497,7 @@ impl Llama3Model {
                 Llama3Config::default()
             };
             let mut model = Self::new(cfg);
-            model.load_from_safetensors(&header, &bytes)?;
+            model.load_from_safetensors(&header, &mmap)?;
             Ok(model)
         } else {
             Err(oxide_core::error::EngineError::BackendError(format!(
@@ -370,23 +519,29 @@ impl Llama3Model {
         Ok(Self::new(Llama3Config::default()))
     }
 
-    /// Computes a single autoregressive forward step for an input token.
-    /// Returns unnormalized output logits of shape `[vocab_size]`.
+    /// Pre-allocated scratch buffers to guarantee zero dynamic allocations in the token generation loop.
+    pub fn create_scratch(&self) -> Llama3ScratchBuffers {
+        Llama3ScratchBuffers::new(&self.config)
+    }
+
+    /// Computes a single autoregressive forward step reusing pre-allocated scratch buffers.
     #[allow(clippy::many_single_char_names)]
-    pub fn forward_step(
+    pub fn forward_step_with_scratch(
         &self,
         token_id: u32,
         position: usize,
         kv_cache: &mut [Llama3KvCacheLayer],
-    ) -> Result<Vec<f32>> {
+        scratch: &mut Llama3ScratchBuffers,
+    ) -> Result<()> {
         let h = self.config.hidden_dim;
         let tok_idx = (token_id as usize) % self.config.vocab_size;
 
         // 1. Embedding lookup
-        let mut hidden = vec![0.0f32; h];
         let emb_offset = tok_idx * h;
         if emb_offset + h <= self.token_embedding.len() {
-            hidden.copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
+            scratch.hidden.copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
+        } else {
+            scratch.hidden.fill(0.0);
         }
 
         let q_dim = self.config.num_heads * self.config.head_dim;
@@ -395,108 +550,137 @@ impl Llama3Model {
 
         // 2. Transformer Decoder Layers
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            let mut norm_hidden = vec![0.0f32; h];
-            Self::rms_norm(&hidden, &layer.attn_norm, &mut norm_hidden, eps);
+            Self::rms_norm(&scratch.hidden, &layer.attn_norm, &mut scratch.norm_hidden, eps);
 
-            // Q, K, V Projections
-            let mut q = vec![0.0f32; q_dim];
-            let mut k = vec![0.0f32; kv_dim];
-            let mut v = vec![0.0f32; kv_dim];
-
-            Self::gemv(&layer.q_proj, &norm_hidden, q_dim, h, &mut q);
-            Self::gemv(&layer.k_proj, &norm_hidden, kv_dim, h, &mut k);
-            Self::gemv(&layer.v_proj, &norm_hidden, kv_dim, h, &mut v);
+            // Q, K, V Projections via SIMD GEMV
+            Self::gemv(&layer.q_proj, &scratch.norm_hidden, q_dim, h, &mut scratch.q);
+            Self::gemv(&layer.k_proj, &scratch.norm_hidden, kv_dim, h, &mut scratch.k);
+            Self::gemv(&layer.v_proj, &scratch.norm_hidden, kv_dim, h, &mut scratch.v);
 
             // RoPE Rotary Embedding
             for head_idx in 0..self.config.num_heads {
                 let start = head_idx * self.config.head_dim;
                 let end = start + self.config.head_dim;
                 self.rope
-                    .apply_rotary_in_place(&mut q[start..end], position);
+                    .apply_rotary_in_place(&mut scratch.q[start..end], position);
             }
             for kv_head_idx in 0..self.config.num_kv_heads {
                 let start = kv_head_idx * self.config.head_dim;
                 let end = start + self.config.head_dim;
                 self.rope
-                    .apply_rotary_in_place(&mut k[start..end], position);
+                    .apply_rotary_in_place(&mut scratch.k[start..end], position);
             }
 
             // KV Cache append
             if let Some(layer_cache) = kv_cache.get_mut(layer_idx) {
-                layer_cache.append_kv(&k, &v);
+                layer_cache.append_kv(&scratch.k, &scratch.v);
             }
 
             // Attention Output Projection
-            let mut attn_out = vec![0.0f32; q_dim];
             for head in 0..self.config.num_heads {
                 let q_start = head * self.config.head_dim;
-                let q_slice = &q[q_start..q_start + self.config.head_dim];
-                let out_slice = &mut attn_out[q_start..q_start + self.config.head_dim];
+                let q_slice = &scratch.q[q_start..q_start + self.config.head_dim];
+                let out_slice = &mut scratch.attn_out[q_start..q_start + self.config.head_dim];
 
                 // Grouped-Query Attention head mapping
                 let kv_head = head / (self.config.num_heads / self.config.num_kv_heads);
                 let k_start = kv_head * self.config.head_dim;
-                let k_slice = &k[k_start..k_start + self.config.head_dim];
-                let v_slice = &v[k_start..k_start + self.config.head_dim];
+                let k_slice = &scratch.k[k_start..k_start + self.config.head_dim];
+                let v_slice = &scratch.v[k_start..k_start + self.config.head_dim];
 
                 self.flash_attn
                     .forward_head(q_slice, k_slice, v_slice, 1, 1, out_slice);
             }
 
-            let mut o_proj_out = vec![0.0f32; h];
-            Self::gemv(&layer.o_proj, &attn_out, h, q_dim, &mut o_proj_out);
+            Self::gemv(&layer.o_proj, &scratch.attn_out, h, q_dim, &mut scratch.o_proj_out);
 
             // Residual 1
             for i in 0..h {
-                hidden[i] += o_proj_out[i];
+                scratch.hidden[i] += scratch.o_proj_out[i];
             }
 
             // FFN RMSNorm & SwiGLU MLP
-            let mut ffn_norm_hidden = vec![0.0f32; h];
-            Self::rms_norm(&hidden, &layer.ffn_norm, &mut ffn_norm_hidden, eps);
+            Self::rms_norm(&scratch.hidden, &layer.ffn_norm, &mut scratch.ffn_norm_hidden, eps);
 
             let inter_dim = self.config.intermediate_dim;
-            let mut gate = vec![0.0f32; inter_dim];
-            let mut up = vec![0.0f32; inter_dim];
-
-            Self::gemv(&layer.gate_proj, &ffn_norm_hidden, inter_dim, h, &mut gate);
-            Self::gemv(&layer.up_proj, &ffn_norm_hidden, inter_dim, h, &mut up);
+            Self::gemv(&layer.gate_proj, &scratch.ffn_norm_hidden, inter_dim, h, &mut scratch.gate);
+            Self::gemv(&layer.up_proj, &scratch.ffn_norm_hidden, inter_dim, h, &mut scratch.up);
 
             // SwiGLU: down_proj(silu(gate) * up)
-            let mut activated = vec![0.0f32; inter_dim];
             for i in 0..inter_dim {
-                let g = gate[i];
+                let g = scratch.gate[i];
                 let silu_g = g / (1.0 + (-g).exp());
-                activated[i] = silu_g * up[i];
+                scratch.activated[i] = silu_g * scratch.up[i];
             }
 
-            let mut mlp_out = vec![0.0f32; h];
-            Self::gemv(&layer.down_proj, &activated, h, inter_dim, &mut mlp_out);
+            Self::gemv(&layer.down_proj, &scratch.activated, h, inter_dim, &mut scratch.mlp_out);
 
             // Residual 2
             for i in 0..h {
-                hidden[i] += mlp_out[i];
+                scratch.hidden[i] += scratch.mlp_out[i];
             }
         }
 
         // 3. Final RMSNorm
-        let mut final_norm = vec![0.0f32; h];
-        Self::rms_norm(&hidden, &self.output_norm, &mut final_norm, eps);
+        Self::rms_norm(&scratch.hidden, &self.output_norm, &mut scratch.final_norm, eps);
 
         // 4. LM Head projection to vocabulary logits
         let v = self.config.vocab_size;
-        let mut logits = vec![0.0f32; v];
-        Self::gemv(&self.lm_head, &final_norm, v, h, &mut logits);
+        Self::gemv(&self.lm_head, &scratch.final_norm, v, h, &mut scratch.logits);
 
-        Ok(logits)
+        Ok(())
+    }
+
+    /// Computes a single autoregressive forward step for an input token.
+    /// Returns unnormalized output logits of shape `[vocab_size]`.
+    pub fn forward_step(
+        &self,
+        token_id: u32,
+        position: usize,
+        kv_cache: &mut [Llama3KvCacheLayer],
+    ) -> Result<Vec<f32>> {
+        let mut scratch = self.create_scratch();
+        self.forward_step_with_scratch(token_id, position, kv_cache, &mut scratch)?;
+        Ok(scratch.logits)
+    }
+
+    /// Computes batched forward pass (prefill mode) for a sequence of prompt tokens.
+    /// Ingests all tokens in order, populates the KV-cache, and returns the logits for the final token.
+    pub fn forward_batch(
+        &self,
+        tokens: &[u32],
+        start_position: usize,
+        kv_cache: &mut [Llama3KvCacheLayer],
+    ) -> Result<Vec<f32>> {
+        if tokens.is_empty() {
+            return Err(oxide_core::error::EngineError::BackendError(
+                "Cannot perform forward_batch on empty token slice".to_string(),
+            ));
+        }
+
+        let mut scratch = self.create_scratch();
+        for (idx, &token) in tokens.iter().enumerate() {
+            let pos = start_position + idx;
+            self.forward_step_with_scratch(token, pos, kv_cache, &mut scratch)?;
+        }
+        Ok(scratch.logits)
     }
 
     #[inline(always)]
     fn rms_norm(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) {
-        let mean_sq: f32 = input.iter().map(|&x| x * x).sum::<f32>() / input.len().max(1) as f32;
+        let mean_sq = oxide_quant::simd::dot_f32(input, input) / input.len().max(1) as f32;
         let inv_rms = 1.0 / (mean_sq + eps).sqrt();
-        for (i, (&x, &w)) in input.iter().zip(weight.iter()).enumerate() {
-            output[i] = x * inv_rms * w;
+        let chunks = input.len() / 8;
+        let remainder = input.len() % 8;
+        for i in 0..chunks {
+            let base = i * 8;
+            for j in 0..8 {
+                output[base + j] = input[base + j] * inv_rms * weight[base + j];
+            }
+        }
+        let rem_start = chunks * 8;
+        for j in 0..remainder {
+            output[rem_start + j] = input[rem_start + j] * inv_rms * weight[rem_start + j];
         }
     }
 
@@ -506,9 +690,55 @@ impl Llama3Model {
             let offset = i * in_dim;
             if offset + in_dim <= matrix.len() {
                 let row = &matrix[offset..offset + in_dim];
-                let sum: f32 = row.iter().zip(vector.iter()).map(|(&a, &b)| a * b).sum();
-                output[i] = sum;
+                output[i] = oxide_quant::simd::dot_f32(row, vector);
             }
+        }
+    }
+}
+
+/// Pre-allocated reusable execution buffers across transformer layers.
+#[derive(Debug, Clone)]
+pub struct Llama3ScratchBuffers {
+    pub hidden: Vec<f32>,
+    pub norm_hidden: Vec<f32>,
+    pub q: Vec<f32>,
+    pub k: Vec<f32>,
+    pub v: Vec<f32>,
+    pub attn_out: Vec<f32>,
+    pub o_proj_out: Vec<f32>,
+    pub ffn_norm_hidden: Vec<f32>,
+    pub gate: Vec<f32>,
+    pub up: Vec<f32>,
+    pub activated: Vec<f32>,
+    pub mlp_out: Vec<f32>,
+    pub final_norm: Vec<f32>,
+    pub logits: Vec<f32>,
+}
+
+impl Llama3ScratchBuffers {
+    #[must_use]
+    pub fn new(config: &Llama3Config) -> Self {
+        let h = config.hidden_dim;
+        let q_dim = config.num_heads * config.head_dim;
+        let kv_dim = config.num_kv_heads * config.head_dim;
+        let inter = config.intermediate_dim;
+        let v = config.vocab_size;
+
+        Self {
+            hidden: vec![0.0; h],
+            norm_hidden: vec![0.0; h],
+            q: vec![0.0; q_dim],
+            k: vec![0.0; kv_dim],
+            v: vec![0.0; kv_dim],
+            attn_out: vec![0.0; q_dim],
+            o_proj_out: vec![0.0; h],
+            ffn_norm_hidden: vec![0.0; h],
+            gate: vec![0.0; inter],
+            up: vec![0.0; inter],
+            activated: vec![0.0; inter],
+            mlp_out: vec![0.0; h],
+            final_norm: vec![0.0; h],
+            logits: vec![0.0; v],
         }
     }
 }

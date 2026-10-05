@@ -417,14 +417,47 @@ fn run_chat_session(
 
     println!("Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str}");
 
+    let tokenizer = {
+        let p = std::path::Path::new(&current_model);
+        if p.exists() {
+            if let Ok(file) = std::fs::File::open(p) {
+                // SAFETY: The model file is mapped read-only for metadata/tokenizer extraction and is immutable.
+                if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
+                    if let Ok(gguf) = oxide_models::GgufFile::parse(&mmap) {
+                        oxide_models::GgufTokenizer::from_gguf(&gguf)
+                    } else {
+                        oxide_models::GgufTokenizer::default()
+                    }
+                } else {
+                    oxide_models::GgufTokenizer::default()
+                }
+            } else {
+                oxide_models::GgufTokenizer::default()
+            }
+        } else {
+            oxide_models::GgufTokenizer::default()
+        }
+    };
+
     if let Some(p) = prompt {
         println!("Prompt: {p}");
-        let cmd = StepCommand::new(1, 1, 0, true);
-        let step_res = pipeline.step(&cmd)?;
-        println!(
-            "Assistant (Token {} generated via zero-allocation DAG): Response ready.",
-            step_res.sampled_token
-        );
+        let tokens = tokenizer.encode(p);
+        let mut cur_token = tokens.last().copied().unwrap_or(1);
+        print!("Assistant: ");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+
+        for _ in 0..64 {
+            let cmd = StepCommand::new(1, cur_token, 0, false);
+            let step_res = pipeline.step(&cmd)?;
+            cur_token = step_res.sampled_token;
+            let text = tokenizer.decode_token(cur_token);
+            print!("{text}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            if step_res.is_terminal {
+                break;
+            }
+        }
+        println!();
         return Ok(());
     }
 
@@ -511,12 +544,23 @@ fn run_chat_session(
             continue;
         }
 
-        let cmd = StepCommand::new(1, 1, 0, true);
-        let step_res = pipeline.step(&cmd)?;
-        println!(
-            "Assistant (Token {}): Response ready.",
-            step_res.sampled_token
-        );
+        let tokens = tokenizer.encode(trimmed);
+        let mut cur_token = tokens.last().copied().unwrap_or(1);
+        print!("Assistant: ");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+
+        for _ in 0..64 {
+            let cmd = StepCommand::new(1, cur_token, 0, false);
+            let step_res = pipeline.step(&cmd)?;
+            cur_token = step_res.sampled_token;
+            let text = tokenizer.decode_token(cur_token);
+            print!("{text}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            if step_res.is_terminal {
+                break;
+            }
+        }
+        println!();
     }
 
     Ok(())
@@ -587,12 +631,36 @@ async fn run_server_with_options(
     let slot_manager = Arc::new(Mutex::new(
         oxide_engine::ContinuousBatchingSlotManager::new(max_slots),
     ));
+
+    let tokenizer = {
+        let p = std::path::Path::new(model);
+        if p.exists() {
+            if let Ok(file) = std::fs::File::open(p) {
+                // SAFETY: The model file is mapped read-only for metadata/tokenizer extraction and is immutable.
+                if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
+                    if let Ok(gguf) = oxide_models::GgufFile::parse(&mmap) {
+                        oxide_models::GgufTokenizer::from_gguf(&gguf)
+                    } else {
+                        oxide_models::GgufTokenizer::default()
+                    }
+                } else {
+                    oxide_models::GgufTokenizer::default()
+                }
+            } else {
+                oxide_models::GgufTokenizer::default()
+            }
+        } else {
+            oxide_models::GgufTokenizer::default()
+        }
+    };
+
     let state = ServerState {
         pipeline: default_pipeline,
         model_manager: Some(model_manager),
         dfa_grammar,
         slot_manager,
         kv_cache,
+        tokenizer: Arc::new(tokenizer),
     };
 
     start_server(serve, state).await?;

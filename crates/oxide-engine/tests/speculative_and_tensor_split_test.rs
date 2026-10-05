@@ -88,10 +88,12 @@ fn test_specialized_pipeline_llama3_dense_execution() {
         .map(|_| Llama3KvCacheLayer::default())
         .collect();
 
+    let scratch = model.create_scratch();
     let mut pipeline = SpecializedPipeline::Llama3Dense {
         model,
         kv_cache,
         seq_positions: std::collections::HashMap::new(),
+        scratch,
     };
 
     let cmd = StepCommand::new(101, 42, 0, false);

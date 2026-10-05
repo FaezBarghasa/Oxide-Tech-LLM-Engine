@@ -89,6 +89,7 @@ async fn test_server_state_initialization_with_kv_cache() {
         dfa_grammar,
         slot_manager,
         kv_cache: Arc::clone(&kv_cache),
+        tokenizer: Arc::new(oxide_models::GgufTokenizer::default()),
     };
 
     let router = create_router(state);
@@ -148,6 +149,7 @@ async fn test_dynamic_model_loading_and_hot_swapping() {
         dfa_grammar,
         slot_manager,
         kv_cache,
+        tokenizer: Arc::new(oxide_models::GgufTokenizer::default()),
     };
 
     // 1. Initial resolution of default model

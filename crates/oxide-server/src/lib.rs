@@ -249,50 +249,6 @@ impl Drop for LeasedSlotGuard {
     }
 }
 
-fn token_to_text(token: u32) -> String {
-    const SAMPLE_WORDS: &[&str] = &[
-        "The ",
-        "engine ",
-        "processes ",
-        "tensors ",
-        "with ",
-        "zero-copy ",
-        "memory ",
-        "and ",
-        "high-throughput ",
-        "hardware ",
-        "acceleration. ",
-        "Inference ",
-        "step ",
-        "completed ",
-        "successfully ",
-        "using ",
-        "academic ",
-        "sampling ",
-        "and ",
-        "continuous ",
-        "batching. ",
-        "Optimization ",
-        "verified. ",
-        "Model ",
-        "parameters ",
-        "executed ",
-        "via ",
-        "parallel ",
-        "compute ",
-        "fabric. ",
-        "System ",
-        "operational. ",
-        "Latency ",
-        "minimized ",
-        "across ",
-        "all ",
-        "nodes. ",
-    ];
-    let word = SAMPLE_WORDS[(token as usize) % SAMPLE_WORDS.len()];
-    word.to_string()
-}
-
 #[derive(Clone, Debug)]
 pub struct ServerState {
     pub pipeline: Arc<Mutex<SpecializedPipeline>>,
@@ -300,9 +256,32 @@ pub struct ServerState {
     pub dfa_grammar: Arc<DfaSchemaGrammar>,
     pub slot_manager: Arc<Mutex<ContinuousBatchingSlotManager>>,
     pub kv_cache: Arc<Mutex<HierarchicalKvCache>>,
+    pub tokenizer: Arc<oxide_models::GgufTokenizer>,
 }
 
 impl ServerState {
+    pub fn new(
+        pipeline: Arc<Mutex<SpecializedPipeline>>,
+        model_manager: Option<Arc<Mutex<oxide_engine::DynamicModelManager>>>,
+        dfa_grammar: Arc<DfaSchemaGrammar>,
+        slot_manager: Arc<Mutex<ContinuousBatchingSlotManager>>,
+        kv_cache: Arc<Mutex<HierarchicalKvCache>>,
+    ) -> Self {
+        Self {
+            pipeline,
+            model_manager,
+            dfa_grammar,
+            slot_manager,
+            kv_cache,
+            tokenizer: Arc::new(oxide_models::GgufTokenizer::default()),
+        }
+    }
+
+    pub fn with_tokenizer(mut self, tokenizer: oxide_models::GgufTokenizer) -> Self {
+        self.tokenizer = Arc::new(tokenizer);
+        self
+    }
+
     pub async fn resolve_pipeline(&self, model_name: &str) -> Arc<Mutex<SpecializedPipeline>> {
         if let Some(mgr) = &self.model_manager {
             let mut guard = mgr.lock().await;
@@ -421,13 +400,18 @@ async fn chat_completions_handler(
         payload.prompt.clone().unwrap_or_default()
     };
 
-    let prompt_len = prompt_text.split_whitespace().count().max(1);
+    let prompt_tokens = state.tokenizer.encode(&prompt_text);
+    let prompt_len = prompt_tokens.len().max(1);
     let req_num = REQ_COUNTER.fetch_add(1, Ordering::Relaxed);
     let req_id = format!("chatcmpl-oxide-{req_num}");
 
     let slot_request = SlotRequest {
         request_id: req_id.clone(),
-        prompt_tokens: vec![42; prompt_len],
+        prompt_tokens: if prompt_tokens.is_empty() {
+            vec![1]
+        } else {
+            prompt_tokens.clone()
+        },
         max_tokens,
         temperature: payload.temperature.unwrap_or(0.7),
         top_p: payload.top_p.unwrap_or(0.9),
@@ -456,11 +440,13 @@ async fn chat_completions_handler(
     };
     let sampler = AcademicSamplerEngine::new(sampling_config);
     let target_pipeline = state.resolve_pipeline(&payload.model).await;
+    let tokenizer = Arc::clone(&state.tokenizer);
+    let initial_token = prompt_tokens.last().copied().unwrap_or(1);
 
     if stream_mode {
         let stream = async_stream::stream! {
             let guard = slot_guard;
-            let mut cur_token: u32 = 42;
+            let mut cur_token: u32 = initial_token;
             let mut sampler_state = SamplerState::new(5.0);
 
             for i in 0..max_tokens {
@@ -476,7 +462,7 @@ async fn chat_completions_handler(
                     *logit = phase * 2.0;
                 }
                 cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
-                let token_str = token_to_text(cur_token);
+                let token_str = tokenizer.decode_token(cur_token);
                 let is_last = i == max_tokens - 1 || completion.is_terminal;
 
                 let chunk = ChatCompletionChunk {
@@ -507,7 +493,7 @@ async fn chat_completions_handler(
         Sse::new(stream).into_response()
     } else {
         let mut generated_text = String::new();
-        let mut cur_token: u32 = 42;
+        let mut cur_token: u32 = initial_token;
         let mut completion_tokens = 0;
         let mut sampler_state = SamplerState::new(5.0);
 
@@ -527,7 +513,7 @@ async fn chat_completions_handler(
             cur_token = sampler
                 .sample_token(&mut logits, &mut sampler_state, 10)
                 .unwrap_or(completion.sampled_token);
-            generated_text.push_str(&token_to_text(cur_token));
+            generated_text.push_str(&tokenizer.decode_token(cur_token));
             completion_tokens += 1;
 
             if completion.is_terminal || i == max_tokens - 1 {
@@ -566,13 +552,18 @@ async fn completions_handler(
     Json(payload): Json<CompletionRequest>,
 ) -> impl IntoResponse {
     let max_tokens = payload.max_tokens.unwrap_or(64);
-    let prompt_len = payload.prompt.split_whitespace().count().max(1);
+    let prompt_tokens = state.tokenizer.encode(&payload.prompt);
+    let prompt_len = prompt_tokens.len().max(1);
     let req_num = REQ_COUNTER.fetch_add(1, Ordering::Relaxed);
     let req_id = format!("cmpl-oxide-{req_num}");
 
     let slot_request = SlotRequest {
         request_id: req_id.clone(),
-        prompt_tokens: vec![42; prompt_len],
+        prompt_tokens: if prompt_tokens.is_empty() {
+            vec![1]
+        } else {
+            prompt_tokens.clone()
+        },
         max_tokens,
         temperature: payload.temperature.unwrap_or(0.7),
         top_p: payload.top_p.unwrap_or(0.9),
@@ -600,9 +591,10 @@ async fn completions_handler(
     };
     let sampler = AcademicSamplerEngine::new(sampling_config);
     let target_pipeline = state.resolve_pipeline(&payload.model).await;
+    let tokenizer = Arc::clone(&state.tokenizer);
 
     let mut generated_text = String::new();
-    let mut cur_token: u32 = 42;
+    let mut cur_token: u32 = prompt_tokens.last().copied().unwrap_or(1);
     let mut completion_tokens = 0;
     let mut sampler_state = SamplerState::new(5.0);
 
@@ -621,7 +613,7 @@ async fn completions_handler(
         cur_token = sampler
             .sample_token(&mut logits, &mut sampler_state, 10)
             .unwrap_or(completion.sampled_token);
-        generated_text.push_str(&token_to_text(cur_token));
+        generated_text.push_str(&tokenizer.decode_token(cur_token));
         completion_tokens += 1;
 
         if completion.is_terminal || i == max_tokens - 1 {
@@ -651,7 +643,10 @@ async fn completions_handler(
     Json(resp).into_response()
 }
 
-async fn embeddings_handler(Json(payload): Json<EmbeddingRequest>) -> Json<EmbeddingResponse> {
+async fn embeddings_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<EmbeddingRequest>,
+) -> Json<EmbeddingResponse> {
     let inputs: Vec<String> = match payload.input {
         serde_json::Value::String(s) => vec![s],
         serde_json::Value::Array(arr) => arr
@@ -666,7 +661,7 @@ async fn embeddings_handler(Json(payload): Json<EmbeddingRequest>) -> Json<Embed
     let mut total_tokens = 0;
 
     for (idx, text) in inputs.iter().enumerate() {
-        let tokens: Vec<u32> = text.bytes().map(u32::from).collect();
+        let tokens = state.tokenizer.encode(text);
         let count = tokens.len().max(1);
         total_tokens += count;
 

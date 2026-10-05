@@ -52,7 +52,11 @@ pub mod projector;
 pub mod registry;
 pub mod rope;
 pub mod specialized;
+pub mod speculative;
+pub mod tokenizer;
 pub mod vision;
+
+pub use speculative::{SpeculativeDecodingEngine, SpeculativeStats};
 
 pub use attention_kernels::{
     AttentionKernelBackend, FlashInferConfig, FlashInferEngine, FlashMlaEngine,
@@ -61,6 +65,7 @@ pub use hf_architectures::{
     ColBertLateInteraction, DeepSeekV3MoeConfig, MambaSsmBlock, MultiModalVisionProjector,
     RewardClassifierHead,
 };
+pub use tokenizer::GgufTokenizer;
 pub use vision::{
     DetectedObject, EdgeVisionEngine, SegmentationMask, VisionModelType, VisionPreprocessConfig,
 };

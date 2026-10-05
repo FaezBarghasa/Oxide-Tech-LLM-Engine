@@ -29,6 +29,7 @@ oxide-quant.workspace = true
 oxide-engine.workspace = true
 oxide-server.workspace = true
 clap.workspace = true
+memmap2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

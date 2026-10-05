@@ -31,6 +31,7 @@ pub mod device_arena;
 pub mod hierarchical_kv;
 pub mod host_arena;
 pub mod kv_advanced;
+pub mod radix_cache;
 pub mod transactional;
 
 pub use device_arena::DeviceMemoryArena;
@@ -43,4 +44,5 @@ pub use kv_advanced::{
     ContextShiftManager, KvCacheDumpContainer, KvQuantizationPrecision, PromptCacheRegistry,
     QuantizedKvBlock,
 };
+pub use radix_cache::{RadixNode, RadixPrefixCache};
 pub use transactional::TransactionalBlockTable;

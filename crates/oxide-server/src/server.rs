@@ -27,10 +27,12 @@ impl MockEngineContext {
         let kv_cache = (0..model.config.num_layers)
             .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
             .collect();
+        let scratch = model.create_scratch();
         let pipeline = SpecializedPipeline::Llama3Dense {
             model,
             kv_cache,
             seq_positions: std::collections::HashMap::new(),
+            scratch,
         };
 
         let kv_cache = Arc::new(Mutex::new(HierarchicalKvCache::new(128, 512, 1024)));
@@ -43,6 +45,7 @@ impl MockEngineContext {
             dfa_grammar,
             slot_manager,
             kv_cache,
+            tokenizer: Arc::new(oxide_models::GgufTokenizer::default()),
         };
 
         Self { state }
