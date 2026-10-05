@@ -1,7 +1,6 @@
 use oxide_backend_rknn::RknnBackend;
 use oxide_core::hardware::{
-    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
-    TensorCoreGeneration,
+    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, TensorCoreGeneration,
 };
 use oxide_core::traits::HardwareBackend;
 use oxide_core::worker::StepCommand;
@@ -48,14 +47,7 @@ fn test_rknn_backend_dispatch_and_sync() {
     assert_eq!(backend.execution_plan().peak_npu_tops, 6.0);
     assert!(backend.execution_plan().dma_buf_zero_copy);
 
-    let cmd = StepCommand {
-        slot_idx: 0,
-        seq_id: 5,
-        input_token: 77,
-        temperature: 0.1,
-        top_k: 10,
-        top_p: 0.9,
-    };
+    let cmd = StepCommand::new(5, 77, 0, false);
 
     let event = backend
         .dispatch_step_kernel(&cmd)

@@ -2013,8 +2013,10 @@ impl GpuDeviceProfile {
 
         // Raspberry Pi AI HAT+ 2 / Hailo-10 (40 TOPS Generative AI Co-processor)
         if n.contains("ai-hat-plus-2")
+            || n.contains("ai hat+ 2 ")
             || n.contains("ai hat+ 2")
-            || n.contains("ai hat 2")
+            || n.contains("ai_hat_plus_2")
+            || n.contains("ai-hat-2")
             || n.contains("hailo-10")
             || n.contains("hailo10")
         {

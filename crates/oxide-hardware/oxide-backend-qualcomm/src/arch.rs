@@ -18,7 +18,7 @@
     clippy::cast_sign_loss
 )]
 
-use oxide_core::hardware::{GpuArchitecture, GpuDeviceProfile};
+use oxide_core::hardware::GpuDeviceProfile;
 
 /// Execution plan for Qualcomm Snapdragon Hexagon NPU & HTP (Hexagon Tensor Processor).
 #[derive(Debug, Clone, PartialEq)]

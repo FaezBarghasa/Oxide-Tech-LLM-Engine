@@ -1,7 +1,6 @@
 use oxide_backend_metal::MetalBackend;
 use oxide_core::hardware::{
-    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
-    TensorCoreGeneration,
+    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, TensorCoreGeneration,
 };
 use oxide_core::traits::HardwareBackend;
 use oxide_core::worker::StepCommand;
@@ -46,14 +45,7 @@ fn test_metal_backend_dispatch_and_sync() {
     assert!(backend.execution_plan().dynamic_caching_enabled);
     assert!(backend.execution_plan().zero_copy_unified_memory);
 
-    let cmd = StepCommand {
-        slot_idx: 3,
-        seq_id: 100,
-        input_token: 42,
-        temperature: 0.7,
-        top_k: 50,
-        top_p: 0.9,
-    };
+    let cmd = StepCommand::new(100, 42, 3, false);
 
     let event = backend
         .dispatch_step_kernel(&cmd)

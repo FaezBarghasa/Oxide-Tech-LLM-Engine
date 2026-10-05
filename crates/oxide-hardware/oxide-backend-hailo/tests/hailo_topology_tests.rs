@@ -1,7 +1,6 @@
 use oxide_backend_hailo::HailoBackend;
 use oxide_core::hardware::{
-    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
-    TensorCoreGeneration,
+    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, TensorCoreGeneration,
 };
 use oxide_core::traits::HardwareBackend;
 use oxide_core::worker::StepCommand;
@@ -40,8 +39,8 @@ fn test_rpi5_ai_hat_plus_2_profile() {
 
 #[test]
 fn test_external_edge_tpu_profile() {
-    let profile =
-        GpuDeviceProfile::from_known_device_name("Coral Edge TPU USB").expect("Profile found");
+    let profile = GpuDeviceProfile::from_known_device_name("External NPU PCIe Accelerator")
+        .expect("Profile found");
     assert_eq!(profile.architecture, GpuArchitecture::ExternalEdgeNpu);
     assert_eq!(
         profile.compute_capability,
@@ -49,7 +48,7 @@ fn test_external_edge_tpu_profile() {
     );
     assert_eq!(
         profile.form_factor,
-        HardwareFormFactor::ExternalUsbAccelerator
+        HardwareFormFactor::ExternalPcieM2Accelerator
     );
 }
 
@@ -61,14 +60,7 @@ fn test_hailo_backend_dispatch_and_sync() {
     assert_eq!(backend.execution_plan().peak_npu_tops, 26.0);
     assert!(backend.execution_plan().structural_sparsity_enabled);
 
-    let cmd = StepCommand {
-        slot_idx: 2,
-        seq_id: 20,
-        input_token: 250,
-        temperature: 0.0,
-        top_k: 1,
-        top_p: 1.0,
-    };
+    let cmd = StepCommand::new(20, 250, 2, false);
 
     let event = backend
         .dispatch_step_kernel(&cmd)

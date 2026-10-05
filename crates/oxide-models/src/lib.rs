@@ -19,14 +19,18 @@
     clippy::cast_precision_loss
 )]
 
+pub mod audio;
 pub mod bonsai2;
+pub mod diffusion;
 pub mod engram;
 pub mod llama3;
 pub mod manifest;
 pub mod monarch;
 pub mod needle;
 
+pub use audio::{AudioEngineMode, AudioModelConfig, AudioServingEngine};
 pub use bonsai2::TernaryBonsai2Config;
+pub use diffusion::{DiffusionEngine, DiffusionSchedulerType, DiffusionTransformerConfig};
 pub use engram::EngramGatherTable;
 pub use llama3::Llama3Config;
 pub use manifest::OxideModelHeader;

@@ -1,7 +1,6 @@
 use oxide_backend_qualcomm::QualcommBackend;
 use oxide_core::hardware::{
-    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
-    TensorCoreGeneration,
+    ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, TensorCoreGeneration,
 };
 use oxide_core::traits::HardwareBackend;
 use oxide_core::worker::StepCommand;
@@ -47,14 +46,7 @@ fn test_snapdragon_backend_dispatch_and_sync() {
     assert_eq!(backend.execution_plan().peak_npu_tops, 45.0);
     assert!(backend.execution_plan().zero_copy_ion_shared_memory);
 
-    let cmd = StepCommand {
-        slot_idx: 1,
-        seq_id: 1,
-        input_token: 100,
-        temperature: 0.0,
-        top_k: 1,
-        top_p: 1.0,
-    };
+    let cmd = StepCommand::new(1, 100, 1, false);
 
     let event = backend
         .dispatch_step_kernel(&cmd)

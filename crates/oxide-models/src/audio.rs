@@ -126,4 +126,9 @@ impl AudioServingEngine {
         }
         Ok(&self.audio_pcm_buffer)
     }
+
+    #[must_use]
+    pub fn mel_buffer(&self) -> &[f32] {
+        &self.mel_buffer
+    }
 }

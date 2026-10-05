@@ -128,4 +128,9 @@ impl DiffusionEngine {
     pub fn output_latents(&self) -> &[f32] {
         &self.latent_buffer
     }
+
+    #[must_use]
+    pub fn text_cond_buffer(&self) -> &[f32] {
+        &self.text_cond_buffer
+    }
 }

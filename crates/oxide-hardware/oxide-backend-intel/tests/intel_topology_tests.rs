@@ -1,6 +1,6 @@
 use oxide_backend_intel::{IntelBackend, IntelExecutionPlan, LevelZeroCommunicator};
 use oxide_core::hardware::{
-    GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
+    GpuArchitecture, GpuDeviceProfile, MemoryTechnology,
     TensorCoreGeneration,
 };
 

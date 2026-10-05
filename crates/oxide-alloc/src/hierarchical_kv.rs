@@ -18,7 +18,7 @@
     clippy::cast_sign_loss
 )]
 
-use oxide_core::error::{OxideError, Result};
+use oxide_core::error::{EngineError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -139,40 +139,37 @@ impl HierarchicalKvCache {
         let block_id = *self.prefix_index.get(&prefix_hash)?;
         let access = self.access_clock.fetch_add(1, Ordering::Relaxed);
 
-        if let Some(desc) = self.block_registry.get_mut(&block_id) {
-            desc.access_counter = access;
-            match desc.location {
-                CacheTierLocation::Tier1DeviceVram => {
-                    let data = self.device_blocks.get(&block_id)?;
-                    let desc_ref = self.block_registry.get(&block_id)?;
-                    Some((desc_ref, data.as_slice()))
-                }
-                CacheTierLocation::Tier2HostRam => {
-                    // Promote from Host RAM to Device VRAM
-                    if let Some(data) = self.host_blocks.remove(&block_id) {
-                        self.ensure_device_capacity();
-                        self.device_blocks.insert(block_id, data);
-                        desc.location = CacheTierLocation::Tier1DeviceVram;
+        let location = self.block_registry.get(&block_id)?.location;
+
+        match location {
+            CacheTierLocation::Tier1DeviceVram => {}
+            CacheTierLocation::Tier2HostRam => {
+                if let Some(data) = self.host_blocks.remove(&block_id) {
+                    self.ensure_device_capacity();
+                    self.device_blocks.insert(block_id, data);
+                    if let Some(d) = self.block_registry.get_mut(&block_id) {
+                        d.location = CacheTierLocation::Tier1DeviceVram;
                     }
-                    let data = self.device_blocks.get(&block_id)?;
-                    let desc_ref = self.block_registry.get(&block_id)?;
-                    Some((desc_ref, data.as_slice()))
-                }
-                CacheTierLocation::Tier3ExternalStorage => {
-                    // Promote from Storage to Device VRAM
-                    if let Some(data) = self.storage_blocks.remove(&block_id) {
-                        self.ensure_device_capacity();
-                        self.device_blocks.insert(block_id, data);
-                        desc.location = CacheTierLocation::Tier1DeviceVram;
-                    }
-                    let data = self.device_blocks.get(&block_id)?;
-                    let desc_ref = self.block_registry.get(&block_id)?;
-                    Some((desc_ref, data.as_slice()))
                 }
             }
-        } else {
-            None
+            CacheTierLocation::Tier3ExternalStorage => {
+                if let Some(data) = self.storage_blocks.remove(&block_id) {
+                    self.ensure_device_capacity();
+                    self.device_blocks.insert(block_id, data);
+                    if let Some(d) = self.block_registry.get_mut(&block_id) {
+                        d.location = CacheTierLocation::Tier1DeviceVram;
+                    }
+                }
+            }
         }
+
+        if let Some(desc) = self.block_registry.get_mut(&block_id) {
+            desc.access_counter = access;
+        }
+
+        let data_ptr = self.device_blocks.get(&block_id)?;
+        let desc_ref = self.block_registry.get(&block_id)?;
+        Some((desc_ref, data_ptr.as_slice()))
     }
 
     /// Allocates or inserts a new KV cache block into Tier 1 (Device VRAM).
@@ -209,7 +206,6 @@ impl HierarchicalKvCache {
     /// Evicts cold blocks down the hierarchy (Tier 1 $\rightarrow$ Tier 2 $\rightarrow$ Tier 3).
     fn ensure_device_capacity(&mut self) {
         if self.device_blocks.len() >= self.tier1_device_capacity_blocks {
-            // Find least recently used block in Tier 1
             if let Some((&victim_id, _)) = self
                 .block_registry
                 .iter()
@@ -241,11 +237,8 @@ impl HierarchicalKvCache {
                         if let Some(desc) = self.block_registry.get_mut(&victim_id) {
                             desc.location = CacheTierLocation::Tier3ExternalStorage;
                         }
-                    } else {
-                        // Drop from storage if capacity exceeded
-                        if let Some(desc) = self.block_registry.remove(&victim_id) {
-                            self.prefix_index.remove(&desc.prefix_hash);
-                        }
+                    } else if let Some(desc) = self.block_registry.remove(&victim_id) {
+                        self.prefix_index.remove(&desc.prefix_hash);
                     }
                 }
             }
@@ -258,22 +251,16 @@ impl HierarchicalKvCache {
         block_id: u32,
         tokens: [u32; TOKENS_PER_KV_BLOCK],
     ) -> Result<DistributedKvBlockPayload> {
-        let descriptor = self
-            .block_registry
-            .get(&block_id)
-            .cloned()
-            .ok_or(OxideError::AllocationFailed(
-                "Block not found for export".into(),
-            ))?;
+        let descriptor = self.block_registry.get(&block_id).cloned().ok_or_else(|| {
+            EngineError::BackendError(format!("Block {block_id} not found for export"))
+        })?;
 
         let raw_data = match descriptor.location {
             CacheTierLocation::Tier1DeviceVram => self.device_blocks.get(&block_id),
             CacheTierLocation::Tier2HostRam => self.host_blocks.get(&block_id),
             CacheTierLocation::Tier3ExternalStorage => self.storage_blocks.get(&block_id),
         }
-        .ok_or(OxideError::AllocationFailed(
-            "Block memory missing".into(),
-        ))?;
+        .ok_or_else(|| EngineError::BackendError(format!("Block memory {block_id} missing")))?;
 
         let half = raw_data.len() / 2;
         let k_data = raw_data[..half].to_vec();
@@ -294,7 +281,7 @@ impl HierarchicalKvCache {
     /// Imports a distributed cache block from a remote node with integrity verification.
     pub fn import_distributed_block(&mut self, payload: DistributedKvBlockPayload) -> Result<u32> {
         if !payload.verify_integrity() {
-            return Err(OxideError::AllocationFailed(
+            return Err(EngineError::BackendError(
                 "Distributed KV payload checksum mismatch".into(),
             ));
         }

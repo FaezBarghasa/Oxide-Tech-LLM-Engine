@@ -18,7 +18,7 @@
     clippy::cast_sign_loss
 )]
 
-use oxide_core::error::{OxideError, Result};
+use oxide_core::error::{EngineError, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Metal / MLX Zero-Copy Unified Shared Storage Buffer.
@@ -45,7 +45,7 @@ impl MetalUnifiedBuffer {
             self.buffer[slot] = token;
             Ok(())
         } else {
-            Err(OxideError::InvalidSlot(slot as u16))
+            Err(EngineError::AllocationBoundsExceeded { slot_idx: slot })
         }
     }
 
