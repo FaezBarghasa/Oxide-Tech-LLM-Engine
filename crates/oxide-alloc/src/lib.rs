@@ -21,9 +21,14 @@
 )]
 
 pub mod device_arena;
+pub mod hierarchical_kv;
 pub mod host_arena;
 pub mod transactional;
 
 pub use device_arena::DeviceMemoryArena;
+pub use hierarchical_kv::{
+    CacheTierLocation, DistributedKvBlockPayload, HierarchicalKvCache, KvBlockDescriptor,
+    TOKENS_PER_KV_BLOCK,
+};
 pub use host_arena::HostPinnedArena;
 pub use transactional::TransactionalBlockTable;

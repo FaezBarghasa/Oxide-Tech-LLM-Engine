@@ -50,6 +50,18 @@ pub enum GpuArchitecture {
     AppleSiliconM2, // Apple M2 / M2 Pro / M2 Max / M2 Ultra (Metal 3.0, 15.8 TOPS ANE, BF16/FP16)
     AppleSiliconM3, // Apple M3 / M3 Pro / M3 Max (Metal 3.1, Dynamic Caching, HW Ray Tracing)
     AppleSiliconM4, // Apple M4 / M4 Pro / M4 Max (Metal 3.2, 38 TOPS Neural Engine, 2nd Gen Dynamic Caching)
+
+    // Qualcomm Snapdragon Hexagon NPU Architectures
+    QualcommHexagonNpu, // Snapdragon X Elite / X Plus / X2, Snapdragon 8 Elite / Gen 3 / Gen 2 (45-55 TOPS HTP)
+
+    // Rockchip NPU Architectures (Orange Pi 6 Plus / Orange Pi 5 / RK3588 / RK3576)
+    RockchipRknnNpu, // RK3588 (6 TOPS tri-core) & RK3576 (6 TOPS dual-core) & RK3568/RK3566
+
+    // Raspberry Pi 5 AI HAT+ & Hailo NPU Architectures
+    HailoNpu, // Raspberry Pi AI HAT+ 13/26 TOPS (Hailo-8L/Hailo-8) & AI HAT+ 2 (Hailo-10 40 TOPS)
+
+    // External Edge Accelerators (TPU / NPU PCIe, USB, M.2)
+    ExternalEdgeNpu, // Google Coral Edge TPU, External PCIe/USB/M.2 NPUs
 }
 
 /// Compute Capability / Target ISA Version.
@@ -186,6 +198,54 @@ impl ComputeCapability {
         minor: 10,
     };
 
+    // Qualcomm Snapdragon Hexagon NPU Targets (QNN / HTP)
+    pub const QUALCOMM_HEXAGON_V73: Self = Self {
+        major: 50,
+        minor: 73,
+    };
+    pub const QUALCOMM_HEXAGON_V75_X_ELITE: Self = Self {
+        major: 50,
+        minor: 75,
+    };
+    pub const QUALCOMM_HEXAGON_V79_8_ELITE: Self = Self {
+        major: 50,
+        minor: 79,
+    };
+    pub const QUALCOMM_HEXAGON_V80_X2: Self = Self {
+        major: 50,
+        minor: 80,
+    };
+
+    // Rockchip RKNN Targets (Orange Pi 6 Plus, RK3588, RK3576)
+    pub const ROCKCHIP_RKNN_RK3588: Self = Self {
+        major: 60,
+        minor: 88,
+    };
+    pub const ROCKCHIP_RKNN_RK3576: Self = Self {
+        major: 60,
+        minor: 76,
+    };
+
+    // Raspberry Pi AI HAT+ & Hailo NPU Targets
+    pub const HAILO_8L_13TOPS: Self = Self {
+        major: 70,
+        minor: 13,
+    };
+    pub const HAILO_8_26TOPS: Self = Self {
+        major: 70,
+        minor: 26,
+    };
+    pub const HAILO_10_40TOPS: Self = Self {
+        major: 70,
+        minor: 40,
+    };
+
+    // External Edge Accelerators (TPU / NPU PCIe, USB, M.2)
+    pub const EXTERNAL_EDGE_ACCELERATOR: Self = Self {
+        major: 80,
+        minor: 1,
+    };
+
     #[must_use]
     pub const fn new(major: u32, minor: u32) -> Self {
         Self { major, minor }
@@ -225,6 +285,10 @@ impl ComputeCapability {
             (40, 8) => GpuArchitecture::AppleSiliconM2,
             (40, 9) => GpuArchitecture::AppleSiliconM3,
             (40, 10) => GpuArchitecture::AppleSiliconM4,
+            (50, _) => GpuArchitecture::QualcommHexagonNpu,
+            (60, _) => GpuArchitecture::RockchipRknnNpu,
+            (70, _) => GpuArchitecture::HailoNpu,
+            (80, _) => GpuArchitecture::ExternalEdgeNpu,
             _ => GpuArchitecture::Ampere,
         }
     }
@@ -232,7 +296,30 @@ impl ComputeCapability {
 
 impl fmt::Display for ComputeCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.major == 40 {
+        if self.major == 80 {
+            write!(f, "external_edge_accel_v{}", self.minor)
+        } else if self.major == 70 {
+            match self.minor {
+                13 => write!(f, "hailo_8l_13tops"),
+                26 => write!(f, "hailo_8_26tops"),
+                40 => write!(f, "hailo_10_40tops"),
+                _ => write!(f, "hailo_{}tops", self.minor),
+            }
+        } else if self.major == 60 {
+            match self.minor {
+                88 => write!(f, "rockchip_rknn_rk3588"),
+                76 => write!(f, "rockchip_rknn_rk3576"),
+                _ => write!(f, "rockchip_rk{}", self.minor),
+            }
+        } else if self.major == 50 {
+            match self.minor {
+                73 => write!(f, "hexagon_v73"),
+                75 => write!(f, "hexagon_v75_x_elite"),
+                79 => write!(f, "hexagon_v79_8_elite"),
+                80 => write!(f, "hexagon_v80_x2"),
+                _ => write!(f, "hexagon_v{}", self.minor),
+            }
+        } else if self.major == 40 {
             match self.minor {
                 7 => write!(f, "apple_gpu_family_7_m1"),
                 8 => write!(f, "apple_gpu_family_8_m2"),
@@ -294,6 +381,10 @@ pub enum HardwareFormFactor {
     SuperchipGraceBlackwell, // Grace-Blackwell Coherent Memory Substrate
     ApuUnifiedMemoryWithNpu, // AMD Ryzen AI / Strix Point / MI300A Coherent Unified APU + XDNA NPU
     UnifiedAppleSiliconMac,  // Apple Silicon Mac (MacBook Pro, Mac Studio, Mac mini, Mac Pro, iMac)
+    UnifiedSnapdragonSoc,    // Snapdragon X Elite / X Plus / X2 / 8 Elite Unified SoC
+    SingleBoardComputerAiHat,// Raspberry Pi 5 AI HAT+, Orange Pi 6 Plus / Orange Pi 5 RK3588
+    ExternalPcieM2Accelerator,// External M.2 / PCIe NPU / TPU Accelerator
+    ExternalUsbAccelerator,  // External USB NPU / TPU Accelerator (Coral USB, Intel NCS2)
 }
 
 /// Memory silicon technology.
@@ -315,6 +406,7 @@ pub enum MemoryTechnology {
     LpDdr4xUnifiedMemory,
     LpDdr5UnifiedMemory,
     LpDdr5xUnifiedMemory,
+    LpDdr4x,
 }
 
 /// Tensor / Matrix Core hardware generation.
@@ -345,6 +437,11 @@ pub enum TensorCoreGeneration {
     AppleSimdgroupMatrixM3,  // Apple M3 SIMD-group Matrix (Metal 3.1 / Dynamic Caching)
     AppleSimdgroupMatrixM4,  // Apple M4 SIMD-group Matrix (Metal 3.2 / 38 TOPS Neural Engine)
     AppleNeuralEngine,       // Apple Neural Engine (ANE Dedicated Subsystem)
+    QualcommHexagonTensorProcessor, // Qualcomm Hexagon HTP Tensor Processor (45-55 TOPS INT4/INT8/FP16)
+    RockchipRknnNpuCore,     // Rockchip NPU (6 TOPS tri-core/dual-core INT4/INT8/FP16/BF16)
+    Hailo8SystolicNpuEngine, // Hailo-8 / Hailo-8L (13-26 TOPS StructSparsity Dataflow Engine)
+    Hailo10GenAiEngine,      // Hailo-10 (40 TOPS Generative AI Co-processor)
+    ExternalNpuEngine,       // Generic External NPU/TPU Systolic Accelerator
 }
 
 /// Comprehensive hardware profiling descriptor for target GPU / accelerator / APU.
@@ -1730,6 +1827,302 @@ impl GpuDeviceProfile {
             });
         }
 
+        // ==========================================
+        // 6. QUALCOMM SNAPDRAGON PROCESSORS (HEXAGON NPU / QNN / HTP)
+        // ==========================================
+
+        // Snapdragon X2 series / Next-Gen Snapdragon X
+        if n.contains("snapdragon x2") || n.contains("x2 elite") || n.contains("x2 plus") {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::QUALCOMM_HEXAGON_V80_X2,
+                architecture: GpuArchitecture::QualcommHexagonNpu,
+                form_factor: HardwareFormFactor::UnifiedSnapdragonSoc,
+                memory_tech: MemoryTechnology::LpDdr5xUnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::QualcommHexagonTensorProcessor,
+                sm_count: 8, // 8-core Hexagon Tensor Processor cluster
+                vram_capacity_bytes: 64 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 128,
+                memory_bandwidth_gbps: 150.0,
+                l2_cache_bytes: 48 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Snapdragon X Elite / X Plus / X1 (X1E-84-100, X1E-80-100, X1P-64-100: 45 TOPS Hexagon NPU)
+        if n.contains("snapdragon x")
+            || n.contains("x elite")
+            || n.contains("x plus")
+            || n.contains("x1e")
+            || n.contains("x1p")
+            || n.contains("snapdragon x1")
+        {
+            let is_plus = n.contains("plus") || n.contains("x1p");
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::QUALCOMM_HEXAGON_V75_X_ELITE,
+                architecture: GpuArchitecture::QualcommHexagonNpu,
+                form_factor: HardwareFormFactor::UnifiedSnapdragonSoc,
+                memory_tech: MemoryTechnology::LpDdr5xUnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::QualcommHexagonTensorProcessor,
+                sm_count: if is_plus { 4 } else { 6 }, // Hexagon HTP execution clusters
+                vram_capacity_bytes: if is_plus {
+                    32 * 1024 * 1024 * 1024
+                } else {
+                    64 * 1024 * 1024 * 1024
+                },
+                memory_bus_width_bits: 128,
+                memory_bandwidth_gbps: 135.0, // 8448 MT/s LPDDR5x (135 GB/s)
+                l2_cache_bytes: 42 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Snapdragon 8 Elite (Oryon CPU + 45 TOPS Hexagon NPU)
+        if n.contains("8 elite") || n.contains("snapdragon 8 elite") {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::QUALCOMM_HEXAGON_V79_8_ELITE,
+                architecture: GpuArchitecture::QualcommHexagonNpu,
+                form_factor: HardwareFormFactor::UnifiedSnapdragonSoc,
+                memory_tech: MemoryTechnology::LpDdr5xUnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::QualcommHexagonTensorProcessor,
+                sm_count: 6,
+                vram_capacity_bytes: 24 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 96,
+                memory_bandwidth_gbps: 106.5,
+                l2_cache_bytes: 24 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Snapdragon 8 Gen 3 / Gen 2 / Gen 1 / Other Snapdragon NPUs
+        if n.contains("snapdragon") || n.contains("hexagon") || n.contains("8 gen") || n.contains("qcom") {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::QUALCOMM_HEXAGON_V73,
+                architecture: GpuArchitecture::QualcommHexagonNpu,
+                form_factor: HardwareFormFactor::UnifiedSnapdragonSoc,
+                memory_tech: MemoryTechnology::LpDdr5xUnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::QualcommHexagonTensorProcessor,
+                sm_count: 4,
+                vram_capacity_bytes: 16 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 64,
+                memory_bandwidth_gbps: 77.0,
+                l2_cache_bytes: 12 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // ==========================================
+        // 7. ROCKCHIP NPU (ORANGE PI 6 PLUS / ORANGE PI 5 / RK3588 / RK3576)
+        // ==========================================
+
+        // Rockchip RK3588 / RK3588S / Orange Pi 6 Plus / Orange Pi 5 (6 TOPS tri-core NPU)
+        if n.contains("orange pi 6")
+            || n.contains("orange pi 5")
+            || n.contains("rk3588")
+            || n.contains("rk3588s")
+            || n.contains("orangepi")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::ROCKCHIP_RKNN_RK3588,
+                architecture: GpuArchitecture::RockchipRknnNpu,
+                form_factor: HardwareFormFactor::SingleBoardComputerAiHat,
+                memory_tech: MemoryTechnology::LpDdr5UnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::RockchipRknnNpuCore,
+                sm_count: 3, // 3 NPU Cores (2 TOPS each = 6 TOPS total)
+                vram_capacity_bytes: 32 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 64,
+                memory_bandwidth_gbps: 34.1, // LPDDR5-4266 (34 GB/s)
+                l2_cache_bytes: 4 * 1024 * 1024,
+                smem_per_sm_bytes: 32 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 512,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Rockchip RK3576 (6 TOPS dual-core NPU) / RK3568 / RK3566 / RV1106
+        if n.contains("rk3576") || n.contains("rk3568") || n.contains("rk3566") || n.contains("rockchip") {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::ROCKCHIP_RKNN_RK3576,
+                architecture: GpuArchitecture::RockchipRknnNpu,
+                form_factor: HardwareFormFactor::SingleBoardComputerAiHat,
+                memory_tech: MemoryTechnology::LpDdr5UnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::RockchipRknnNpuCore,
+                sm_count: 2, // 2 NPU Cores (3 TOPS each = 6 TOPS total)
+                vram_capacity_bytes: 16 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 32,
+                memory_bandwidth_gbps: 21.3,
+                l2_cache_bytes: 2 * 1024 * 1024,
+                smem_per_sm_bytes: 32 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 512,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // ==========================================
+        // 8. RASPBERRY PI 5 AI HAT+ & HAILO NPU
+        // ==========================================
+
+        // Raspberry Pi AI HAT+ 2 / Hailo-10 (40 TOPS Generative AI Co-processor)
+        if n.contains("ai-hat-plus-2")
+            || n.contains("ai hat+ 2")
+            || n.contains("ai hat 2")
+            || n.contains("hailo-10")
+            || n.contains("hailo10")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::HAILO_10_40TOPS,
+                architecture: GpuArchitecture::HailoNpu,
+                form_factor: HardwareFormFactor::SingleBoardComputerAiHat,
+                memory_tech: MemoryTechnology::LpDdr4x,
+                tensor_core_gen: TensorCoreGeneration::Hailo10GenAiEngine,
+                sm_count: 8, // 8 Hailo GenAI Compute Clusters
+                vram_capacity_bytes: 16 * 1024 * 1024 * 1024, // RPi 5 16GB Host RAM + M.2 PCIe
+                memory_bus_width_bits: 64,
+                memory_bandwidth_gbps: 17.0, // RPi 5 LPDDR4X-4267 + PCIe 3.0 x1
+                l2_cache_bytes: 8 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 512,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Raspberry Pi 5 with AI HAT+ (Hailo-8 26 TOPS / Hailo-8L 13 TOPS)
+        if n.contains("rpi5")
+            || n.contains("raspberry pi")
+            || n.contains("ai-hat-plus")
+            || n.contains("ai hat+")
+            || n.contains("ai hat")
+            || n.contains("hailo-8")
+            || n.contains("hailo8")
+            || n.contains("hailo")
+        {
+            let is_8l = n.contains("8l") || n.contains("13");
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: if is_8l {
+                    ComputeCapability::HAILO_8L_13TOPS
+                } else {
+                    ComputeCapability::HAILO_8_26TOPS
+                },
+                architecture: GpuArchitecture::HailoNpu,
+                form_factor: HardwareFormFactor::SingleBoardComputerAiHat,
+                memory_tech: MemoryTechnology::LpDdr4x,
+                tensor_core_gen: TensorCoreGeneration::Hailo8SystolicNpuEngine,
+                sm_count: if is_8l { 2 } else { 4 },
+                vram_capacity_bytes: 8 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 32,
+                memory_bandwidth_gbps: 17.0,
+                l2_cache_bytes: 4 * 1024 * 1024,
+                smem_per_sm_bytes: 32 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 256,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // ==========================================
+        // 9. EXTERNAL NPUS & EXTERNAL TPUS
+        // ==========================================
+
+        // External Google Coral Edge TPU / External PCIe / USB / M.2 Accelerators
+        if n.contains("external npu")
+            || n.contains("external tpu")
+            || n.contains("coral")
+            || n.contains("edge tpu")
+            || n.contains("axelera")
+            || n.contains("kneron")
+            || n.contains("ncs2")
+        {
+            let is_usb = n.contains("usb");
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::EXTERNAL_EDGE_ACCELERATOR,
+                architecture: GpuArchitecture::ExternalEdgeNpu,
+                form_factor: if is_usb {
+                    HardwareFormFactor::ExternalUsbAccelerator
+                } else {
+                    HardwareFormFactor::ExternalPcieM2Accelerator
+                },
+                memory_tech: MemoryTechnology::SramOnChip,
+                tensor_core_gen: TensorCoreGeneration::ExternalNpuEngine,
+                sm_count: 2,
+                vram_capacity_bytes: 4 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 32,
+                memory_bandwidth_gbps: if is_usb { 0.5 } else { 4.0 }, // USB 3.0 / PCIe Gen 2/3
+                l2_cache_bytes: 2 * 1024 * 1024,
+                smem_per_sm_bytes: 32 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 256,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
         None
     }
 
@@ -1740,6 +2133,7 @@ impl GpuDeviceProfile {
             GpuArchitecture::AppleSiliconM4
             | GpuArchitecture::AppleSiliconM3
             | GpuArchitecture::AppleSiliconM2
+            | GpuArchitecture::QualcommHexagonNpu
             | GpuArchitecture::IntelXeHpcPonteVecchio
             | GpuArchitecture::IntelXeonGraniteRapids
             | GpuArchitecture::GoogleTpuV6eTrillium
@@ -1748,8 +2142,10 @@ impl GpuDeviceProfile {
             | GpuArchitecture::Cdna4
             | GpuArchitecture::Cdna3
             | GpuArchitecture::Blackwell
-            | GpuArchitecture::Hopper => 256, // 8 warps / simdgroups x 8 / AMX 1KB tiles
+            | GpuArchitecture::Hopper => 256, // 8 warps / simdgroups x 8 / AMX 1KB tiles / Hexagon Vector Extensions
             GpuArchitecture::AppleSiliconM1
+            | GpuArchitecture::RockchipRknnNpu
+            | GpuArchitecture::HailoNpu
             | GpuArchitecture::IntelXe2Battlemage
             | GpuArchitecture::IntelXe1Alchemist
             | GpuArchitecture::IntelXeonSierraForest
@@ -1765,8 +2161,9 @@ impl GpuDeviceProfile {
             | GpuArchitecture::Orin
             | GpuArchitecture::Cdna2
             | GpuArchitecture::Cdna1
-            | GpuArchitecture::XdnaNpu => 128, // 4 warps / simdgroups x 4 / Standard MXU / Xe-core
-            GpuArchitecture::GoogleEdgeTpu
+            | GpuArchitecture::XdnaNpu => 128, // 4 warps / simdgroups x 4 / Standard MXU / Xe-core / NPU Cores
+            GpuArchitecture::ExternalEdgeNpu
+            | GpuArchitecture::GoogleEdgeTpu
             | GpuArchitecture::Turing
             | GpuArchitecture::Volta
             | GpuArchitecture::Rdna1

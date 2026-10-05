@@ -625,7 +625,9 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "crossbeam",
+ "memmap2",
  "oxide-core",
+ "serde",
  "thiserror",
  "tracing",
 ]

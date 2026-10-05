@@ -19,10 +19,9 @@
 )]
 
 pub mod arch;
-pub mod mlx;
+pub mod qnn;
 
-use arch::MetalExecutionPlan;
-use mlx::{MetalCommandStream, MetalUnifiedBuffer};
+use arch::QualcommExecutionPlan;
 use oxide_core::error::Result;
 use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
@@ -30,24 +29,25 @@ use oxide_core::hardware::{
 };
 use oxide_core::traits::HardwareBackend;
 use oxide_core::worker::StepCommand;
+use qnn::{QnnHtpStream, QnnSharedBuffer};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MetalEventHandle {
-    pub command_buffer_id: u64,
+pub struct QualcommEventHandle {
+    pub htp_fence_id: u64,
 }
 
-pub struct MetalBackend {
+pub struct QualcommBackend {
     device_id: usize,
     profile: GpuDeviceProfile,
-    execution_plan: MetalExecutionPlan,
-    command_stream: MetalCommandStream,
-    unified_buffer: MetalUnifiedBuffer,
+    execution_plan: QualcommExecutionPlan,
+    htp_stream: QnnHtpStream,
+    shared_buffer: QnnSharedBuffer,
 }
 
-impl fmt::Debug for MetalBackend {
+impl fmt::Debug for QualcommBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MetalBackend")
+        f.debug_struct("QualcommBackend")
             .field("device_id", &self.device_id)
             .field("profile", &self.profile.name)
             .field("execution_plan", &self.execution_plan)
@@ -55,7 +55,7 @@ impl fmt::Debug for MetalBackend {
     }
 }
 
-impl MetalBackend {
+impl QualcommBackend {
     #[must_use]
     pub fn new(device_id: usize, max_slots: usize) -> Self {
         Self::new_with_profile(device_id, max_slots, None)
@@ -70,19 +70,19 @@ impl MetalBackend {
         let profile = device_override
             .and_then(GpuDeviceProfile::from_known_device_name)
             .unwrap_or_else(|| GpuDeviceProfile {
-                name: "Apple M4 Max (40-core GPU)".to_string(),
-                compute_capability: ComputeCapability::APPLE_GPU_FAMILY_10_M4,
-                architecture: GpuArchitecture::AppleSiliconM4,
-                form_factor: HardwareFormFactor::UnifiedAppleSiliconMac,
+                name: "Snapdragon X Elite (45 TOPS Hexagon NPU)".to_string(),
+                compute_capability: ComputeCapability::QUALCOMM_HEXAGON_V75_X_ELITE,
+                architecture: GpuArchitecture::QualcommHexagonNpu,
+                form_factor: HardwareFormFactor::UnifiedSnapdragonSoc,
                 memory_tech: MemoryTechnology::LpDdr5xUnifiedMemory,
-                tensor_core_gen: TensorCoreGeneration::AppleSimdgroupMatrixM4,
-                sm_count: 40,
-                vram_capacity_bytes: 128 * 1024 * 1024 * 1024,
-                memory_bus_width_bits: 512,
-                memory_bandwidth_gbps: 546.0,
-                l2_cache_bytes: 48 * 1024 * 1024,
+                tensor_core_gen: TensorCoreGeneration::QualcommHexagonTensorProcessor,
+                sm_count: 6,
+                vram_capacity_bytes: 64 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 128,
+                memory_bandwidth_gbps: 135.0,
+                l2_cache_bytes: 42 * 1024 * 1024,
                 smem_per_sm_bytes: 64 * 1024,
-                smem_per_block_bytes: 32 * 1024,
+                smem_per_block_bytes: 64 * 1024,
                 max_threads_per_sm: 1024,
                 supports_tma: false,
                 supports_fp8: true,
@@ -92,16 +92,16 @@ impl MetalBackend {
                 nvlink_bandwidth_gbps: 0.0,
             });
 
-        let execution_plan = MetalExecutionPlan::derive(&profile);
-        let command_stream = MetalCommandStream::new(device_id);
-        let unified_buffer = MetalUnifiedBuffer::new_shared(max_slots);
+        let execution_plan = QualcommExecutionPlan::derive(&profile);
+        let htp_stream = QnnHtpStream::new(device_id);
+        let shared_buffer = QnnSharedBuffer::new(max_slots);
 
         Self {
             device_id,
             profile,
             execution_plan,
-            command_stream,
-            unified_buffer,
+            htp_stream,
+            shared_buffer,
         }
     }
 
@@ -111,23 +111,23 @@ impl MetalBackend {
     }
 
     #[must_use]
-    pub fn execution_plan(&self) -> &MetalExecutionPlan {
+    pub fn execution_plan(&self) -> &QualcommExecutionPlan {
         &self.execution_plan
     }
 }
 
-impl HardwareBackend for MetalBackend {
-    type Event = MetalEventHandle;
+impl HardwareBackend for QualcommBackend {
+    type Event = QualcommEventHandle;
 
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
-        let cmd_id = self.command_stream.dispatch_simdgroup_encode();
+        let fence_id = self.htp_stream.dispatch_htp_graph();
         let slot = cmd.slot_idx as usize;
 
         let sampled = cmd.input_token.wrapping_add(1);
-        let _ = self.unified_buffer.write_token(slot, sampled);
+        let _ = self.shared_buffer.write_token(slot, sampled);
 
-        Ok(MetalEventHandle {
-            command_buffer_id: cmd_id,
+        Ok(QualcommEventHandle {
+            htp_fence_id: fence_id,
         })
     }
 
@@ -136,10 +136,10 @@ impl HardwareBackend for MetalBackend {
     }
 
     fn read_sampled_token_host(&self, slot_idx: u16) -> u32 {
-        self.unified_buffer.read_token(slot_idx as usize)
+        self.shared_buffer.read_token(slot_idx as usize)
     }
 
     fn synchronize(&self) -> Result<()> {
-        self.command_stream.synchronize()
+        self.htp_stream.synchronize()
     }
 }
