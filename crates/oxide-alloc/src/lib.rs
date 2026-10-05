@@ -17,7 +17,13 @@
     clippy::cast_lossless,
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::too_many_lines,
+    clippy::manual_checked_ops,
+    clippy::manual_div_ceil,
+    clippy::chunks_exact_to_as_chunks,
+    clippy::redundant_closure_for_method_calls
 )]
 
 pub mod device_arena;

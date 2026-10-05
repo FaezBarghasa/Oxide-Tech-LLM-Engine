@@ -128,10 +128,10 @@ impl AcademicSamplerEngine {
         }
 
         // 2. Penalize Newline if enabled
-        if self.config.penalize_nl {
-            if let Some(l) = logits.get_mut(newline_token_id as usize) {
-                *l -= self.config.newline_penalty;
-            }
+        if self.config.penalize_nl
+            && let Some(l) = logits.get_mut(newline_token_id as usize)
+        {
+            *l -= self.config.newline_penalty;
         }
 
         // 3. Apply DRY (Don't Repeat Yourself) sequence-length exponential penalty
@@ -176,8 +176,8 @@ impl AcademicSamplerEngine {
 
         // 6. Mirostat Adaptive Filtering (v1 & v2)
         match self.config.mirostat_mode {
-            MirostatMode::V1 => return self.sample_mirostat_v1(&mut candidates, state),
-            MirostatMode::V2 => return self.sample_mirostat_v2(&mut candidates, state),
+            MirostatMode::V1 => return Ok(self.sample_mirostat_v1(&mut candidates, state)),
+            MirostatMode::V2 => return Ok(self.sample_mirostat_v2(&mut candidates, state)),
             MirostatMode::Disabled => {}
         }
 
@@ -244,13 +244,13 @@ impl AcademicSamplerEngine {
             }
             let suffix = &history_slice[history_slice.len() - match_len..];
             for i in 0..history_slice.len().saturating_sub(match_len) {
-                if &history_slice[i..i + match_len] == suffix {
-                    if let Some(&next_token) = history_slice.get(i + match_len) {
-                        let exponent = (match_len - self.config.dry_allowed_length) as f32;
-                        let penalty = self.config.dry_multiplier * self.config.dry_base.powf(exponent);
-                        if let Some(l) = logits.get_mut(next_token as usize) {
-                            *l -= penalty;
-                        }
+                if &history_slice[i..i + match_len] == suffix
+                    && let Some(&next_token) = history_slice.get(i + match_len)
+                {
+                    let exponent = (match_len - self.config.dry_allowed_length) as f32;
+                    let penalty = self.config.dry_multiplier * self.config.dry_base.powf(exponent);
+                    if let Some(l) = logits.get_mut(next_token as usize) {
+                        *l -= penalty;
                     }
                 }
             }
@@ -262,7 +262,7 @@ impl AcademicSamplerEngine {
         &self,
         candidates: &mut [(u32, f32)],
         state: &mut SamplerState,
-    ) -> Result<u32> {
+    ) -> u32 {
         let tau = self.config.mirostat_tau;
         let eta = self.config.mirostat_eta;
 
@@ -272,7 +272,7 @@ impl AcademicSamplerEngine {
         let error = surprise - tau;
         state.mirostat_mu -= eta * error;
         state.record_token(selected);
-        Ok(selected)
+        selected
     }
 
     /// Mirostat v2 Active Sampling Algorithm (Fast Target Entropy Truncation).
@@ -280,7 +280,7 @@ impl AcademicSamplerEngine {
         &self,
         candidates: &mut [(u32, f32)],
         state: &mut SamplerState,
-    ) -> Result<u32> {
+    ) -> u32 {
         let tau = self.config.mirostat_tau;
         let eta = self.config.mirostat_eta;
         let max_surprise = state.mirostat_mu;
@@ -303,7 +303,7 @@ impl AcademicSamplerEngine {
         let error = surprise - tau;
         state.mirostat_mu -= eta * error;
         state.record_token(selected);
-        Ok(selected)
+        selected
     }
 
     /// Tail-Free Sampling (TFS-Z) based on second-derivative curvature of sorted probabilities.
