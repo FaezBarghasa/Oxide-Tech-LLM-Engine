@@ -19,7 +19,10 @@
 )]
 
 pub mod engine;
+pub mod hybrid;
 pub mod pipeline;
 
 pub use engine::OxideEngine;
+pub use hybrid::{DeviceRole, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition};
 pub use pipeline::SpecializedPipeline;
+

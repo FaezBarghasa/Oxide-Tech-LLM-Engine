@@ -36,7 +36,10 @@ pub use audio::{AudioEngineMode, AudioModelConfig, AudioServingEngine};
 pub use bonsai2::TernaryBonsai2Config;
 pub use diffusion::{DiffusionEngine, DiffusionSchedulerType, DiffusionTransformerConfig};
 pub use engram::EngramGatherTable;
-pub use formats::{GgufHeader, GgufQuantType, ModelFileFormat, Nvfp4Block, SafeTensorsHeader};
+pub use formats::{
+    GgufFile, GgufHeader, GgufQuantType, GgufTensorInfo, GgufValue, ModelFileFormat, Nvfp4Block,
+    SafeTensorInfo, SafeTensorsHeader,
+};
 pub use llama3::Llama3Config;
 pub use manifest::OxideModelHeader;
 pub use moe::{ExpertRoutingDecision, MoELayer, MoERouterConfig};
