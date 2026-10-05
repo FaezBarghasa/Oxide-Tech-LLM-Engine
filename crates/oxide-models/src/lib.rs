@@ -46,6 +46,9 @@ pub use registry::{
     ModelArchitectureType, ModelFamily, ModelModality, ModelSpecification, QuantizationClass,
 };
 pub use specialized::{
-    AgenticDeciderEngine, EmbeddingEngine, FinancialMarketBar, KronosTradingEngine,
-    RoboticsVlaActionChunk, RoboticsVlaEngine, TimeSeriesEngine, TradingForecast, TradingSignal,
+    AgenticDeciderEngine, AtmosphericAuroraEngine, AtmosphericForecastGrid, BimanualActionChunk,
+    BimanualRoboticsEngine, EmbeddingEngine, FinancialMarketBar, GamepadControllerState,
+    GameplayWhamEngine, KronosTradingEngine, MidiNoteEvent, RoboticsVlaActionChunk,
+    RoboticsVlaEngine, SatelliteEarthEngine, SatelliteGeoDetection, SymbolicMusicEngine,
+    TimeSeriesEngine, TradingForecast, TradingSignal,
 };
