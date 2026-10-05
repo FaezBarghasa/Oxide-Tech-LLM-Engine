@@ -657,6 +657,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-backend-hailo"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "oxide-alloc",
+ "oxide-core",
+ "oxide-quant",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "oxide-backend-intel"
 version = "0.1.0"
 dependencies = [
@@ -669,6 +681,30 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-metal"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "oxide-alloc",
+ "oxide-core",
+ "oxide-quant",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "oxide-backend-qualcomm"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "oxide-alloc",
+ "oxide-core",
+ "oxide-quant",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "oxide-backend-rknn"
 version = "0.1.0"
 dependencies = [
  "bytemuck",

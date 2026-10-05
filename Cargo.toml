@@ -8,6 +8,9 @@ members = [
     "crates/oxide-hardware/oxide-backend-metal",
     "crates/oxide-hardware/oxide-backend-tpu",
     "crates/oxide-hardware/oxide-backend-intel",
+    "crates/oxide-hardware/oxide-backend-qualcomm",
+    "crates/oxide-hardware/oxide-backend-rknn",
+    "crates/oxide-hardware/oxide-backend-hailo",
     "crates/oxide-hardware/oxide-backend-cpu",
     "crates/oxide-models",
     "crates/oxide-quant",
@@ -31,6 +34,9 @@ oxide-backend-rocm = { path = "crates/oxide-hardware/oxide-backend-rocm" }
 oxide-backend-metal = { path = "crates/oxide-hardware/oxide-backend-metal" }
 oxide-backend-tpu = { path = "crates/oxide-hardware/oxide-backend-tpu" }
 oxide-backend-intel = { path = "crates/oxide-hardware/oxide-backend-intel" }
+oxide-backend-qualcomm = { path = "crates/oxide-hardware/oxide-backend-qualcomm" }
+oxide-backend-rknn = { path = "crates/oxide-hardware/oxide-backend-rknn" }
+oxide-backend-hailo = { path = "crates/oxide-hardware/oxide-backend-hailo" }
 oxide-backend-cpu = { path = "crates/oxide-hardware/oxide-backend-cpu" }
 oxide-models = { path = "crates/oxide-models" }
 oxide-quant = { path = "crates/oxide-quant" }
