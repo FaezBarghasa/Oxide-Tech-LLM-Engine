@@ -21,7 +21,10 @@
     clippy::cast_lossless
 )]
 
+pub mod arena;
 pub mod engine;
+pub mod executor;
+pub mod graph;
 pub mod hybrid;
 pub mod model_manager;
 pub mod pipeline;
@@ -29,7 +32,10 @@ pub mod slot_manager;
 pub mod speculative;
 pub mod tensor_split;
 
+pub use arena::GraphArena;
 pub use engine::OxideEngine;
+pub use executor::ComputeGraphExecutor;
+pub use graph::{ComputeGraph, GraphNode, NodeParams, OpCode, build_graph, build_transformer_graph};
 pub use hybrid::{DeviceRole, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition};
 pub use model_manager::DynamicModelManager;
 pub use pipeline::SpecializedPipeline;

@@ -1,5 +1,5 @@
 use clap::Parser;
-use oxide_cli::{BackendArg, Cli, ModelArg};
+use oxide_cli::{BackendArg, Cli};
 
 #[test]
 fn test_cli_default_parsing() {
@@ -125,3 +125,87 @@ fn test_cli_safetensors_weights_loading() {
 
     let _ = std::fs::remove_file(&tmp_path);
 }
+
+#[test]
+fn test_cli_subcommands_chat_server_img() {
+    use oxide_cli::Commands;
+
+    // Chat subcommand with -ngl and -p
+    let chat_args = [
+        "oxide-engine",
+        "chat",
+        "-m",
+        "/models/llama-3-8b-q4_k_m.gguf",
+        "-ngl",
+        "99",
+        "-p",
+        "Hello",
+    ];
+    let cli = Cli::parse_normalized(chat_args).unwrap();
+    match cli.command {
+        Some(Commands::Chat(chat)) => {
+            assert_eq!(chat.model, "/models/llama-3-8b-q4_k_m.gguf");
+            assert_eq!(chat.n_gpu_layers, 99);
+            assert_eq!(chat.prompt.as_deref(), Some("Hello"));
+        }
+        _ => panic!("Expected Chat command"),
+    }
+
+    // Chat subcommand with Qwen model
+    let qwen_args = [
+        "oxide-engine",
+        "chat",
+        "-m",
+        "/models/qwen2.5-14b-fp8.gguf",
+        "-ngl",
+        "99",
+        "-p",
+        "Hello",
+    ];
+    let cli_qwen = Cli::parse_normalized(qwen_args).unwrap();
+    match cli_qwen.command {
+        Some(Commands::Chat(chat)) => {
+            assert_eq!(chat.model, "/models/qwen2.5-14b-fp8.gguf");
+            assert_eq!(chat.n_gpu_layers, 99);
+            assert_eq!(chat.prompt.as_deref(), Some("Hello"));
+        }
+        _ => panic!("Expected Chat command"),
+    }
+
+    // Server subcommand with --port
+    let server_args = [
+        "oxide-engine",
+        "server",
+        "-m",
+        "/models/llama-3-8b.gguf",
+        "--port",
+        "8080",
+    ];
+    let cli_server = Cli::try_parse_from(server_args).unwrap();
+    match cli_server.command {
+        Some(Commands::Server(srv)) => {
+            assert_eq!(srv.model, "/models/llama-3-8b.gguf");
+            assert_eq!(srv.port, 8080);
+        }
+        _ => panic!("Expected Server command"),
+    }
+
+    // Img subcommand with prompt
+    let img_args = [
+        "oxide-engine",
+        "img",
+        "-m",
+        "/models/sdxl-turbo.gguf",
+        "-p",
+        "A cyberpunk city",
+    ];
+    let cli_img = Cli::try_parse_from(img_args).unwrap();
+    match cli_img.command {
+        Some(Commands::Img(img)) => {
+            assert_eq!(img.model, "/models/sdxl-turbo.gguf");
+            assert_eq!(img.prompt, "A cyberpunk city");
+        }
+        _ => panic!("Expected Img command"),
+    }
+}
+

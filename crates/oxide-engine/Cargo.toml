@@ -20,6 +20,7 @@ oxide-backend-cpu.workspace = true
 oxide-models.workspace = true
 oxide-quant.workspace = true
 rtrb.workspace = true
+bytemuck.workspace = true
 crossbeam.workspace = true
 tokio.workspace = true
 serde.workspace = true

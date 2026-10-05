@@ -24,6 +24,18 @@ impl GraphArena {
         self.tensor_offsets.clear();
     }
 
+    #[must_use]
+    #[inline(always)]
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    #[must_use]
+    #[inline(always)]
+    pub fn capacity(&self) -> usize {
+        self.storage.len()
+    }
+
     /// Bump-allocates a slice for a tensor output.
     #[inline(always)]
     pub fn alloc(&mut self, size: usize) -> &mut [f32] {

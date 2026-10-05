@@ -785,6 +785,7 @@ dependencies = [
 name = "oxide-engine"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "crossbeam",
  "oxide-alloc",
  "oxide-backend-cpu",

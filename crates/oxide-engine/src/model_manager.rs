@@ -97,6 +97,20 @@ impl DynamicModelManager {
         self.models.keys().cloned().collect()
     }
 
+    pub fn set_default_model(&mut self, model: &str) {
+        self.default_model = model.to_string();
+    }
+
+    pub fn alias_model(&mut self, alias: &str, target: &str) {
+        if let Some(pipe) = self.models.get(target).cloned() {
+            self.models.insert(alias.to_string(), pipe);
+        }
+    }
+
+    pub fn unload_model(&mut self, model: &str) -> bool {
+        self.models.remove(model).is_some()
+    }
+
     #[must_use]
     pub fn list_available(&self) -> Vec<String> {
         let mut list = self.list_loaded();

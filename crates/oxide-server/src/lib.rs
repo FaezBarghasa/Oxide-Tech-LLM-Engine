@@ -76,6 +76,19 @@ pub struct EmbeddingRequest {
     pub input: serde_json::Value, // String or Vec<String>
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ModelLoadRequest {
+    pub model: String,
+    pub alias: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelLoadResponse {
+    pub success: bool,
+    pub model: String,
+    pub message: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ModelCard {
     pub id: String,
@@ -302,6 +315,7 @@ pub fn create_router(state: ServerState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/v1/models", get(models_handler))
+        .route("/v1/models/load", post(model_load_handler))
         .route("/v1/chat/completions", post(chat_completions_handler))
         .route("/v1/completions", post(completions_handler))
         .route("/v1/embeddings", post(embeddings_handler))
@@ -344,6 +358,37 @@ async fn models_handler(State(state): State<ServerState>) -> Json<ModelsListResp
         object: "list".to_string(),
         data,
     })
+}
+
+async fn model_load_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<ModelLoadRequest>,
+) -> Result<Json<ModelLoadResponse>, (axum::http::StatusCode, String)> {
+    if let Some(mgr) = &state.model_manager {
+        let mut guard = mgr.lock().await;
+        match guard.get_or_load(&payload.model).await {
+            Ok(_) => {
+                if let Some(alias) = &payload.alias {
+                    guard.alias_model(alias, &payload.model);
+                }
+                guard.set_default_model(&payload.model);
+                Ok(Json(ModelLoadResponse {
+                    success: true,
+                    model: payload.model,
+                    message: "Model successfully hot-swapped into memory and set as default".to_string(),
+                }))
+            }
+            Err(e) => Err((
+                axum::http::StatusCode::BAD_REQUEST,
+                format!("Failed to load model {}: {}", payload.model, e),
+            )),
+        }
+    } else {
+        Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Dynamic Model Manager not enabled on this server".to_string(),
+        ))
+    }
 }
 
 async fn chat_completions_handler(

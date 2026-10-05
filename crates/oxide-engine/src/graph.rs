@@ -1,4 +1,3 @@
-use oxide_core::error::Result;
 use oxide_models::loader::ModelMetadata;
 
 /// Operation codes for dynamic compute graph nodes (C-style enum, zero vtable overhead).
@@ -29,6 +28,7 @@ pub struct NodeParams {
     pub num_heads: usize,
     pub num_kv_heads: usize,
     pub head_dim: usize,
+    pub aux_src: TensorId,
 }
 
 impl Default for NodeParams {
@@ -42,6 +42,7 @@ impl Default for NodeParams {
             num_heads: 0,
             num_kv_heads: 0,
             head_dim: 0,
+            aux_src: 0,
         }
     }
 }
@@ -237,6 +238,7 @@ pub fn build_transformer_graph(meta: &ModelMetadata, _batch_size: usize) -> Comp
             num_heads,
             num_kv_heads,
             head_dim,
+            aux_src: v,
             ..Default::default()
         };
         let attn_out = graph.add_node(OpCode::FlashAttn, q_rope, k_rope, q_dim, None, attn_params);
