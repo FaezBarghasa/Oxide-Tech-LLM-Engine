@@ -1081,7 +1081,11 @@ fn test_extended_eda_cad_materials_cae_and_qa_suites() {
     let code_artifact = cad_coder
         .generate_cadquery_code("MotorMountBracket", [60.0, 40.0, 12.0])
         .expect("CadQuery code generated");
-    assert!(code_artifact.python_cadquery_script.contains("cadquery as cq"));
+    assert!(
+        code_artifact
+            .python_cadquery_script
+            .contains("cadquery as cq")
+    );
     assert_eq!(code_artifact.identified_features.len(), 3);
 
     // 4. AtomAgents MIT Physics & LAMMPS Engine
@@ -1116,7 +1120,11 @@ fn test_extended_eda_cad_materials_cae_and_qa_suites() {
         .decompose_system("Electric Vertical Takeoff and Landing (eVTOL) Powertrain")
         .expect("System decomposition succeeded");
     assert_eq!(decomp.top_level_functions.len(), 2);
-    assert!(decomp.generated_simulator_modelica_or_python.contains("model SystemSimulation"));
+    assert!(
+        decomp
+            .generated_simulator_modelica_or_python
+            .contains("model SystemSimulation")
+    );
 
     // 8. SpecForge AI Smart Contract & Polyglot Mutation Engine
     let specforge = oxide_models::SpecForgeMutationEngine::new(85.0);
@@ -1137,4 +1145,3 @@ fn test_extended_eda_cad_materials_cae_and_qa_suites() {
     assert!(paper.latex_main_tex.contains("\\documentclass{article}"));
     assert_eq!(paper.citations.len(), 1);
 }
-

@@ -1810,10 +1810,7 @@ impl AmMapCompositionEngine {
     }
 
     /// Maps compositional design space into thermodynamic graph.
-    pub fn map_composition_space(
-        &self,
-        system_name: &str,
-    ) -> Result<CompositionalDesignGraph> {
+    pub fn map_composition_space(&self, system_name: &str) -> Result<CompositionalDesignGraph> {
         if system_name.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }
@@ -1864,7 +1861,9 @@ pub struct MechRagEngineeringEngine {
 impl MechRagEngineeringEngine {
     #[must_use]
     pub fn new(allowable_stress_mpa: f32) -> Self {
-        Self { allowable_stress_mpa }
+        Self {
+            allowable_stress_mpa,
+        }
     }
 
     /// Evaluates CAE simulation telemetry and proposes structural geometric revisions.
@@ -1928,10 +1927,7 @@ impl AgenticEngDesignEngine {
     }
 
     /// Decomposes mission requirements into functional architecture and simulator code.
-    pub fn decompose_system(
-        &self,
-        mission_prompt: &str,
-    ) -> Result<SystemFunctionalDecomposition> {
+    pub fn decompose_system(&self, mission_prompt: &str) -> Result<SystemFunctionalDecomposition> {
         if mission_prompt.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }
@@ -1997,10 +1993,7 @@ impl SpecForgeMutationEngine {
     }
 
     /// Executes polyglot mutation suite on target smart contract or Rust module.
-    pub fn run_mutation_analysis(
-        &self,
-        target_name: &str,
-    ) -> Result<SmartContractMutationReport> {
+    pub fn run_mutation_analysis(&self, target_name: &str) -> Result<SmartContractMutationReport> {
         if target_name.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }
@@ -2080,7 +2073,8 @@ impl AcademicResearchWritingEngine {
             authors: vec!["Faez Barghasa".to_string()],
             year: 2026,
             doi: "10.1109/OXIDE.2026.01".to_string(),
-            snippet_evidence: "Demonstrated zero dynamic allocations during hot token decoding.".to_string(),
+            snippet_evidence: "Demonstrated zero dynamic allocations during hot token decoding."
+                .to_string(),
         }];
 
         Ok(OverleafProjectDocument {
@@ -2091,4 +2085,3 @@ impl AcademicResearchWritingEngine {
         })
     }
 }
-
