@@ -54,7 +54,7 @@ impl Default for BeamSearchConfig {
             beam_width: 4,
             max_tokens: 128,
             length_penalty_alpha: 0.6,
-            eos_token_id: 128001,
+            eos_token_id: 128_001,
             early_stopping: true,
         }
     }

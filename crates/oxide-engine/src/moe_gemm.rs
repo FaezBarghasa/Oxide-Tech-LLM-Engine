@@ -22,8 +22,8 @@ impl<const DIMS: usize> CuTeLayout<DIMS> {
     #[must_use]
     pub fn linearize(&self, coords: [usize; DIMS]) -> usize {
         let mut offset = 0;
-        for i in 0..DIMS {
-            offset += coords[i] * self.stride[i];
+        for (coord, &stride) in coords.iter().zip(self.stride.iter()) {
+            offset += coord * stride;
         }
         offset
     }

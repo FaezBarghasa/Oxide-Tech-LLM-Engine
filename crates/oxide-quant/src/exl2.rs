@@ -57,8 +57,8 @@ impl Exl2WeightMatrix {
     pub fn new(rows: usize, cols: usize, target_bpw: Exl2BitsPerWeight, sub_block_size: usize) -> Self {
         let total_weights = rows * cols;
         let bits = (total_weights as f32 * target_bpw.bpw()).ceil() as usize;
-        let words = (bits + 31) / 32;
-        let num_scales = (total_weights + sub_block_size - 1) / sub_block_size;
+        let words = bits.div_ceil(32);
+        let num_scales = total_weights.div_ceil(sub_block_size);
 
         Self {
             rows,
