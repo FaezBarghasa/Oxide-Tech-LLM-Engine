@@ -1,6 +1,7 @@
 use oxide_core::sampler::{
     AcademicSamplerEngine, GbnfGrammarEngine, GbnfRule, MirostatMode, SamplerState, SamplingConfig,
 };
+use std::collections::HashMap;
 
 #[test]
 fn test_academic_sampler_temperature_and_top_k() {
@@ -11,11 +12,11 @@ fn test_academic_sampler_temperature_and_top_k() {
         ..Default::default()
     };
     let sampler = AcademicSamplerEngine::new(config);
-    let mut state = SamplerState::new(32);
+    let mut state = SamplerState::new(5.0);
 
-    let picked = sampler.sample(&mut logits, &mut state).unwrap();
+    let picked = sampler.sample_token(&mut logits, &mut state, 13).unwrap();
     assert_eq!(picked, 2); // Logit 5.0 is highest
-    assert_eq!(state.generated_history, vec![2]);
+    assert_eq!(state.generated_tokens, vec![2]);
 }
 
 #[test]
@@ -28,9 +29,9 @@ fn test_academic_sampler_min_p_and_xtc() {
         ..Default::default()
     };
     let sampler = AcademicSamplerEngine::new(config);
-    let mut state = SamplerState::new(32);
+    let mut state = SamplerState::new(5.0);
 
-    let picked = sampler.sample(&mut logits, &mut state).unwrap();
+    let picked = sampler.sample_token(&mut logits, &mut state, 13).unwrap();
     // With XTC active, top choice (token 0) is excluded, yielding token 1
     assert_eq!(picked, 1);
 }
@@ -46,10 +47,10 @@ fn test_dry_repetition_penalty() {
         ..Default::default()
     };
     let sampler = AcademicSamplerEngine::new(config);
-    let mut state = SamplerState::new(32);
-    state.generated_history = vec![0, 1, 0, 1, 0, 1]; // Repetitive pattern 0, 1
+    let mut state = SamplerState::new(5.0);
+    state.generated_tokens = vec![0, 1, 0, 1, 0, 1]; // Repetitive pattern 0, 1
 
-    let picked = sampler.sample(&mut logits, &mut state).unwrap();
+    let picked = sampler.sample_token(&mut logits, &mut state, 13).unwrap();
     // Sequence 0, 1, 0, 1 matches suffix [0, 1], penalizing token 0 heavily, yielding token 2
     assert_eq!(picked, 2);
 }
@@ -64,61 +65,69 @@ fn test_mirostat_v2_sampling() {
         ..Default::default()
     };
     let sampler = AcademicSamplerEngine::new(config);
-    let mut state = SamplerState::new(32);
+    let mut state = SamplerState::new(3.0);
 
-    let picked = sampler.sample(&mut logits, &mut state).unwrap();
+    let picked = sampler.sample_token(&mut logits, &mut state, 13).unwrap();
     assert_eq!(picked, 4); // Highest probability token within target entropy
 }
 
 #[test]
-fn test_gbnf_grammar_constrained_sampling() {
+fn test_gbnf_grammar_constrained_masking() {
     let mut logits = vec![10.0, 10.0, 10.0, 10.0];
+    let mut rules = HashMap::new();
+    rules.insert(
+        "root".to_string(),
+        GbnfRule {
+            rule_name: "root".to_string(),
+            allowed_char_ranges: vec![('{', '{')],
+            literal_strings: vec!["true".to_string()],
+        },
+    );
     let grammar = GbnfGrammarEngine {
-        rules: vec![GbnfRule {
-            rule_id: 0,
-            allowed_tokens: vec![1, 3], // Only tokens 1 and 3 are syntactically valid JSON/grammar
-        }],
-        current_rule_idx: 0,
+        rules,
+        start_rule: "root".to_string(),
     };
 
-    let config = SamplingConfig {
-        gbnf_grammar: Some(grammar),
-        ..Default::default()
-    };
-    let sampler = AcademicSamplerEngine::new(config);
-    let mut state = SamplerState::new(32);
+    let vocab = vec![
+        "\"key\"".to_string(), // not starting with { or true -> masked
+        "{".to_string(),       // starts with { -> allowed
+        "123".to_string(),     // masked
+        "true".to_string(),    // matches literal -> allowed
+    ];
 
-    let picked = sampler.sample(&mut logits, &mut state).unwrap();
-    assert!(picked == 1 || picked == 3);
+    grammar.apply_grammar_mask(&mut logits, &vocab).unwrap();
+    assert_eq!(logits[0], f32::NEG_INFINITY);
+    assert_eq!(logits[1], 10.0);
+    assert_eq!(logits[2], f32::NEG_INFINITY);
+    assert_eq!(logits[3], 10.0);
 }
 
 #[test]
 fn test_logit_bias_and_token_bans() {
     let mut logits = vec![10.0, 5.0, 1.0];
     let mut config = SamplingConfig::default();
-    config.banned_tokens.push(0); // Ban top token 0
-    config.logit_bias.insert(2, 20.0); // Boost token 2 by +20.0
+    config.banned_tokens.insert(0); // Ban top token 0
+    config.logit_biases.insert(2, 20.0); // Boost token 2 by +20.0
 
     let sampler = AcademicSamplerEngine::new(config);
-    let mut state = SamplerState::new(32);
+    let mut state = SamplerState::new(5.0);
 
-    let picked = sampler.sample(&mut logits, &mut state).unwrap();
+    let picked = sampler.sample_token(&mut logits, &mut state, 13).unwrap();
     assert_eq!(picked, 2);
 }
 
 #[test]
 fn test_penalize_newline() {
     let mut logits = vec![5.0, 5.0, 5.0];
-    let mut config = SamplingConfig {
+    let config = SamplingConfig {
         penalize_nl: true,
-        newline_token_id: 1,
+        newline_penalty: 10.0,
         ..Default::default()
     };
-    config.logit_bias.insert(1, 0.0);
 
     let sampler = AcademicSamplerEngine::new(config);
-    let mut state = SamplerState::new(32);
+    let mut state = SamplerState::new(5.0);
 
-    let picked = sampler.sample(&mut logits, &mut state).unwrap();
+    let picked = sampler.sample_token(&mut logits, &mut state, 1).unwrap();
     assert_ne!(picked, 1); // Token 1 (newline) was penalized
 }

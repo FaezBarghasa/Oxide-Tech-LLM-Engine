@@ -19,10 +19,9 @@ fn test_on_the_fly_kv_quantization_and_dequantization() {
     // 1. Float16 Quantized Block
     let f16_block = QuantizedKvBlock::quantize_from_f32(
         1,
-        token_count,
-        head_dim,
         &k_original,
         &v_original,
+        token_count,
         KvQuantizationPrecision::Float16,
     );
     let mut k_dequant = vec![0.0f32; total_elements];
@@ -36,10 +35,9 @@ fn test_on_the_fly_kv_quantization_and_dequantization() {
     // 2. Q8_0 Quantized Block
     let q8_block = QuantizedKvBlock::quantize_from_f32(
         2,
-        token_count,
-        head_dim,
         &k_original,
         &v_original,
+        token_count,
         KvQuantizationPrecision::Quant8_0,
     );
     q8_block.dequantize_into(&mut k_dequant, &mut v_dequant);
@@ -50,10 +48,9 @@ fn test_on_the_fly_kv_quantization_and_dequantization() {
     // 3. Q4_0 Quantized Block
     let q4_block = QuantizedKvBlock::quantize_from_f32(
         3,
-        token_count,
-        head_dim,
         &k_original,
         &v_original,
+        token_count,
         KvQuantizationPrecision::Quant4_0,
     );
     q4_block.dequantize_into(&mut k_dequant, &mut v_dequant);
@@ -62,54 +59,51 @@ fn test_on_the_fly_kv_quantization_and_dequantization() {
 
 #[test]
 fn test_context_shift_manager() {
-    let mut manager = ContextShiftManager::new(4096, 512, 1024);
-    let mut token_ids: Vec<u32> = (0..5000).collect();
+    let manager = ContextShiftManager::new(4096, 512, 1024);
+    let token_ids: Vec<u32> = (0..5000).collect();
 
-    assert!(manager.requires_shift(token_ids.len()));
-    let shifted = manager.shift_context(&mut token_ids).unwrap();
+    let shifted = manager.shift_context_window(&token_ids).unwrap();
 
-    assert_eq!(token_ids.len(), 5000 - shifted);
-    assert_eq!(token_ids[0..512], (0..512).collect::<Vec<u32>>()); // Prompt prefix preserved!
+    assert_eq!(shifted.len(), 5000 - 1024);
+    assert_eq!(shifted[0..512], (0..512).collect::<Vec<u32>>()); // Prompt prefix preserved!
 }
 
 #[test]
 fn test_prompt_cache_registry() {
-    let mut registry = PromptCacheRegistry::new(10);
+    let mut registry = PromptCacheRegistry::new();
     let prompt1 = vec![1, 2, 3, 4, 5, 6, 7, 8];
     let kv_block_ids = vec![101, 102];
 
-    registry.register_prompt(&prompt1, kv_block_ids.clone());
+    registry.insert_cached_prefix(&prompt1, &kv_block_ids);
 
     // Exact match lookup
-    let lookup = registry.lookup_prompt(&prompt1);
-    assert_eq!(lookup, Some(kv_block_ids));
+    let lookup = registry.lookup_cached_prefix(&prompt1);
+    assert_eq!(lookup, Some(kv_block_ids.as_slice()));
 
     // Non-matching prompt
-    assert_eq!(registry.lookup_prompt(&[9, 9, 9]), None);
+    assert_eq!(registry.lookup_cached_prefix(&[9, 9, 9]), None);
 }
 
 #[test]
 fn test_kv_cache_dumping_and_reloading() {
     let container = KvCacheDumpContainer {
-        model_name: "llama-3-8b".to_string(),
-        total_layers: 32,
-        tokens_cached: 1024,
-        head_dim: 128,
-        precision: KvQuantizationPrecision::Float16,
+        session_id: "session-01".to_string(),
+        model_identifier: "llama-3-8b".to_string(),
+        total_blocks: 1,
+        timestamp_epoch_ms: 1728000000,
         blocks: vec![QuantizedKvBlock::quantize_from_f32(
             1,
+            &vec![0.5; 32 * 128],
+            &vec![0.5; 32 * 128],
             32,
-            128,
-            &vec![0.5; 32 * 128],
-            &vec![0.5; 32 * 128],
             KvQuantizationPrecision::Float16,
         )],
     };
 
-    let serialized = container.dump_to_binary().unwrap();
-    let reloaded = KvCacheDumpContainer::reload_from_binary(&serialized).unwrap();
+    let serialized = container.dump_to_bytes().unwrap();
+    let reloaded = KvCacheDumpContainer::load_from_bytes(&serialized).unwrap();
 
-    assert_eq!(reloaded.model_name, "llama-3-8b");
-    assert_eq!(reloaded.tokens_cached, 1024);
+    assert_eq!(reloaded.model_identifier, "llama-3-8b");
+    assert_eq!(reloaded.total_blocks, 1);
     assert_eq!(reloaded.blocks.len(), 1);
 }

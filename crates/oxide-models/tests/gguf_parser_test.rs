@@ -1,4 +1,4 @@
-use oxide_models::formats::{GgufFile, GgufHeader, GgufQuantType, GgufValue};
+use oxide_models::formats::{GgufFile, GgufQuantType};
 
 #[test]
 fn test_gguf_synthetic_binary_parsing() {
@@ -39,11 +39,12 @@ fn test_gguf_synthetic_binary_parsing() {
     buffer.extend_from_slice(&2u32.to_le_bytes()); // Q4_0 quant type
     buffer.extend_from_slice(&0u64.to_le_bytes()); // offset
 
-    let parsed = GgufFile::parse_from_bytes(&buffer).unwrap();
+    let parsed = GgufFile::parse(&buffer).unwrap();
+    let header = parsed.header.as_ref().unwrap();
 
-    assert_eq!(parsed.header.version, 3);
-    assert_eq!(parsed.header.tensor_count, 1);
-    assert_eq!(parsed.header.metadata_kv_count, 2);
+    assert_eq!(header.version, 3);
+    assert_eq!(header.tensor_count, 1);
+    assert_eq!(header.metadata_kv_count, 2);
 
     assert_eq!(
         parsed.get_string("general.architecture"),
@@ -55,7 +56,7 @@ fn test_gguf_synthetic_binary_parsing() {
     );
 
     assert_eq!(parsed.tensors.len(), 1);
-    let t = &parsed.tensors[0];
+    let t = parsed.tensors.get("blk.0.attn_q.weight").unwrap();
     assert_eq!(t.name, "blk.0.attn_q.weight");
     assert_eq!(t.dimensions, vec![4096, 4096]);
     assert_eq!(t.quant_type, GgufQuantType::Q4_0);

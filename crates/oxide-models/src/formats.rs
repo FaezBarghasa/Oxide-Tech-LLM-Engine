@@ -136,6 +136,27 @@ pub struct GgufHeader {
     pub metadata_kv_count: u64,
 }
 
+impl GgufHeader {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < 24 {
+            return Err(EngineError::InvalidArtifactHeader);
+        }
+        let magic = [bytes[0], bytes[1], bytes[2], bytes[3]];
+        if &magic != GGUF_MAGIC {
+            return Err(EngineError::InvalidArtifactHeader);
+        }
+        let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        let tensor_count = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        let metadata_kv_count = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+        Ok(Self {
+            magic,
+            version,
+            tensor_count,
+            metadata_kv_count,
+        })
+    }
+}
+
 pub const GGUF_MAGIC: &[u8; 4] = b"GGUF";
 
 /// GGUF Metadata Value Types.

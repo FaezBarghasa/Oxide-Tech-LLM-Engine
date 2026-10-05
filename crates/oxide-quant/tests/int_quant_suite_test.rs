@@ -28,7 +28,7 @@ fn test_block_q4_0_quant_dequant_dot() {
         assert!((output[i] - input[i]).abs() < 0.35);
     }
 
-    let dot = block.vec_dot(&input);
+    let dot = block.dot_product(&input);
     let expected_dot: f32 = input.iter().map(|&x| x * x).sum();
     assert!((dot - expected_dot).abs() / expected_dot < 0.15);
 }
@@ -80,7 +80,7 @@ fn test_block_q8_0_quant_dequant_dot() {
         assert!((output[i] - input[i]).abs() < 0.05); // Q8_0 has high fidelity
     }
 
-    let dot = block.vec_dot(&input);
+    let dot = block.dot_product(&input);
     let expected_dot: f32 = input.iter().map(|&x| x * x).sum();
     assert!((dot - expected_dot).abs() / expected_dot < 0.02);
 }
