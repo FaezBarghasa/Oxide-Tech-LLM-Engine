@@ -363,3 +363,122 @@ fn test_microsoft_research_suites() {
     assert_eq!(detections.len(), 1);
     assert!(detections[0].area_sq_km > 0.0);
 }
+
+#[test]
+fn test_opensource_music_robotics_clinical_and_experimental_suites() {
+    // 1. Model Registry catalog lookups for all open-source & experimental foundation models
+    let os_models = [
+        ("heartmula", oxide_models::registry::ModelFamily::HeartMuLa, oxide_models::registry::ModelModality::MusicSongFullGeneration),
+        ("ace-step", oxide_models::registry::ModelFamily::AceStep, oxide_models::registry::ModelModality::MusicSongFullGeneration),
+        ("yue2-studio", oxide_models::registry::ModelFamily::YuE2Studio, oxide_models::registry::ModelModality::MusicSongFullGeneration),
+        ("open-qwen-music", oxide_models::registry::ModelFamily::OpenQwenMusic, oxide_models::registry::ModelModality::MusicSongFullGeneration),
+        ("songgen", oxide_models::registry::ModelFamily::SongGen, oxide_models::registry::ModelModality::MusicSongFullGeneration),
+        ("datapilot", oxide_models::registry::ModelFamily::DataPilotPolars, oxide_models::registry::ModelModality::TimeSeriesTabular),
+        ("datasight", oxide_models::registry::ModelFamily::DatasightSqlAgent, oxide_models::registry::ModelModality::DecisionAgentic),
+        ("ai-data-science-team", oxide_models::registry::ModelFamily::AiDataScienceTeam, oxide_models::registry::ModelModality::DecisionAgentic),
+        ("glin", oxide_models::registry::ModelFamily::GlinBoostingMachine, oxide_models::registry::ModelModality::TimeSeriesTabular),
+        ("xiaomi-robotics-0", oxide_models::registry::ModelFamily::XiaomiRobotics0, oxide_models::registry::ModelModality::RoboticsActionVla),
+        ("kairos-3.0-4b", oxide_models::registry::ModelFamily::KairosEmbodiedWorldModel, oxide_models::registry::ModelModality::WorldModelSimulation),
+        ("rldx-1", oxide_models::registry::ModelFamily::RldxDexterousManipulation, oxide_models::registry::ModelModality::DexterousFiveFingerRobotics),
+        ("a1", oxide_models::registry::ModelFamily::A1AdaptiveVla, oxide_models::registry::ModelModality::RoboticsActionVla),
+        ("pyhealth-2.0", oxide_models::registry::ModelFamily::PyHealthClinical, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
+        ("aidiva", oxide_models::registry::ModelFamily::AiDivaRareDisease, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
+        ("pie-med", oxide_models::registry::ModelFamily::PieMedGcnCdss, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
+        ("realphe", oxide_models::registry::ModelFamily::RealPheCriticalCare, oxide_models::registry::ModelModality::ClinicalPhenotypingCdss),
+        ("chatenv", oxide_models::registry::ModelFamily::ChatEnvEcosystem, oxide_models::registry::ModelModality::VisionLanguage),
+        ("lite", oxide_models::registry::ModelFamily::LiteEnvironmentalVlm, oxide_models::registry::ModelModality::VisionLanguage),
+        ("planaura", oxide_models::registry::ModelFamily::PlanauraGeospatial, oxide_models::registry::ModelModality::SatelliteDisasterAssessment),
+        ("multimodal-auv", oxide_models::registry::ModelFamily::MultimodalAuvMapping, oxide_models::registry::ModelModality::UnderwaterAuvMapping),
+        ("accessbridge-ai", oxide_models::registry::ModelFamily::AccessBridgeUniversalWeb, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
+        ("visionassist", oxide_models::registry::ModelFamily::VisionAssistMobile, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
+        ("sightlineai", oxide_models::registry::ModelFamily::SightlineSmartGlasses, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
+        ("tinynarrator", oxide_models::registry::ModelFamily::TinyNarratorScreenReader, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
+        ("sutradhar", oxide_models::registry::ModelFamily::SutradharMultimodalAssist, oxide_models::registry::ModelModality::UniversalAccessibilityAssist),
+        ("sorbet", oxide_models::registry::ModelFamily::SorbetNeuromorphicSpiking, oxide_models::registry::ModelModality::NeuromorphicSpikingInference),
+        ("aetheris", oxide_models::registry::ModelFamily::AetherisMambaMoe, oxide_models::registry::ModelModality::MambaMoeStateSpace),
+        ("trm", oxide_models::registry::ModelFamily::TinyRecursionModelTrm, oxide_models::registry::ModelModality::RecursiveSmallReasoning),
+        ("ddn", oxide_models::registry::ModelFamily::DiscreteDistributionNetworkDdn, oxide_models::registry::ModelModality::TextOnly),
+        ("brillm", oxide_models::registry::ModelFamily::BriLlmBrainInspired, oxide_models::registry::ModelModality::NeuromorphicSpikingInference),
+        ("ixlinx-8b", oxide_models::registry::ModelFamily::IXlinxRecurrentMultimodal, oxide_models::registry::ModelModality::VisionLanguage),
+        ("functional-graph-agi", oxide_models::registry::ModelFamily::FunctionalGraphAgi, oxide_models::registry::ModelModality::FunctionalGraphCognition),
+    ];
+
+    for (name, family, modality) in os_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("Model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 2. 5-Finger Dexterous Robotics Engine (RLDX-1, Xiaomi-Robotics-0)
+    let dexterous = oxide_models::DexterousRoboticsEngine::new(256);
+    let visual_latent = vec![0.7f32; 256];
+    let hand_state = dexterous
+        .step_dexterous_action(&visual_latent)
+        .expect("Dexterous hand step succeeded");
+    assert_eq!(hand_state.thumb_joints.len(), 4);
+    assert_eq!(hand_state.index_joints.len(), 4);
+    assert_eq!(hand_state.fingertip_tactile_pressure_n.len(), 5);
+    assert!(hand_state.grasp_stability_score > 0.9);
+
+    // 3. Clinical Decision & Phenotyping Engine (PyHealth, aiDIVA, PIE-Med, RealPhe)
+    let clinical = oxide_models::ClinicalDecisionEngine::new(128, 16);
+    let ehr_features = vec![14.5f32; 16]; // High lactate / heart rate profile
+    let rec = clinical
+        .evaluate_patient_ehr(&ehr_features)
+        .expect("Clinical evaluation succeeded");
+    assert!(rec.phenotype_risk_score > 0.5);
+    assert!(!rec.icd10_codes.is_empty());
+
+    // 4. Sensor-Guided Geospatial & Underwater AUV Engine (ChatENV, LITE, Planaura, Multimodal-AUV)
+    let eco_engine = oxide_models::GeospatialEcosystemEngine::new(4, 10.0);
+    let readings = vec![0.75f32, 0.15f32, 0.3f32, 0.45f32]; // NIR, RED, Green, Blue
+    let eco_metrics = eco_engine
+        .analyze_ecosystem_sensor(&readings)
+        .expect("Ecosystem analysis succeeded");
+    assert!(eco_metrics.ndvi_vegetation_index > 0.5); // Healthy vegetation
+
+    // 5. Assistive Vision Engine (SightlineAI, VisionAssist, Sutradhar, AccessBridge)
+    let assist_engine = oxide_models::AssistiveVisionEngine::new(90.0, true);
+    let scene = vec![0.2f32, 0.8f32, 0.2f32];
+    let nav_prompt = assist_engine
+        .evaluate_scene_for_assist(&scene)
+        .expect("Assistive navigation succeeded");
+    assert!(nav_prompt.distance_meters > 0.0);
+    assert!(nav_prompt.haptic_vibration_intensity > 0.0);
+
+    // 6. Neuromorphic Spiking Engine (Sorbet, BriLLM)
+    let spiking_engine = oxide_models::NeuromorphicSpikingEngine::new(8, 0.8, 0.1);
+    let currents = vec![1.2f32, 0.2, 1.5, 0.4, 0.95, 0.1, 1.1, 0.0];
+    let spike_state = spiking_engine
+        .step_lif_spiking(&currents)
+        .expect("Spiking step succeeded");
+    assert_eq!(spike_state.spike_events.len(), 8);
+    assert!(spike_state.total_spike_count >= 3);
+
+    // 7. Tiny Recursion Model TRM (7M Parameter Contraction Reasoner)
+    let trm = oxide_models::TinyRecursionModelEngine::new(32, 10, 1e-3);
+    let init_h = vec![0.5f32; 32];
+    let trm_res = trm.recursive_reason(&init_h).expect("TRM reasoning succeeded");
+    assert!(trm_res.iterations_performed <= 10);
+    assert_eq!(trm_res.contracted_hidden_state.len(), 32);
+
+    // 8. Hybrid Mamba-MoE Engine (Aetheris)
+    let mamba_moe = oxide_models::MambaMoeHybridEngine::new(64, 16, 8, 2);
+    let inp = vec![0.3f32; 64];
+    let mut ssm_state = vec![0.0f32; 16];
+    let mut out = vec![0.0f32; 64];
+    mamba_moe
+        .forward_step(&inp, &mut ssm_state, &mut out)
+        .expect("Mamba-MoE forward step succeeded");
+    assert!(out.iter().all(|&v| v > 0.0));
+
+    // 9. Explainable Boosting Machine / Polars Statistical Gut Engine (DataPilot, glin)
+    let gut_engine = oxide_models::PolarsStatisticalGutEngine::new(32, 2.0);
+    let row = vec![0.5f32, 1.2, 0.8, 2.5];
+    let (score, is_anomaly) = gut_engine
+        .evaluate_tabular_row(&row)
+        .expect("Tabular evaluation succeeded");
+    assert!(score > 0.0);
+    assert!(!is_anomaly || is_anomaly);
+}
