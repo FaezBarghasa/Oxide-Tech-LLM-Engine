@@ -124,9 +124,9 @@ impl ColBertLateInteraction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeepSeekV3MoeConfig {
     pub hidden_dim: usize,
-    pub num_routed_experts: usize, // 256
-    pub num_shared_experts: usize, // 1
-    pub top_k: usize,              // 8
+    pub num_routed_experts: usize,  // 256
+    pub num_shared_experts: usize,  // 1
+    pub top_k: usize,               // 8
     pub routed_scaling_factor: f32, // 2.5
 }
 
@@ -145,8 +145,8 @@ impl Default for DeepSeekV3MoeConfig {
 /// Vision-Language Multi-Modal Projector (LLaVA / Qwen-VL / Pixtral).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MultiModalVisionProjector {
-    pub vision_dim: usize,  // e.g. 1024 or 1152 (CLIP / SigLIP / ViT)
-    pub text_dim: usize,    // e.g. 4096 (Llama / Qwen hidden size)
+    pub vision_dim: usize, // e.g. 1024 or 1152 (CLIP / SigLIP / ViT)
+    pub text_dim: usize,   // e.g. 4096 (Llama / Qwen hidden size)
     pub is_mlp_gelu: bool,
 }
 
@@ -164,7 +164,12 @@ impl MultiModalVisionProjector {
     /// `patch_tokens`: `[num_patches, vision_dim]`
     /// `weights`: `[vision_dim, text_dim]`
     /// `out_text_embeds`: `[num_patches, text_dim]`
-    pub fn project_patches(&self, patch_tokens: &[f32], weights: &[f32], out_text_embeds: &mut [f32]) {
+    pub fn project_patches(
+        &self,
+        patch_tokens: &[f32],
+        weights: &[f32],
+        out_text_embeds: &mut [f32],
+    ) {
         let num_patches = patch_tokens.len() / self.vision_dim;
         assert_eq!(out_text_embeds.len(), num_patches * self.text_dim);
 

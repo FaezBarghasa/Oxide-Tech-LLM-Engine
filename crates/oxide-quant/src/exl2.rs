@@ -54,7 +54,12 @@ pub struct Exl2WeightMatrix {
 
 impl Exl2WeightMatrix {
     #[must_use]
-    pub fn new(rows: usize, cols: usize, target_bpw: Exl2BitsPerWeight, sub_block_size: usize) -> Self {
+    pub fn new(
+        rows: usize,
+        cols: usize,
+        target_bpw: Exl2BitsPerWeight,
+        sub_block_size: usize,
+    ) -> Self {
         let total_weights = rows * cols;
         let bits = (total_weights as f32 * target_bpw.bpw()).ceil() as usize;
         let words = bits.div_ceil(32);
@@ -87,7 +92,11 @@ impl Exl2WeightMatrix {
                 let bits_u = bits_f.round() as u32;
                 let word_idx = ((weight_idx as f32 * bits_f) as usize) / 32;
                 let shift = ((weight_idx as f32 * bits_f) as usize) % 32;
-                let bits_mask = if bits_u >= 32 { u32::MAX } else { (1u32 << bits_u) - 1 };
+                let bits_mask = if bits_u >= 32 {
+                    u32::MAX
+                } else {
+                    (1u32 << bits_u) - 1
+                };
                 let raw_q = if word_idx < self.q_data.len() {
                     (self.q_data[word_idx] >> shift) & bits_mask
                 } else {

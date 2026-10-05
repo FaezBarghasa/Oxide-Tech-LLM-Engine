@@ -4,9 +4,9 @@
 //! including system prompt handling, streaming SSE message events, and tool blocks.
 
 use axum::{
-    extract::State,
-    response::{sse::Event, IntoResponse, Sse},
     Json,
+    extract::State,
+    response::{IntoResponse, Sse, sse::Event},
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +16,14 @@ use crate::ServerState;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AnthropicContentBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
 }
 
 /// Anthropic Message Input Item.

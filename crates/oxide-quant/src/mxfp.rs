@@ -161,11 +161,7 @@ impl BlockMxFp4 {
     #[inline(always)]
     fn dequantize_e2m1(nibble: u8) -> f32 {
         let mag = E2M1_TABLE[(nibble & 0x07) as usize];
-        if (nibble & 0x08) != 0 {
-            -mag
-        } else {
-            mag
-        }
+        if (nibble & 0x08) != 0 { -mag } else { mag }
     }
 
     #[must_use]
@@ -263,11 +259,7 @@ impl BlockMxInt8 {
             max_abs = max_abs.max(v.abs());
         }
 
-        let raw_scale = if max_abs > 0.0 {
-            max_abs / 127.0
-        } else {
-            1.0
-        };
+        let raw_scale = if max_abs > 0.0 { max_abs / 127.0 } else { 1.0 };
         let scale = E8M0Scale::from_f32(raw_scale);
         let eff_scale = scale.to_f32();
         let inv_scale = if eff_scale > 0.0 {

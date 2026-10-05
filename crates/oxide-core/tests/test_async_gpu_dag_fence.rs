@@ -2,8 +2,8 @@
 //! Runs 50,000 parallel fork-and-prune steps under AddressSanitizer to catch data races.
 
 use oxide_core::dag::{PhysicalBlockId, SafeDagBlockManager};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -54,7 +54,9 @@ fn test_concurrent_dag_async_block_reclaim_soak() {
 
     // Join all worker threads
     for handle in worker_handles {
-        handle.join().expect("Worker thread panicked during DAG soak test");
+        handle
+            .join()
+            .expect("Worker thread panicked during DAG soak test");
     }
 
     // Signal poller to shut down and await completion
@@ -62,5 +64,7 @@ fn test_concurrent_dag_async_block_reclaim_soak() {
     shutdown_signal.store(true, Ordering::Relaxed);
     poller_handle.join().expect("Poller thread panicked");
 
-    println!("Successfully processed 50,000 asynchronous DAG block transitions with 0 race hazards.");
+    println!(
+        "Successfully processed 50,000 asynchronous DAG block transitions with 0 race hazards."
+    );
 }

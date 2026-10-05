@@ -139,7 +139,9 @@ pub fn dequantize_compressed_slice(
 ) {
     let group_size = config.group_size.unwrap_or(usize::MAX);
     match config.quant_type {
-        CompressedQuantType::W4A16Int | CompressedQuantType::W4A8Fp8 | CompressedQuantType::W4A4Int => {
+        CompressedQuantType::W4A16Int
+        | CompressedQuantType::W4A8Fp8
+        | CompressedQuantType::W4A4Int => {
             for i in 0..packed.len() {
                 let out_idx0 = i * 2;
                 let out_idx1 = i * 2 + 1;
@@ -147,8 +149,16 @@ pub fn dequantize_compressed_slice(
                     break;
                 }
 
-                let g0 = if group_size == usize::MAX { 0 } else { out_idx0 / group_size };
-                let g1 = if group_size == usize::MAX { 0 } else { out_idx1 / group_size };
+                let g0 = if group_size == usize::MAX {
+                    0
+                } else {
+                    out_idx0 / group_size
+                };
+                let g1 = if group_size == usize::MAX {
+                    0
+                } else {
+                    out_idx1 / group_size
+                };
 
                 let s0 = scales.get(g0).copied().unwrap_or(1.0);
                 let s1 = scales.get(g1).copied().unwrap_or(1.0);
@@ -171,7 +181,11 @@ pub fn dequantize_compressed_slice(
                 if i >= output.len() {
                     break;
                 }
-                let g = if group_size == usize::MAX { 0 } else { i / group_size };
+                let g = if group_size == usize::MAX {
+                    0
+                } else {
+                    i / group_size
+                };
                 let s = scales.get(g).copied().unwrap_or(1.0);
                 let z = zeros.and_then(|z| z.get(g).copied()).unwrap_or(0);
                 output[i] = (byte as i8 as i32 - z) as f32 * s;
@@ -183,7 +197,11 @@ pub fn dequantize_compressed_slice(
                 if i >= output.len() {
                     break;
                 }
-                let g = if group_size == usize::MAX { 0 } else { i / group_size };
+                let g = if group_size == usize::MAX {
+                    0
+                } else {
+                    i / group_size
+                };
                 let s = scales.get(g).copied().unwrap_or(1.0);
                 output[i] = Fp8E4M3(byte).to_f32() * s;
             }

@@ -90,7 +90,12 @@ pub struct TpColumnLinear {
 
 impl TpColumnLinear {
     #[must_use]
-    pub fn new(in_features: usize, total_out_features: usize, tp_rank: usize, tp_size: usize) -> Self {
+    pub fn new(
+        in_features: usize,
+        total_out_features: usize,
+        tp_rank: usize,
+        tp_size: usize,
+    ) -> Self {
         assert_eq!(total_out_features % tp_size, 0);
         Self {
             in_features,

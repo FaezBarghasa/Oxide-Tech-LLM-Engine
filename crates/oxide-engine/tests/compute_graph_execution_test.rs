@@ -32,12 +32,18 @@ fn test_compute_graph_construction() {
     let has_fused_norm = graph.nodes.iter().any(|n| n.op == OpCode::FusedRmsMulMat);
     let has_mulmat = graph.nodes.iter().any(|n| n.op == OpCode::MulMat);
     let has_attn = graph.nodes.iter().any(|n| n.op == OpCode::FlashAttn);
-    let has_swiglu_or_fused = graph.nodes.iter().any(|n| n.op == OpCode::SwiGlu || n.op == OpCode::FusedSwiGluMul);
+    let has_swiglu_or_fused = graph
+        .nodes
+        .iter()
+        .any(|n| n.op == OpCode::SwiGlu || n.op == OpCode::FusedSwiGluMul);
 
     assert!(has_fused_norm, "Graph should contain FusedRmsMulMat nodes");
     assert!(has_mulmat, "Graph should contain MulMat nodes");
     assert!(has_attn, "Graph should contain FlashAttn nodes");
-    assert!(has_swiglu_or_fused, "Graph should contain SwiGlu or FusedSwiGluMul nodes");
+    assert!(
+        has_swiglu_or_fused,
+        "Graph should contain SwiGlu or FusedSwiGluMul nodes"
+    );
 }
 
 #[test]

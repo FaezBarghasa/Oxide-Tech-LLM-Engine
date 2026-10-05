@@ -86,7 +86,9 @@ pub struct SafeDagBlockManager {
     free_list: SegQueue<PhysicalBlockId>,
 }
 
+// SAFETY: All fields are thread-safe atomic primitives, lock-free queues (`SegQueue`), or immutable allocations.
 unsafe impl Send for SafeDagBlockManager {}
+// SAFETY: Synchronized via atomic ref counts and lock-free concurrency primitives.
 unsafe impl Sync for SafeDagBlockManager {}
 
 impl SafeDagBlockManager {
@@ -119,7 +121,8 @@ impl SafeDagBlockManager {
         block_id: PhysicalBlockId,
         mock_completion_event: *mut std::ffi::c_void,
     ) {
-        self.pending_releases.push((block_id, mock_completion_event));
+        self.pending_releases
+            .push((block_id, mock_completion_event));
     }
 
     /// Polls pending asynchronous releases and returns fully unreferenced blocks to free list.

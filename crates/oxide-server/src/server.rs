@@ -1,6 +1,6 @@
 //! Server router factory and mock context for testing and production serving.
 
-use crate::{create_router, ServerState};
+use crate::{ServerState, create_router};
 use axum::Router;
 use oxide_alloc::HierarchicalKvCache;
 use oxide_engine::{ContinuousBatchingSlotManager, SpecializedPipeline};
@@ -22,19 +22,16 @@ impl Default for MockEngineContext {
 impl MockEngineContext {
     #[must_use]
     pub fn new() -> Self {
-        let pipeline = SpecializedPipeline::from_model_or_path("llama3", "cpu", None, 16, None)
-            .unwrap_or_else(|_| {
-                let cfg = oxide_models::llama3::Llama3Config::tiny_test_config();
-                let model = oxide_models::Llama3Model::new(cfg);
-                let kv_cache = (0..model.config.num_layers)
-                    .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
-                    .collect();
-                SpecializedPipeline::Llama3Dense {
-                    model,
-                    kv_cache,
-                    seq_positions: std::collections::HashMap::new(),
-                }
-            });
+        let cfg = oxide_models::llama3::Llama3Config::tiny_test_config();
+        let model = oxide_models::Llama3Model::new(cfg);
+        let kv_cache = (0..model.config.num_layers)
+            .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
+            .collect();
+        let pipeline = SpecializedPipeline::Llama3Dense {
+            model,
+            kv_cache,
+            seq_positions: std::collections::HashMap::new(),
+        };
 
         let kv_cache = Arc::new(Mutex::new(HierarchicalKvCache::new(128, 512, 1024)));
         let dfa_grammar = Arc::new(crate::dfa::DfaSchemaGrammar::new_simple_json_validator());
@@ -53,7 +50,6 @@ impl MockEngineContext {
 }
 
 /// Creates the Axum router configured for OpenAI and Anthropic API conformance.
-#[must_use]
 pub fn create_engine_router(context: MockEngineContext) -> Router {
     create_router(context.state)
 }

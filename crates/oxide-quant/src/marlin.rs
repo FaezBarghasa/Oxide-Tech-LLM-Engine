@@ -27,15 +27,11 @@ impl QuantScheme for MarlinQuant {
 pub const MARLIN_GROUP_SIZE: usize = 16;
 
 /// Packs FP32 weights into Marlin INT4 interleaved layout and calculates group-wise scale factors.
-pub fn pack_marlin_int4(
-    weights: &[f32],
-    rows: usize,
-    cols: usize,
-) -> Result<(Vec<u32>, Vec<f32>)> {
+pub fn pack_marlin_int4(weights: &[f32], rows: usize, cols: usize) -> Result<(Vec<u32>, Vec<f32>)> {
     if weights.len() != rows * cols {
         return Err(EngineError::ShapeMismatch);
     }
-    if rows % 16 != 0 || cols % 64 != 0 {
+    if !rows.is_multiple_of(16) || !cols.is_multiple_of(64) {
         return Err(EngineError::ShapeMismatch);
     }
 
@@ -78,9 +74,9 @@ pub fn pack_marlin_int4(
                 }
 
                 if norm_q > 0.0 && norm_v > 0.0 {
-                    let cos = dot_vq / (norm_v.sqrt() * norm_q.sqrt());
-                    if cos > best_cos {
-                        best_cos = cos;
+                    let similarity = dot_vq / (norm_v.sqrt() * norm_q.sqrt());
+                    if similarity > best_cos {
+                        best_cos = similarity;
                         best_opt_scale = (dot_vq / norm_q) as f32;
                     }
                 }
@@ -134,7 +130,9 @@ impl MarlinQuantizedMatrix {
     ) -> Result<Self> {
         let group_size = MARLIN_GROUP_SIZE;
         let num_groups = rows.div_ceil(group_size);
-        if packed_weights.len() != (rows * cols) / 8 || (scales.len() != cols && scales.len() != num_groups * cols) {
+        if packed_weights.len() != (rows * cols) / 8
+            || (scales.len() != cols && scales.len() != num_groups * cols)
+        {
             return Err(EngineError::ShapeMismatch);
         }
         Ok(Self {

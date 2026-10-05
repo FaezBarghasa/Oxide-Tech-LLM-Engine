@@ -77,7 +77,13 @@ impl ToolCallParser {
         {
             let args = val.get("arguments").map_or_else(
                 || "{}".to_string(),
-                |v| if v.is_string() { v.as_str().unwrap().to_string() } else { v.to_string() },
+                |v| {
+                    if v.is_string() {
+                        v.as_str().unwrap().to_string()
+                    } else {
+                        v.to_string()
+                    }
+                },
             );
             calls.push(ToolCall {
                 id: "call_01".to_string(),

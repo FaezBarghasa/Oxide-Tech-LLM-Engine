@@ -176,7 +176,10 @@ impl SpeculativeDecoderEngine {
     pub fn draft_dflash_block(&self, seed_latent: &[f32], block_len: usize) -> Vec<u32> {
         let mut tokens = Vec::with_capacity(block_len);
         for i in 0..block_len {
-            let latent_val = seed_latent.get(i % seed_latent.len()).copied().unwrap_or(0.0);
+            let latent_val = seed_latent
+                .get(i % seed_latent.len())
+                .copied()
+                .unwrap_or(0.0);
             let token_id = ((latent_val.abs() * 1000.0) as u32) % 32000;
             tokens.push(token_id);
         }
@@ -208,7 +211,8 @@ impl SpeculativeEngineContext {
     pub fn register_sequence(&mut self, sequence_id: u64, initial_length: usize) -> Result<()> {
         self.host_seq_lens.insert(sequence_id, initial_length);
         self.device_seq_lens.insert(sequence_id, initial_length);
-        self.sequence_tokens.insert(sequence_id, vec![0; initial_length]);
+        self.sequence_tokens
+            .insert(sequence_id, vec![0; initial_length]);
         Ok(())
     }
 

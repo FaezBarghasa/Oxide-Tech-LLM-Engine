@@ -43,16 +43,22 @@ fn test_edge_vision_engine_nms_and_iou() {
     ];
 
     let kept = engine.non_maximum_suppression(candidates);
-    assert_eq!(kept.len(), 2, "Duplicate pedestrian box should be suppressed by NMS");
+    assert_eq!(
+        kept.len(),
+        2,
+        "Duplicate pedestrian box should be suppressed by NMS"
+    );
     assert_eq!(kept[0].class_id, 0);
     assert_eq!(kept[1].class_id, 2);
 }
 
 #[test]
 fn test_edge_vision_preprocessing_and_patch_extraction() {
-    let mut config = VisionPreprocessConfig::default();
-    config.target_width = 32;
-    config.target_height = 32;
+    let config = VisionPreprocessConfig {
+        target_width: 32,
+        target_height: 32,
+        ..Default::default()
+    };
 
     let engine = EdgeVisionEngine::new(VisionModelType::MobileNetV4, config);
 

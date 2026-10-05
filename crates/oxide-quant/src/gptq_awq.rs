@@ -100,7 +100,11 @@ impl GptqWeightMatrix {
     #[must_use]
     pub fn dequantize_element(&self, row: usize, col: usize) -> f32 {
         let g_size = self.group_size.size();
-        let group_idx = if g_size == usize::MAX { 0 } else { row / g_size };
+        let group_idx = if g_size == usize::MAX {
+            0
+        } else {
+            row / g_size
+        };
         let scale_idx = group_idx * self.cols + col;
         let scale = self.scales.get(scale_idx).copied().unwrap_or(1.0);
 
@@ -179,7 +183,11 @@ impl AwqWeightMatrix {
     #[must_use]
     pub fn dequantize_element(&self, row: usize, col: usize) -> f32 {
         let g_size = self.group_size.size();
-        let group_idx = if g_size == usize::MAX { 0 } else { row / g_size };
+        let group_idx = if g_size == usize::MAX {
+            0
+        } else {
+            row / g_size
+        };
         let scale_idx = group_idx * self.cols + col;
         let scale = self.scales.get(scale_idx).copied().unwrap_or(1.0);
 

@@ -2,7 +2,7 @@
 //! Validates that Marlin weight packing and PTX Tensor Core MMA match PyTorch golden outputs.
 
 use half::f16;
-use oxide_quant::marlin::{pack_marlin_int4, MarlinQuantizedMatrix};
+use oxide_quant::marlin::{MarlinQuantizedMatrix, pack_marlin_int4};
 
 #[test]
 fn test_marlin_int4_gemv_numerical_parity() {
@@ -32,8 +32,8 @@ fn test_marlin_int4_gemv_numerical_parity() {
     }
 
     // 3. Pack weights into Marlin INT4 interleaved layout
-    let (packed_weights, scales) = pack_marlin_int4(&weights_fp32, K, N)
-        .expect("Marlin INT4 weight transformation failed");
+    let (packed_weights, scales) =
+        pack_marlin_int4(&weights_fp32, K, N).expect("Marlin INT4 weight transformation failed");
 
     let marlin_matrix = MarlinQuantizedMatrix::new(packed_weights, scales, K, N)
         .expect("Failed to initialize Marlin matrix");

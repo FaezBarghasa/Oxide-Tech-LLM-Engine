@@ -327,7 +327,9 @@ impl BlockQ5_1 {
 
         for i in 0..16 {
             let q0 = ((values[i] - min_val) * inv_scale).round().clamp(0.0, 31.0) as u8;
-            let q1 = ((values[i + 16] - min_val) * inv_scale).round().clamp(0.0, 31.0) as u8;
+            let q1 = ((values[i + 16] - min_val) * inv_scale)
+                .round()
+                .clamp(0.0, 31.0) as u8;
 
             qs[i] = (q0 & 0x0F) | ((q1 & 0x0F) << 4);
 
@@ -690,8 +692,8 @@ impl BlockQ6_K {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockQ8_K {
-    pub d: f32,          // Super-block scale
-    pub qs: [i8; 256],   // 256 signed 8-bit quantized weights
+    pub d: f32,           // Super-block scale
+    pub qs: [i8; 256],    // 256 signed 8-bit quantized weights
     pub bsums: [i16; 16], // Sum of weights per 16-element sub-block
 }
 

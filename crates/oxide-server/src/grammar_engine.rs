@@ -3,7 +3,7 @@
 //! Enforces exact syntactic conformance for JSON Schemas, function call schemas,
 //! and context-free grammars during autoregressive token generation.
 
-use crate::dfa::{DfaSchemaGrammar, DFA_ERROR_STATE};
+use crate::dfa::{DFA_ERROR_STATE, DfaSchemaGrammar};
 use serde::{Deserialize, Serialize};
 
 /// Type of Structured Output Constraint.
@@ -25,21 +25,15 @@ impl StructuredOutputEngine {
     #[must_use]
     pub fn compile(constraint: &GrammarConstraintType) -> Self {
         match constraint {
-            GrammarConstraintType::JsonSchema(_) => {
-                Self {
-                    grammar: DfaSchemaGrammar::new_simple_json_validator(),
-                }
-            }
-            GrammarConstraintType::Regex(pattern) => {
-                Self {
-                    grammar: Self::compile_regex_dfa(pattern),
-                }
-            }
-            GrammarConstraintType::Ebnf(rules) => {
-                Self {
-                    grammar: Self::compile_ebnf_dfa(rules),
-                }
-            }
+            GrammarConstraintType::JsonSchema(_) => Self {
+                grammar: DfaSchemaGrammar::new_simple_json_validator(),
+            },
+            GrammarConstraintType::Regex(pattern) => Self {
+                grammar: Self::compile_regex_dfa(pattern),
+            },
+            GrammarConstraintType::Ebnf(rules) => Self {
+                grammar: Self::compile_ebnf_dfa(rules),
+            },
         }
     }
 

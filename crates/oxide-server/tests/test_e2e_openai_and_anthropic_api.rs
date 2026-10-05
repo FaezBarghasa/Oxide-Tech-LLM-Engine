@@ -3,7 +3,7 @@
 
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use oxide_server::server::{create_engine_router, MockEngineContext};
+use oxide_server::server::{MockEngineContext, create_engine_router};
 use serde_json::json;
 
 #[tokio::test]
@@ -16,6 +16,7 @@ async fn test_dual_protocol_streaming_conformance() {
     let openai_payload = json!({
         "model": "bonsai2-27b",
         "messages": [{"role": "user", "content": "Explain FWHT butterfly networks."}],
+        "max_tokens": 4,
         "stream": true
     });
 
@@ -45,7 +46,10 @@ async fn test_dual_protocol_streaming_conformance() {
         .await;
 
     assert_eq!(anthropic_response.status_code(), StatusCode::OK);
-    assert_eq!(anthropic_response.header("content-type"), "text/event-stream");
+    assert_eq!(
+        anthropic_response.header("content-type"),
+        "text/event-stream"
+    );
     let anthropic_body = anthropic_response.text();
     assert!(anthropic_body.contains("event: message_start"));
     assert!(anthropic_body.contains("event: content_block_delta"));

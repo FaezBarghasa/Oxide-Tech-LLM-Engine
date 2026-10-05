@@ -68,17 +68,17 @@ impl BlockNvFp4_16 {
     #[inline(always)]
     fn dequantize_nibble(nibble: u8) -> f32 {
         let mag = NVFP4_E2M1_TABLE[(nibble & 0x07) as usize];
-        if (nibble & 0x08) != 0 {
-            -mag
-        } else {
-            mag
-        }
+        if (nibble & 0x08) != 0 { -mag } else { mag }
     }
 
     /// Quantizes 16 floating point values with an optional global tensor scale.
     #[must_use]
     pub fn quantize(input: &[f32; 16], global_scale: f32) -> Self {
-        let effective_global = if global_scale > 0.0 { global_scale } else { 1.0 };
+        let effective_global = if global_scale > 0.0 {
+            global_scale
+        } else {
+            1.0
+        };
         let mut max_abs = 0.0f32;
         for &v in input {
             let normalized = (v / effective_global).abs();
@@ -88,7 +88,11 @@ impl BlockNvFp4_16 {
         let raw_micro_scale = if max_abs > 0.0 { max_abs / 6.0 } else { 1.0 };
         let scale = Fp8E4M3::from_f32(raw_micro_scale);
         let eff_micro = scale.to_f32() * effective_global;
-        let inv_scale = if eff_micro > 0.0 { 1.0 / eff_micro } else { 0.0 };
+        let inv_scale = if eff_micro > 0.0 {
+            1.0 / eff_micro
+        } else {
+            0.0
+        };
 
         let mut qs = [0u8; 8];
         for i in 0..8 {

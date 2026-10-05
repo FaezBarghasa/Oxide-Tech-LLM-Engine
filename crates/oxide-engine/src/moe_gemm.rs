@@ -61,7 +61,8 @@ impl ExpertRoutingGate {
         for e in 0..num_experts {
             for h in 0..hidden_dim {
                 let idx = e * hidden_dim + h;
-                gate_weights[idx] = ((idx as f32 * 0.037 + 0.1).sin()) * (1.0 / (hidden_dim as f32).sqrt());
+                gate_weights[idx] =
+                    ((idx as f32 * 0.037 + 0.1).sin()) * (1.0 / (hidden_dim as f32).sqrt());
             }
         }
 
@@ -91,26 +92,25 @@ impl ExpertRoutingGate {
 
             // 1. Calculate gate logits: logits[e] = token_vec . gate_weights[e]
             let mut logits = vec![0.0f32; self.num_experts];
-            for e in 0..self.num_experts {
+            for (e, logit_slot) in logits.iter_mut().enumerate() {
                 let w_offset = e * self.hidden_dim;
                 let mut acc = 0.0f32;
-                for h in 0..self.hidden_dim {
-                    acc += token_vec[h] * self.gate_weights[w_offset + h];
+                for (h, &tok_val) in token_vec.iter().enumerate() {
+                    acc += tok_val * self.gate_weights[w_offset + h];
                 }
-                logits[e] = acc;
+                *logit_slot = acc;
             }
 
             // 2. Select top-K experts
-            let mut indexed: Vec<(usize, f32)> = logits
-                .iter()
-                .copied()
-                .enumerate()
-                .collect();
+            let mut indexed: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
             indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             indexed.truncate(self.top_k);
 
             // 3. Softmax over chosen top-K
-            let max_logit = indexed.iter().map(|(_, v)| *v).fold(f32::NEG_INFINITY, f32::max);
+            let max_logit = indexed
+                .iter()
+                .map(|(_, v)| *v)
+                .fold(f32::NEG_INFINITY, f32::max);
             let mut sum_exp = 0.0f32;
             let mut exps = Vec::with_capacity(self.top_k);
             for (_, val) in &indexed {
@@ -164,11 +164,11 @@ impl GroupedExpertGemm {
         let inv_h = 1.0 / (hidden_dim as f32).sqrt();
         let inv_inter = 1.0 / (intermediate_dim as f32).sqrt();
 
-        for i in 0..gu_size {
-            gate_up_weights[i] = ((i as f32 * 0.013 + 0.3).sin()) * inv_h;
+        for (i, weight) in gate_up_weights.iter_mut().enumerate() {
+            *weight = ((i as f32 * 0.013 + 0.3).sin()) * inv_h;
         }
-        for i in 0..down_size {
-            down_weights[i] = ((i as f32 * 0.017 + 0.7).cos()) * inv_inter;
+        for (i, weight) in down_weights.iter_mut().enumerate() {
+            *weight = ((i as f32 * 0.017 + 0.7).cos()) * inv_inter;
         }
 
         Ok(Self {
@@ -234,7 +234,9 @@ impl GroupedExpertGemm {
         let mut intermediate = vec![0.0f32; inter_dim];
 
         for (t_idx, decision) in routing.iter().enumerate() {
+            // SAFETY: In-bounds pointer offset bounded by `num_tokens * h_dim`.
             let in_token_ptr = unsafe { input.add(t_idx * h_dim) };
+            // SAFETY: In-bounds pointer offset bounded by `num_tokens * h_dim`.
             let out_token_ptr = unsafe { output.add(t_idx * h_dim) };
 
             for (k, &exp_idx) in decision.expert_indices.iter().enumerate() {
@@ -247,24 +249,26 @@ impl GroupedExpertGemm {
                 let down_base = exp_idx * (h_dim * inter_dim);
 
                 // 1. Gate/Up projection: intermediate[i] = SiLU(W_gu . x)
-                for i in 0..inter_dim {
+                for (i, inter_slot) in intermediate.iter_mut().enumerate() {
                     let w_row = gu_base + i * h_dim;
                     let mut sum = 0.0f32;
                     for j in 0..h_dim {
+                        // SAFETY: in_token_ptr points to a valid slice of h_dim elements.
                         sum += unsafe { *in_token_ptr.add(j) } * self.gate_up_weights[w_row + j];
                     }
                     // SiLU activation
                     let silu = sum / (1.0 + (-sum).exp());
-                    intermediate[i] = silu;
+                    *inter_slot = silu;
                 }
 
                 // 2. Down projection: out += weight_scale * (W_down . intermediate)
                 for i in 0..h_dim {
                     let w_row = down_base + i * inter_dim;
                     let mut sum = 0.0f32;
-                    for j in 0..inter_dim {
-                        sum += intermediate[j] * self.down_weights[w_row + j];
+                    for (j, &inter_val) in intermediate.iter().enumerate() {
+                        sum += inter_val * self.down_weights[w_row + j];
                     }
+                    // SAFETY: out_token_ptr points to a valid slice of h_dim elements.
                     unsafe {
                         *out_token_ptr.add(i) += sum * weight_scale;
                     }
@@ -298,15 +302,14 @@ impl FusedMoeGateEngine {
     pub fn route_token(&self, gate_logits: &[f32]) -> MoERouteChoice {
         assert_eq!(gate_logits.len(), self.num_total_experts);
 
-        let mut indexed: Vec<(usize, f32)> = gate_logits
-            .iter()
-            .copied()
-            .enumerate()
-            .collect();
+        let mut indexed: Vec<(usize, f32)> = gate_logits.iter().copied().enumerate().collect();
         indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         indexed.truncate(self.top_k);
 
-        let max_logit = indexed.iter().map(|(_, v)| *v).fold(f32::NEG_INFINITY, f32::max);
+        let max_logit = indexed
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f32::NEG_INFINITY, f32::max);
         let mut sum_exp = 0.0f32;
         let mut exps = Vec::with_capacity(self.top_k);
         for (_, val) in &indexed {

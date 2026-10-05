@@ -25,4 +25,9 @@ tracing-subscriber.workspace = true
 oxide-backend-cpu.workspace = true
 oxide-quant.workspace = true
 axum-test.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "continuous_serving_throughput"
+harness = false
 

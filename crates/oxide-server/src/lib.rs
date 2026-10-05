@@ -31,7 +31,7 @@ pub mod server;
 
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::{Event, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use dfa::DfaSchemaGrammar;
@@ -504,9 +504,7 @@ async fn chat_completions_handler(
             yield Ok::<Event, Infallible>(Event::default().data("[DONE]"));
         };
 
-        Sse::new(stream)
-            .keep_alive(KeepAlive::default())
-            .into_response()
+        Sse::new(stream).into_response()
     } else {
         let mut generated_text = String::new();
         let mut cur_token: u32 = 42;

@@ -2,7 +2,7 @@
 //! Uses a custom tracing allocator to prove exactly 0 bytes allocated during decode steps.
 
 use oxide_core::memory::DevicePtr;
-use oxide_engine::executor::{StepScratchpad, ZeroAllocForwardStep, MAX_BATCH};
+use oxide_engine::executor::{MAX_BATCH, StepScratchpad, ZeroAllocForwardStep};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

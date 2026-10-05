@@ -22,7 +22,7 @@ pub enum AttentionKernelBackend {
 /// Configuration for FlashInfer Paged KV Cache Attention.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlashInferConfig {
-    pub page_size: usize,        // Typically 16 or 32 tokens per block
+    pub page_size: usize, // Typically 16 or 32 tokens per block
     pub num_heads: usize,
     pub num_kv_heads: usize,
     pub head_dim: usize,
@@ -147,9 +147,9 @@ impl FlashInferEngine {
 #[derive(Debug, Clone)]
 pub struct FlashMlaEngine {
     pub num_heads: usize,
-    pub latent_dim: usize,      // Compressed latent dimension d_c (e.g. 512)
-    pub q_head_dim: usize,      // Standard Q head dimension (e.g. 128)
-    pub rope_dim: usize,        // Decoupled RoPE dimension (e.g. 64)
+    pub latent_dim: usize, // Compressed latent dimension d_c (e.g. 512)
+    pub q_head_dim: usize, // Standard Q head dimension (e.g. 128)
+    pub rope_dim: usize,   // Decoupled RoPE dimension (e.g. 64)
     pub softmax_scale: f32,
 }
 

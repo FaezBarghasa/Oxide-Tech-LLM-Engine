@@ -57,12 +57,12 @@ pub mod vision;
 pub use attention_kernels::{
     AttentionKernelBackend, FlashInferConfig, FlashInferEngine, FlashMlaEngine,
 };
-pub use vision::{
-    DetectedObject, EdgeVisionEngine, SegmentationMask, VisionModelType, VisionPreprocessConfig,
-};
 pub use hf_architectures::{
     ColBertLateInteraction, DeepSeekV3MoeConfig, MambaSsmBlock, MultiModalVisionProjector,
     RewardClassifierHead,
+};
+pub use vision::{
+    DetectedObject, EdgeVisionEngine, SegmentationMask, VisionModelType, VisionPreprocessConfig,
 };
 
 pub use chat_template::{ChatMessage, ChatRole, ChatTemplateFormat, ChatTemplateParser};

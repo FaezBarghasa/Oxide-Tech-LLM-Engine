@@ -585,4 +585,3 @@ pub struct BlockQ5_K_S(pub BlockQ5_K);
 /// Q5_K_M: Mixed K-quant 5-bit Medium (~5.7 bpw).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ5_K_M(pub BlockQ5_K);
-

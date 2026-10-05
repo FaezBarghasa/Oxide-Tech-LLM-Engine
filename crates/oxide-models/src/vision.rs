@@ -36,8 +36,8 @@ pub enum VisionModelType {
 pub struct VisionPreprocessConfig {
     pub target_width: usize,
     pub target_height: usize,
-    pub mean: [f32; 3], // e.g. [0.485, 0.456, 0.406]
-    pub std: [f32; 3],  // e.g. [0.229, 0.224, 0.225]
+    pub mean: [f32; 3],          // e.g. [0.485, 0.456, 0.406]
+    pub std: [f32; 3],           // e.g. [0.229, 0.224, 0.225]
     pub normalize_to_unit: bool, // divide 0..255 by 255.0
 }
 
@@ -106,8 +106,16 @@ impl EdgeVisionEngine {
         let th = self.preprocess_config.target_height;
         assert_eq!(out_chw.len(), 3 * tw * th);
 
-        let x_ratio = if tw > 1 { (src_width - 1) as f32 / (tw - 1) as f32 } else { 0.0 };
-        let y_ratio = if th > 1 { (src_height - 1) as f32 / (th - 1) as f32 } else { 0.0 };
+        let x_ratio = if tw > 1 {
+            (src_width - 1) as f32 / (tw - 1) as f32
+        } else {
+            0.0
+        };
+        let y_ratio = if th > 1 {
+            (src_height - 1) as f32 / (th - 1) as f32
+        } else {
+            0.0
+        };
 
         // Bilinear interpolation resize + normalization into planar CHW
         for y in 0..th {
@@ -166,9 +174,16 @@ impl EdgeVisionEngine {
 
     /// Performs fast branchless Non-Maximum Suppression (NMS) over candidate detections.
     #[must_use]
-    pub fn non_maximum_suppression(&self, mut candidates: Vec<DetectedObject>) -> Vec<DetectedObject> {
+    pub fn non_maximum_suppression(
+        &self,
+        mut candidates: Vec<DetectedObject>,
+    ) -> Vec<DetectedObject> {
         // Sort descending by confidence score
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut keep = Vec::new();
         let mut suppressed = vec![false; candidates.len()];
