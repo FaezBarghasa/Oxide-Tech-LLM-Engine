@@ -83,6 +83,37 @@ fn test_amd_apu_with_npu_strix_point_and_hawk_point() {
 }
 
 #[test]
+fn test_amd_ryzen_ai_max_plus_395_strix_halo() {
+    let ai_max = GpuDeviceProfile::from_known_device_name("AMD Ryzen AI Max+ 395")
+        .expect("AI Max+ 395 profile");
+    assert_eq!(ai_max.architecture, GpuArchitecture::Rdna3_5);
+    assert_eq!(ai_max.compute_capability.to_string(), "gfx1151");
+    assert_eq!(ai_max.sm_count, 40); // 40 Compute Units (Radeon 8060S / 2560 Shaders)
+    assert_eq!(ai_max.vram_capacity_bytes, 128 * 1024 * 1024 * 1024);
+    assert_eq!(ai_max.memory_tech, MemoryTechnology::UnifiedLpddr5X);
+    assert_eq!(
+        ai_max.tensor_core_gen,
+        TensorCoreGeneration::AmdXdnaNpuEngine
+    );
+    assert_eq!(ai_max.memory_bandwidth_gbps, 273.0); // 256-bit LPDDR5X-8533
+    assert!(ai_max.supports_fp8);
+    assert!(ai_max.supports_nvfp4); // XDNA 2 NPU Block FP4 / Microscaling
+
+    let plan = RocmExecutionPlan::for_profile(&ai_max);
+    assert_eq!(plan.wavefront_size, 32);
+    assert!(plan.use_wmma_rdna);
+    assert!(plan.use_xdna_npu_tile);
+    assert!(plan.use_fp4_mfma);
+
+    // Also verify alias parsing
+    let alias = GpuDeviceProfile::from_known_device_name("ai max+ 395").expect("alias profile");
+    assert_eq!(alias.sm_count, 40);
+
+    let halo = GpuDeviceProfile::from_known_device_name("Strix Halo").expect("Strix Halo profile");
+    assert_eq!(halo.sm_count, 40);
+}
+
+#[test]
 fn test_rocm_backend_instantiation_and_kernel_dispatch() {
     use oxide_core::traits::HardwareBackend;
     use oxide_core::worker::StepCommand;

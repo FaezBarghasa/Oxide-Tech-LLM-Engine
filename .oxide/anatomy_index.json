@@ -2,159 +2,135 @@
   "project_name": "Oxide-Tech-LLM-Engine",
   "root_path": "/home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine",
   "files": {
-    "crates/oxide-core/src/error.rs": {
-      "relative_path": "crates/oxide-core/src/error.rs",
+    "crates/oxide-hardware/oxide-backend-rocm/src/lib.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-rocm/src/lib.rs",
       "language": "rust",
-      "size_bytes": 1567,
-      "line_count": 47,
-      "content_hash": "d81fe0fcea1d6d27dd0894342f0ecf9a20ec1bacb6537d9ff608b4584858341b",
+      "size_bytes": 3900,
+      "line_count": 141,
+      "content_hash": "3810cd7881b01a3ece1e53ca6026d141d0d9a24c6ce9b59b465d8f50733734df",
       "symbols": [
         {
-          "name": "Result",
-          "qualified_name": "Result",
-          "kind": "type",
-          "start_line": 3,
-          "end_line": 3,
-          "signature": "pub type Result<T, E = EngineError> = std::result::Result<T, E>;"
+          "name": "arch",
+          "qualified_name": "arch",
+          "kind": "module",
+          "start_line": 21,
+          "end_line": 21,
+          "signature": "pub mod arch;"
         },
         {
-          "name": "EngineError",
-          "qualified_name": "EngineError",
-          "kind": "enum",
-          "start_line": 6,
-          "end_line": 47,
-          "signature": "pub enum EngineError {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.496562005Z"
-    },
-    "crates/oxide-alloc/Cargo.toml": {
-      "relative_path": "crates/oxide-alloc/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 280,
-      "line_count": 13,
-      "content_hash": "7a32de8f06f8101715e20d5945b91c532ac54756c342b82ce76a0fa612a5d8e2",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
+          "name": "rccl",
+          "qualified_name": "rccl",
           "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
+          "start_line": 22,
+          "end_line": 22,
+          "signature": "pub mod rccl;"
         },
         {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.493559306Z"
-    },
-    "crates/oxide-quant/src/cq2.rs": {
-      "relative_path": "crates/oxide-quant/src/cq2.rs",
-      "language": "rust",
-      "size_bytes": 339,
-      "line_count": 17,
-      "content_hash": "bb3178db3aa950453312538173cc3cf731df55c6d8a503d749666649ced8c945",
-      "symbols": [
-        {
-          "name": "NeedleCQ2",
-          "qualified_name": "NeedleCQ2",
+          "name": "HipEventHandle",
+          "qualified_name": "HipEventHandle",
           "kind": "struct",
-          "start_line": 5,
-          "end_line": 5,
-          "signature": "pub struct NeedleCQ2;"
+          "start_line": 33,
+          "end_line": 35,
+          "signature": "pub struct HipEventHandle {"
         },
         {
-          "name": "bits_per_weight",
-          "qualified_name": "impl QuantScheme for NeedleCQ2::bits_per_weight",
+          "name": "RocmBackend",
+          "qualified_name": "RocmBackend",
+          "kind": "struct",
+          "start_line": 37,
+          "end_line": 43,
+          "signature": "pub struct RocmBackend {"
+        },
+        {
+          "name": "fmt",
+          "qualified_name": "impl fmt::Debug for RocmBackend::fmt",
           "kind": "method",
-          "start_line": 9,
-          "end_line": 11,
-          "signature": "fn bits_per_weight() -> f32 {"
+          "start_line": 46,
+          "end_line": 60,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
         },
         {
-          "name": "block_size",
-          "qualified_name": "impl QuantScheme for NeedleCQ2::block_size",
+          "name": "new_with_profile",
+          "qualified_name": "impl RocmBackend::new_with_profile",
           "kind": "method",
-          "start_line": 14,
-          "end_line": 16,
-          "signature": "fn block_size() -> usize {"
+          "start_line": 66,
+          "end_line": 85,
+          "signature": "pub fn new_with_profile("
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl RocmBackend::new",
+          "kind": "method",
+          "start_line": 88,
+          "end_line": 90,
+          "signature": "pub fn new(device_id: usize, max_slots: usize) -> Self {"
+        },
+        {
+          "name": "profile",
+          "qualified_name": "impl RocmBackend::profile",
+          "kind": "method",
+          "start_line": 93,
+          "end_line": 95,
+          "signature": "pub const fn profile(&self) -> &GpuDeviceProfile {"
+        },
+        {
+          "name": "execution_plan",
+          "qualified_name": "impl RocmBackend::execution_plan",
+          "kind": "method",
+          "start_line": 98,
+          "end_line": 100,
+          "signature": "pub const fn execution_plan(&self) -> &RocmExecutionPlan {"
+        },
+        {
+          "name": "device_id",
+          "qualified_name": "impl RocmBackend::device_id",
+          "kind": "method",
+          "start_line": 103,
+          "end_line": 105,
+          "signature": "pub const fn device_id(&self) -> usize {"
+        },
+        {
+          "name": "Event",
+          "qualified_name": "impl HardwareBackend for RocmBackend::Event",
+          "kind": "type",
+          "start_line": 109,
+          "end_line": 109,
+          "signature": "type Event = HipEventHandle;"
+        },
+        {
+          "name": "dispatch_step_kernel",
+          "qualified_name": "impl HardwareBackend for RocmBackend::dispatch_step_kernel",
+          "kind": "method",
+          "start_line": 111,
+          "end_line": 123,
+          "signature": "fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {"
+        },
+        {
+          "name": "query_event_completed",
+          "qualified_name": "impl HardwareBackend for RocmBackend::query_event_completed",
+          "kind": "method",
+          "start_line": 125,
+          "end_line": 127,
+          "signature": "fn query_event_completed(&self, _event: Self::Event) -> bool {"
+        },
+        {
+          "name": "read_sampled_token_host",
+          "qualified_name": "impl HardwareBackend for RocmBackend::read_sampled_token_host",
+          "kind": "method",
+          "start_line": 129,
+          "end_line": 136,
+          "signature": "fn read_sampled_token_host(&self, slot_idx: u16) -> u32 {"
+        },
+        {
+          "name": "synchronize",
+          "qualified_name": "impl HardwareBackend for RocmBackend::synchronize",
+          "kind": "method",
+          "start_line": 138,
+          "end_line": 140,
+          "signature": "fn synchronize(&self) -> Result<()> {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.493922622Z"
-    },
-    "crates/oxide-hardware/oxide-backend-cuda/Cargo.toml": {
-      "relative_path": "crates/oxide-hardware/oxide-backend-cuda/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 318,
-      "line_count": 14,
-      "content_hash": "f3fe36910ba602f0355f6019577a2815343a8001c4a48f0bef6bc8bb97b8d9bc",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.489721930Z"
-    },
-    "crates/oxide-quant/src/lib.rs": {
-      "relative_path": "crates/oxide-quant/src/lib.rs",
-      "language": "rust",
-      "size_bytes": 748,
-      "line_count": 31,
-      "content_hash": "c7fd13dc36db4442aad98fb392120fb5f73013b41087444f79cadac806f04fb9",
-      "symbols": [
-        {
-          "name": "cq2",
-          "qualified_name": "cq2",
-          "kind": "module",
-          "start_line": 23,
-          "end_line": 23,
-          "signature": "pub mod cq2;"
-        },
-        {
-          "name": "nvfp4",
-          "qualified_name": "nvfp4",
-          "kind": "module",
-          "start_line": 24,
-          "end_line": 24,
-          "signature": "pub mod nvfp4;"
-        },
-        {
-          "name": "pq2_0",
-          "qualified_name": "pq2_0",
-          "kind": "module",
-          "start_line": 25,
-          "end_line": 25,
-          "signature": "pub mod pq2_0;"
-        },
-        {
-          "name": "ptq1_0",
-          "qualified_name": "ptq1_0",
-          "kind": "module",
-          "start_line": 26,
-          "end_line": 26,
-          "signature": "pub mod ptq1_0;"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.493866818Z"
+      "last_scanned_at": "2026-10-05T09:18:40.284081478Z"
     },
     "crates/oxide-quant/Cargo.toml": {
       "relative_path": "crates/oxide-quant/Cargo.toml",
@@ -180,7 +156,251 @@
           "signature": "[dependencies]"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.494448599Z"
+      "last_scanned_at": "2026-10-05T09:18:40.292720372Z"
+    },
+    "crates/oxide-core/src/macros.rs": {
+      "relative_path": "crates/oxide-core/src/macros.rs",
+      "language": "rust",
+      "size_bytes": 913,
+      "line_count": 27,
+      "content_hash": "a832a63ae6c1a86c4990196675f442d7ce64da9051272acd7d67e7342ef8593f",
+      "symbols": [
+        {
+          "name": "size_of_val",
+          "qualified_name": "size_of_val",
+          "kind": "function",
+          "start_line": 25,
+          "end_line": 27,
+          "signature": "pub const fn size_of_val<T>() -> usize {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.293315216Z"
+    },
+    "crates/oxide-alloc/Cargo.toml": {
+      "relative_path": "crates/oxide-alloc/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 280,
+      "line_count": 13,
+      "content_hash": "7a32de8f06f8101715e20d5945b91c532ac54756c342b82ce76a0fa612a5d8e2",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.291833448Z"
+    },
+    "crates/oxide-hardware/oxide-backend-rocm/Cargo.toml": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-rocm/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 318,
+      "line_count": 14,
+      "content_hash": "0c54de7a8234372ad8971173c3280d1d3d28cb5480959377b54cf0b7b1a3bfff",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.284447170Z"
+    },
+    "crates/oxide-quant/src/ptq1_0.rs": {
+      "relative_path": "crates/oxide-quant/src/ptq1_0.rs",
+      "language": "rust",
+      "size_bytes": 3430,
+      "line_count": 111,
+      "content_hash": "a717f11ff7b257aa75a30b9bc867de7dfaed8eb5e0b5d3c6f6a0c12e02702dea",
+      "symbols": [
+        {
+          "name": "Ternary1_58Bit",
+          "qualified_name": "Ternary1_58Bit",
+          "kind": "struct",
+          "start_line": 6,
+          "end_line": 6,
+          "signature": "pub struct Ternary1_58Bit;"
+        },
+        {
+          "name": "bits_per_weight",
+          "qualified_name": "impl QuantScheme for Ternary1_58Bit::bits_per_weight",
+          "kind": "method",
+          "start_line": 10,
+          "end_line": 12,
+          "signature": "fn bits_per_weight() -> f32 {"
+        },
+        {
+          "name": "block_size",
+          "qualified_name": "impl QuantScheme for Ternary1_58Bit::block_size",
+          "kind": "method",
+          "start_line": 15,
+          "end_line": 17,
+          "signature": "fn block_size() -> usize {"
+        },
+        {
+          "name": "TernaryBlock128",
+          "qualified_name": "TernaryBlock128",
+          "kind": "struct",
+          "start_line": 24,
+          "end_line": 27,
+          "signature": "pub struct TernaryBlock128 {"
+        },
+        {
+          "name": "unpack_sign",
+          "qualified_name": "impl TernaryBlock128::unpack_sign",
+          "kind": "method",
+          "start_line": 34,
+          "end_line": 42,
+          "signature": "pub fn unpack_sign(&self, idx: usize) -> f32 {"
+        },
+        {
+          "name": "scale",
+          "qualified_name": "impl TernaryBlock128::scale",
+          "kind": "method",
+          "start_line": 47,
+          "end_line": 49,
+          "signature": "pub fn scale(&self) -> f32 {"
+        },
+        {
+          "name": "dot_product_128",
+          "qualified_name": "impl TernaryBlock128::dot_product_128",
+          "kind": "method",
+          "start_line": 53,
+          "end_line": 77,
+          "signature": "pub fn dot_product_128(&self, activations: &[f32; 128]) -> f32 {"
+        },
+        {
+          "name": "f16_to_f32",
+          "qualified_name": "f16_to_f32",
+          "kind": "function",
+          "start_line": 83,
+          "end_line": 111,
+          "signature": "pub fn f16_to_f32(h: u16) -> f32 {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.292695438Z"
+    },
+    "crates/oxide-hardware/oxide-backend-tpu/Cargo.toml": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-tpu/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 291,
+      "line_count": 13,
+      "content_hash": "bc7ea71abd4280558793f70c575db7a07e47ccab931c377ad86d57fb696b1823",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.286237639Z"
+    },
+    "crates/oxide-alloc/src/device_arena.rs": {
+      "relative_path": "crates/oxide-alloc/src/device_arena.rs",
+      "language": "rust",
+      "size_bytes": 3475,
+      "line_count": 98,
+      "content_hash": "863e35546eb37926f3841b50a43f7030e10bf3684ac1f8b1f40ef97f1512a752",
+      "symbols": [
+        {
+          "name": "DeviceMemoryArena",
+          "qualified_name": "DeviceMemoryArena",
+          "kind": "struct",
+          "start_line": 7,
+          "end_line": 14,
+          "signature": "pub struct DeviceMemoryArena<'arena> {"
+        },
+        {
+          "name": "fmt",
+          "qualified_name": "impl fmt::Debug for DeviceMemoryArena<'_>::fmt",
+          "kind": "method",
+          "start_line": 22,
+          "end_line": 29,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+        },
+        {
+          "name": "from_raw_device_ptr",
+          "qualified_name": "impl DeviceMemoryArena<'_>::from_raw_device_ptr",
+          "kind": "method",
+          "start_line": 37,
+          "end_line": 55,
+          "signature": "pub unsafe fn from_raw_device_ptr("
+        },
+        {
+          "name": "bind_slot",
+          "qualified_name": "impl DeviceMemoryArena<'_>::bind_slot",
+          "kind": "method",
+          "start_line": 58,
+          "end_line": 68,
+          "signature": "pub fn bind_slot(&mut self, _sequence_id: u64, slot_idx: usize) -> Result<DevicePtr<u8>> {"
+        },
+        {
+          "name": "release_slot",
+          "qualified_name": "impl DeviceMemoryArena<'_>::release_slot",
+          "kind": "method",
+          "start_line": 71,
+          "end_line": 77,
+          "signature": "pub fn release_slot(&mut self, slot_idx: usize) -> Result<()> {"
+        },
+        {
+          "name": "get_slot_ptr",
+          "qualified_name": "impl DeviceMemoryArena<'_>::get_slot_ptr",
+          "kind": "method",
+          "start_line": 80,
+          "end_line": 87,
+          "signature": "pub fn get_slot_ptr(&self, slot_idx: usize) -> Result<DevicePtr<u8>> {"
+        },
+        {
+          "name": "slot_size_bytes",
+          "qualified_name": "impl DeviceMemoryArena<'_>::slot_size_bytes",
+          "kind": "method",
+          "start_line": 90,
+          "end_line": 92,
+          "signature": "pub const fn slot_size_bytes(&self) -> usize {"
+        },
+        {
+          "name": "num_slots",
+          "qualified_name": "impl DeviceMemoryArena<'_>::num_slots",
+          "kind": "method",
+          "start_line": 95,
+          "end_line": 97,
+          "signature": "pub const fn num_slots(&self) -> usize {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.291502188Z"
     },
     "crates/oxide-core/src/memory.rs": {
       "relative_path": "crates/oxide-core/src/memory.rs",
@@ -270,579 +490,257 @@
           "signature": "pub fn cast<U>(self) -> DevicePtr<U> {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.496822025Z"
+      "last_scanned_at": "2026-10-05T09:18:40.294906216Z"
     },
-    "crates/oxide-core/src/hardware.rs": {
-      "relative_path": "crates/oxide-core/src/hardware.rs",
-      "language": "rust",
-      "size_bytes": 19739,
-      "line_count": 493,
-      "content_hash": "a8101c856677f484d7a405fd3ce7539ebff83518c23760daeb87d97aa1b3667f",
+    "crates/oxide-core/Cargo.toml": {
+      "relative_path": "crates/oxide-core/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 454,
+      "line_count": 19,
+      "content_hash": "27fc8f6406d79484d97146ed5d526be30d75d49b77cafafc1836ca7f33a460bd",
       "symbols": [
         {
-          "name": "GpuArchitecture",
-          "qualified_name": "GpuArchitecture",
-          "kind": "enum",
-          "start_line": 5,
-          "end_line": 13,
-          "signature": "pub enum GpuArchitecture {"
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
         },
         {
-          "name": "ComputeCapability",
-          "qualified_name": "ComputeCapability",
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.299049940Z"
+    },
+    "crates/oxide-models/src/manifest.rs": {
+      "relative_path": "crates/oxide-models/src/manifest.rs",
+      "language": "rust",
+      "size_bytes": 2324,
+      "line_count": 55,
+      "content_hash": "87b9813977ab9ea6e387b3ca8ed80f51e3a7e406c7707ac7f0201df2c43f704a",
+      "symbols": [
+        {
+          "name": "OxideModelHeader",
+          "qualified_name": "OxideModelHeader",
           "kind": "struct",
-          "start_line": 17,
-          "end_line": 20,
-          "signature": "pub struct ComputeCapability {"
+          "start_line": 10,
+          "end_line": 29,
+          "signature": "pub struct OxideModelHeader {"
         },
         {
-          "name": "SM_70_VOLTA",
-          "qualified_name": "impl ComputeCapability::SM_70_VOLTA",
+          "name": "OXIDE_MAGIC",
+          "qualified_name": "OXIDE_MAGIC",
           "kind": "constant",
+          "start_line": 31,
+          "end_line": 31,
+          "signature": "pub const OXIDE_MAGIC: &[u8; 8] = b\"OXIDEMOD\";"
+        },
+        {
+          "name": "open_mmap",
+          "qualified_name": "impl OxideModelHeader::open_mmap",
+          "kind": "method",
+          "start_line": 35,
+          "end_line": 54,
+          "signature": "pub fn open_mmap<P: AsRef<Path>>(path: P) -> Result<(Self, memmap2::Mmap)> {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.289720030Z"
+    },
+    "crates/oxide-models/src/lib.rs": {
+      "relative_path": "crates/oxide-models/src/lib.rs",
+      "language": "rust",
+      "size_bytes": 859,
+      "line_count": 34,
+      "content_hash": "876f8bd42f5d5f7ba69e6f32fd4f903795463467d19749b6be97dcddf84fb11d",
+      "symbols": [
+        {
+          "name": "bonsai2",
+          "qualified_name": "bonsai2",
+          "kind": "module",
+          "start_line": 22,
+          "end_line": 22,
+          "signature": "pub mod bonsai2;"
+        },
+        {
+          "name": "engram",
+          "qualified_name": "engram",
+          "kind": "module",
           "start_line": 23,
           "end_line": 23,
-          "signature": "pub const SM_70_VOLTA: Self = Self { major: 7, minor: 0 };"
+          "signature": "pub mod engram;"
         },
         {
-          "name": "SM_75_TURING",
-          "qualified_name": "impl ComputeCapability::SM_75_TURING",
-          "kind": "constant",
+          "name": "llama3",
+          "qualified_name": "llama3",
+          "kind": "module",
           "start_line": 24,
           "end_line": 24,
-          "signature": "pub const SM_75_TURING: Self = Self { major: 7, minor: 5 };"
+          "signature": "pub mod llama3;"
         },
         {
-          "name": "SM_80_AMPERE_DC",
-          "qualified_name": "impl ComputeCapability::SM_80_AMPERE_DC",
-          "kind": "constant",
+          "name": "manifest",
+          "qualified_name": "manifest",
+          "kind": "module",
           "start_line": 25,
           "end_line": 25,
-          "signature": "pub const SM_80_AMPERE_DC: Self = Self { major: 8, minor: 0 };"
+          "signature": "pub mod manifest;"
         },
         {
-          "name": "SM_86_AMPERE_CLIENT",
-          "qualified_name": "impl ComputeCapability::SM_86_AMPERE_CLIENT",
-          "kind": "constant",
+          "name": "monarch",
+          "qualified_name": "monarch",
+          "kind": "module",
           "start_line": 26,
           "end_line": 26,
-          "signature": "pub const SM_86_AMPERE_CLIENT: Self = Self { major: 8, minor: 6 };"
+          "signature": "pub mod monarch;"
         },
         {
-          "name": "SM_87_ORIN",
-          "qualified_name": "impl ComputeCapability::SM_87_ORIN",
-          "kind": "constant",
+          "name": "needle",
+          "qualified_name": "needle",
+          "kind": "module",
           "start_line": 27,
           "end_line": 27,
-          "signature": "pub const SM_87_ORIN: Self = Self { major: 8, minor: 7 };"
+          "signature": "pub mod needle;"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.288704877Z"
+    },
+    "crates/oxide-core/src/lib.rs": {
+      "relative_path": "crates/oxide-core/src/lib.rs",
+      "language": "rust",
+      "size_bytes": 1293,
+      "line_count": 45,
+      "content_hash": "19609f41e2e70823bb5e49e4b5c3a8ce84a9e748799a36e5a474562c617f6ed7",
+      "symbols": [
+        {
+          "name": "dag",
+          "qualified_name": "dag",
+          "kind": "module",
+          "start_line": 25,
+          "end_line": 25,
+          "signature": "pub mod dag;"
         },
         {
-          "name": "SM_89_ADA",
-          "qualified_name": "impl ComputeCapability::SM_89_ADA",
-          "kind": "constant",
+          "name": "error",
+          "qualified_name": "error",
+          "kind": "module",
+          "start_line": 26,
+          "end_line": 26,
+          "signature": "pub mod error;"
+        },
+        {
+          "name": "hardware",
+          "qualified_name": "hardware",
+          "kind": "module",
+          "start_line": 27,
+          "end_line": 27,
+          "signature": "pub mod hardware;"
+        },
+        {
+          "name": "macros",
+          "qualified_name": "macros",
+          "kind": "module",
           "start_line": 28,
           "end_line": 28,
-          "signature": "pub const SM_89_ADA: Self = Self { major: 8, minor: 9 };"
+          "signature": "pub mod macros;"
         },
         {
-          "name": "SM_90_HOPPER",
-          "qualified_name": "impl ComputeCapability::SM_90_HOPPER",
-          "kind": "constant",
+          "name": "memory",
+          "qualified_name": "memory",
+          "kind": "module",
           "start_line": 29,
           "end_line": 29,
-          "signature": "pub const SM_90_HOPPER: Self = Self { major: 9, minor: 0 };"
+          "signature": "pub mod memory;"
         },
         {
-          "name": "SM_100_BLACKWELL",
-          "qualified_name": "impl ComputeCapability::SM_100_BLACKWELL",
-          "kind": "constant",
+          "name": "traits",
+          "qualified_name": "traits",
+          "kind": "module",
           "start_line": 30,
-          "end_line": 33,
-          "signature": "pub const SM_100_BLACKWELL: Self = Self {"
+          "end_line": 30,
+          "signature": "pub mod traits;"
         },
         {
-          "name": "SM_120_BLACKWELL_CLIENT",
-          "qualified_name": "impl ComputeCapability::SM_120_BLACKWELL_CLIENT",
-          "kind": "constant",
-          "start_line": 34,
-          "end_line": 37,
-          "signature": "pub const SM_120_BLACKWELL_CLIENT: Self = Self {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl ComputeCapability::new",
-          "kind": "method",
-          "start_line": 40,
-          "end_line": 42,
-          "signature": "pub const fn new(major: u32, minor: u32) -> Self {"
-        },
-        {
-          "name": "architecture",
-          "qualified_name": "impl ComputeCapability::architecture",
-          "kind": "method",
-          "start_line": 45,
-          "end_line": 55,
-          "signature": "pub const fn architecture(self) -> GpuArchitecture {"
-        },
-        {
-          "name": "fmt",
-          "qualified_name": "impl fmt::Display for ComputeCapability::fmt",
-          "kind": "method",
-          "start_line": 59,
-          "end_line": 61,
-          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
-        },
-        {
-          "name": "HardwareFormFactor",
-          "qualified_name": "HardwareFormFactor",
-          "kind": "enum",
-          "start_line": 66,
-          "end_line": 74,
-          "signature": "pub enum HardwareFormFactor {"
-        },
-        {
-          "name": "MemoryTechnology",
-          "qualified_name": "MemoryTechnology",
-          "kind": "enum",
-          "start_line": 78,
-          "end_line": 86,
-          "signature": "pub enum MemoryTechnology {"
-        },
-        {
-          "name": "TensorCoreGeneration",
-          "qualified_name": "TensorCoreGeneration",
-          "kind": "enum",
-          "start_line": 90,
-          "end_line": 96,
-          "signature": "pub enum TensorCoreGeneration {"
-        },
-        {
-          "name": "GpuDeviceProfile",
-          "qualified_name": "GpuDeviceProfile",
-          "kind": "struct",
-          "start_line": 100,
-          "end_line": 121,
-          "signature": "pub struct GpuDeviceProfile {"
-        },
-        {
-          "name": "from_known_device_name",
-          "qualified_name": "impl GpuDeviceProfile::from_known_device_name",
-          "kind": "method",
-          "start_line": 126,
-          "end_line": 482,
-          "signature": "pub fn from_known_device_name(name: &str) -> Option<Self> {"
-        },
-        {
-          "name": "optimal_gemv_threads",
-          "qualified_name": "impl GpuDeviceProfile::optimal_gemv_threads",
-          "kind": "method",
-          "start_line": 486,
-          "end_line": 492,
-          "signature": "pub const fn optimal_gemv_threads(&self) -> u32 {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.498480692Z"
-    },
-    "crates/oxide-hardware/oxide-backend-cpu/Cargo.toml": {
-      "relative_path": "crates/oxide-hardware/oxide-backend-cpu/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 317,
-      "line_count": 14,
-      "content_hash": "ad8b4a5c12948702acc0a9e84ea10293cffcb6393c33f07efd8cd36465030379",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
+          "name": "typestate",
+          "qualified_name": "typestate",
           "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.490233660Z"
-    },
-    "crates/oxide-hardware/oxide-backend-metal/src/lib.rs": {
-      "relative_path": "crates/oxide-hardware/oxide-backend-metal/src/lib.rs",
-      "language": "rust",
-      "size_bytes": 2349,
-      "line_count": 91,
-      "content_hash": "02718df04e44640f54598cbd69737b7228e7e011a48f253d6bd30de038d088c9",
-      "symbols": [
-        {
-          "name": "MetalEventHandle",
-          "qualified_name": "MetalEventHandle",
-          "kind": "struct",
-          "start_line": 27,
-          "end_line": 29,
-          "signature": "pub struct MetalEventHandle {"
-        },
-        {
-          "name": "MetalBackend",
-          "qualified_name": "MetalBackend",
-          "kind": "struct",
           "start_line": 31,
-          "end_line": 35,
-          "signature": "pub struct MetalBackend {"
+          "end_line": 31,
+          "signature": "pub mod typestate;"
         },
         {
-          "name": "fmt",
-          "qualified_name": "impl fmt::Debug for MetalBackend::fmt",
-          "kind": "method",
-          "start_line": 38,
-          "end_line": 44,
-          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+          "name": "worker",
+          "qualified_name": "worker",
+          "kind": "module",
+          "start_line": 32,
+          "end_line": 32,
+          "signature": "pub mod worker;"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.293461255Z"
+    },
+    "crates/oxide-hardware/oxide-backend-tpu/src/ici.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-tpu/src/ici.rs",
+      "language": "rust",
+      "size_bytes": 1167,
+      "line_count": 47,
+      "content_hash": "320d2b9a977cc4c5ee114d94caa0f4765fd76d1e33ca11c7ccd2b7ebbc8eea5f",
+      "symbols": [
+        {
+          "name": "TpuIciCommunicator",
+          "qualified_name": "TpuIciCommunicator",
+          "kind": "struct",
+          "start_line": 6,
+          "end_line": 10,
+          "signature": "pub struct TpuIciCommunicator {"
         },
         {
           "name": "new",
-          "qualified_name": "impl MetalBackend::new",
-          "kind": "method",
-          "start_line": 49,
-          "end_line": 55,
-          "signature": "pub fn new(device_id: usize, max_slots: usize) -> Self {"
-        },
-        {
-          "name": "Event",
-          "qualified_name": "impl HardwareBackend for MetalBackend::Event",
-          "kind": "type",
-          "start_line": 59,
-          "end_line": 59,
-          "signature": "type Event = MetalEventHandle;"
-        },
-        {
-          "name": "dispatch_step_kernel",
-          "qualified_name": "impl HardwareBackend for MetalBackend::dispatch_step_kernel",
-          "kind": "method",
-          "start_line": 61,
-          "end_line": 73,
-          "signature": "fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {"
-        },
-        {
-          "name": "query_event_completed",
-          "qualified_name": "impl HardwareBackend for MetalBackend::query_event_completed",
-          "kind": "method",
-          "start_line": 75,
-          "end_line": 77,
-          "signature": "fn query_event_completed(&self, _event: Self::Event) -> bool {"
-        },
-        {
-          "name": "read_sampled_token_host",
-          "qualified_name": "impl HardwareBackend for MetalBackend::read_sampled_token_host",
-          "kind": "method",
-          "start_line": 79,
-          "end_line": 86,
-          "signature": "fn read_sampled_token_host(&self, slot_idx: u16) -> u32 {"
-        },
-        {
-          "name": "synchronize",
-          "qualified_name": "impl HardwareBackend for MetalBackend::synchronize",
-          "kind": "method",
-          "start_line": 88,
-          "end_line": 90,
-          "signature": "fn synchronize(&self) -> Result<()> {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.488290038Z"
-    },
-    "crates/oxide-core/src/traits.rs": {
-      "relative_path": "crates/oxide-core/src/traits.rs",
-      "language": "rust",
-      "size_bytes": 1891,
-      "line_count": 56,
-      "content_hash": "4ab57a50fab7dc3142877bc6da4b5d038c68e63b1f43d883b9ba4a7f4f8b9a7e",
-      "symbols": [
-        {
-          "name": "HardwareBackend",
-          "qualified_name": "HardwareBackend",
-          "kind": "trait",
-          "start_line": 7,
-          "end_line": 21,
-          "signature": "pub trait HardwareBackend: Send + Sync + 'static + Debug {"
-        },
-        {
-          "name": "ModelConfig",
-          "qualified_name": "ModelConfig",
-          "kind": "trait",
-          "start_line": 24,
-          "end_line": 33,
-          "signature": "pub trait ModelConfig: Send + Sync + 'static + Debug + Clone {"
-        },
-        {
-          "name": "QuantScheme",
-          "qualified_name": "QuantScheme",
-          "kind": "trait",
-          "start_line": 36,
-          "end_line": 39,
-          "signature": "pub trait QuantScheme: Send + Sync + 'static + Debug + Copy {"
-        },
-        {
-          "name": "OpticalComputeFabric",
-          "qualified_name": "OpticalComputeFabric",
-          "kind": "trait",
-          "start_line": 42,
-          "end_line": 53,
-          "signature": "pub trait OpticalComputeFabric: HardwareBackend {"
-        },
-        {
-          "name": "HardwareSupports",
-          "qualified_name": "HardwareSupports",
-          "kind": "trait",
-          "start_line": 56,
-          "end_line": 56,
-          "signature": "pub trait HardwareSupports<B: HardwareBackend, M: ModelConfig> {}"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.495353326Z"
-    },
-    "Cargo.toml": {
-      "relative_path": "Cargo.toml",
-      "language": "toml",
-      "size_bytes": 1980,
-      "line_count": 67,
-      "content_hash": "bdb413bdfd8d8fb673aa6c4c27162afae3cc64b707377a42e6ce414d68e6bf79",
-      "symbols": [
-        {
-          "name": "workspace",
-          "qualified_name": "[workspace]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[workspace]"
-        },
-        {
-          "name": "workspace.package",
-          "qualified_name": "[workspace.package]",
-          "kind": "module",
-          "start_line": 16,
-          "end_line": 16,
-          "signature": "[workspace.package]"
-        },
-        {
-          "name": "workspace.dependencies",
-          "qualified_name": "[workspace.dependencies]",
-          "kind": "module",
-          "start_line": 23,
-          "end_line": 23,
-          "signature": "[workspace.dependencies]"
-        },
-        {
-          "name": "profile.release",
-          "qualified_name": "[profile.release]",
-          "kind": "module",
-          "start_line": 55,
-          "end_line": 55,
-          "signature": "[profile.release]"
-        },
-        {
-          "name": "profile.release-specialized",
-          "qualified_name": "[profile.release-specialized]",
-          "kind": "module",
-          "start_line": 64,
-          "end_line": 64,
-          "signature": "[profile.release-specialized]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.501922695Z"
-    },
-    "crates/oxide-cli/Cargo.toml": {
-      "relative_path": "crates/oxide-cli/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 580,
-      "line_count": 25,
-      "content_hash": "5e90e75276fda4feef699619b87029b29225e8a153d43d5fbcb4ccba3b66c239",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "bin",
-          "qualified_name": "[bin]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[[bin]]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 12,
-          "end_line": 12,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.492248519Z"
-    },
-    "crates/oxide-alloc/src/device_arena.rs": {
-      "relative_path": "crates/oxide-alloc/src/device_arena.rs",
-      "language": "rust",
-      "size_bytes": 3475,
-      "line_count": 98,
-      "content_hash": "863e35546eb37926f3841b50a43f7030e10bf3684ac1f8b1f40ef97f1512a752",
-      "symbols": [
-        {
-          "name": "DeviceMemoryArena",
-          "qualified_name": "DeviceMemoryArena",
-          "kind": "struct",
-          "start_line": 7,
-          "end_line": 14,
-          "signature": "pub struct DeviceMemoryArena<'arena> {"
-        },
-        {
-          "name": "fmt",
-          "qualified_name": "impl fmt::Debug for DeviceMemoryArena<'_>::fmt",
-          "kind": "method",
-          "start_line": 22,
-          "end_line": 29,
-          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
-        },
-        {
-          "name": "from_raw_device_ptr",
-          "qualified_name": "impl DeviceMemoryArena<'_>::from_raw_device_ptr",
-          "kind": "method",
-          "start_line": 37,
-          "end_line": 55,
-          "signature": "pub unsafe fn from_raw_device_ptr("
-        },
-        {
-          "name": "bind_slot",
-          "qualified_name": "impl DeviceMemoryArena<'_>::bind_slot",
-          "kind": "method",
-          "start_line": 58,
-          "end_line": 68,
-          "signature": "pub fn bind_slot(&mut self, _sequence_id: u64, slot_idx: usize) -> Result<DevicePtr<u8>> {"
-        },
-        {
-          "name": "release_slot",
-          "qualified_name": "impl DeviceMemoryArena<'_>::release_slot",
-          "kind": "method",
-          "start_line": 71,
-          "end_line": 77,
-          "signature": "pub fn release_slot(&mut self, slot_idx: usize) -> Result<()> {"
-        },
-        {
-          "name": "get_slot_ptr",
-          "qualified_name": "impl DeviceMemoryArena<'_>::get_slot_ptr",
-          "kind": "method",
-          "start_line": 80,
-          "end_line": 87,
-          "signature": "pub fn get_slot_ptr(&self, slot_idx: usize) -> Result<DevicePtr<u8>> {"
-        },
-        {
-          "name": "slot_size_bytes",
-          "qualified_name": "impl DeviceMemoryArena<'_>::slot_size_bytes",
-          "kind": "method",
-          "start_line": 90,
-          "end_line": 92,
-          "signature": "pub const fn slot_size_bytes(&self) -> usize {"
-        },
-        {
-          "name": "num_slots",
-          "qualified_name": "impl DeviceMemoryArena<'_>::num_slots",
-          "kind": "method",
-          "start_line": 95,
-          "end_line": 97,
-          "signature": "pub const fn num_slots(&self) -> usize {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.493219736Z"
-    },
-    "crates/oxide-server/Cargo.toml": {
-      "relative_path": "crates/oxide-server/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 507,
-      "line_count": 21,
-      "content_hash": "b803c49aeddf3ebcb909e96e0c4e8e19ad1bf0198f3966b148118c9df37b6dc6",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.499609821Z"
-    },
-    "crates/oxide-quant/src/nvfp4.rs": {
-      "relative_path": "crates/oxide-quant/src/nvfp4.rs",
-      "language": "rust",
-      "size_bytes": 341,
-      "line_count": 17,
-      "content_hash": "d371e9cc422554fa0184433457375fab8878497fcc337660f68d4e9a1ab20119",
-      "symbols": [
-        {
-          "name": "NvFp4",
-          "qualified_name": "NvFp4",
-          "kind": "struct",
-          "start_line": 5,
-          "end_line": 5,
-          "signature": "pub struct NvFp4;"
-        },
-        {
-          "name": "bits_per_weight",
-          "qualified_name": "impl QuantScheme for NvFp4::bits_per_weight",
-          "kind": "method",
-          "start_line": 9,
-          "end_line": 11,
-          "signature": "fn bits_per_weight() -> f32 {"
-        },
-        {
-          "name": "block_size",
-          "qualified_name": "impl QuantScheme for NvFp4::block_size",
+          "qualified_name": "impl TpuIciCommunicator::new",
           "kind": "method",
           "start_line": 14,
-          "end_line": 16,
-          "signature": "fn block_size() -> usize {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.493970114Z"
-    },
-    "crates/oxide-engine/src/pipeline.rs": {
-      "relative_path": "crates/oxide-engine/src/pipeline.rs",
-      "language": "rust",
-      "size_bytes": 1452,
-      "line_count": 34,
-      "content_hash": "88fbd7dd568e5132bf42125b1a3abcf46fd10d463c04e8220b4b06e7f6dd68fb",
-      "symbols": [
-        {
-          "name": "SpecializedPipeline",
-          "qualified_name": "SpecializedPipeline",
-          "kind": "enum",
-          "start_line": 16,
-          "end_line": 21,
-          "signature": "pub enum SpecializedPipeline {"
+          "end_line": 20,
+          "signature": "pub const fn new(rank: usize, world_size: usize, torus_dimension: u32) -> Self {"
         },
         {
-          "name": "step",
-          "qualified_name": "impl SpecializedPipeline::step",
+          "name": "all_reduce_bf16",
+          "qualified_name": "impl TpuIciCommunicator::all_reduce_bf16",
           "kind": "method",
-          "start_line": 26,
-          "end_line": 33,
-          "signature": "pub fn step(&mut self, cmd: &StepCommand) -> Result<StepCompletion> {"
+          "start_line": 23,
+          "end_line": 31,
+          "signature": "pub fn all_reduce_bf16("
+        },
+        {
+          "name": "rank",
+          "qualified_name": "impl TpuIciCommunicator::rank",
+          "kind": "method",
+          "start_line": 34,
+          "end_line": 36,
+          "signature": "pub const fn rank(&self) -> usize {"
+        },
+        {
+          "name": "world_size",
+          "qualified_name": "impl TpuIciCommunicator::world_size",
+          "kind": "method",
+          "start_line": 39,
+          "end_line": 41,
+          "signature": "pub const fn world_size(&self) -> usize {"
+        },
+        {
+          "name": "torus_dimension",
+          "qualified_name": "impl TpuIciCommunicator::torus_dimension",
+          "kind": "method",
+          "start_line": 44,
+          "end_line": 46,
+          "signature": "pub const fn torus_dimension(&self) -> u32 {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.487679763Z"
+      "last_scanned_at": "2026-10-05T09:18:40.285537124Z"
     },
     "crates/oxide-hardware/oxide-backend-cuda/src/lib.rs": {
       "relative_path": "crates/oxide-hardware/oxide-backend-cuda/src/lib.rs",
@@ -972,7 +870,133 @@
           "signature": "fn synchronize(&self) -> Result<()> {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.489527212Z"
+      "last_scanned_at": "2026-10-05T09:18:40.287435639Z"
+    },
+    "crates/oxide-alloc/src/host_arena.rs": {
+      "relative_path": "crates/oxide-alloc/src/host_arena.rs",
+      "language": "rust",
+      "size_bytes": 3532,
+      "line_count": 106,
+      "content_hash": "e21a03a02322af03e8bccf24187ead83c61a565d50fddacdc63b8d3176cc429f",
+      "symbols": [
+        {
+          "name": "HostPinnedArena",
+          "qualified_name": "HostPinnedArena",
+          "kind": "struct",
+          "start_line": 6,
+          "end_line": 11,
+          "signature": "pub struct HostPinnedArena {"
+        },
+        {
+          "name": "fmt",
+          "qualified_name": "impl fmt::Debug for HostPinnedArena::fmt",
+          "kind": "method",
+          "start_line": 19,
+          "end_line": 26,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl HostPinnedArena::new",
+          "kind": "method",
+          "start_line": 31,
+          "end_line": 55,
+          "signature": "pub fn new(capacity_bytes: usize) -> Result<Self> {"
+        },
+        {
+          "name": "alloc_slice",
+          "qualified_name": "impl HostPinnedArena::alloc_slice",
+          "kind": "method",
+          "start_line": 58,
+          "end_line": 77,
+          "signature": "pub fn alloc_slice<T: Copy>(&mut self, count: usize) -> Result<&mut [T]> {"
+        },
+        {
+          "name": "reset",
+          "qualified_name": "impl HostPinnedArena::reset",
+          "kind": "method",
+          "start_line": 80,
+          "end_line": 82,
+          "signature": "pub fn reset(&mut self) {"
+        },
+        {
+          "name": "capacity",
+          "qualified_name": "impl HostPinnedArena::capacity",
+          "kind": "method",
+          "start_line": 86,
+          "end_line": 88,
+          "signature": "pub const fn capacity(&self) -> usize {"
+        },
+        {
+          "name": "allocated_bytes",
+          "qualified_name": "impl HostPinnedArena::allocated_bytes",
+          "kind": "method",
+          "start_line": 92,
+          "end_line": 94,
+          "signature": "pub const fn allocated_bytes(&self) -> usize {"
+        },
+        {
+          "name": "drop",
+          "qualified_name": "impl Drop for HostPinnedArena::drop",
+          "kind": "method",
+          "start_line": 98,
+          "end_line": 105,
+          "signature": "fn drop(&mut self) {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.291809702Z"
+    },
+    "crates/oxide-core/src/error.rs": {
+      "relative_path": "crates/oxide-core/src/error.rs",
+      "language": "rust",
+      "size_bytes": 1567,
+      "line_count": 47,
+      "content_hash": "d81fe0fcea1d6d27dd0894342f0ecf9a20ec1bacb6537d9ff608b4584858341b",
+      "symbols": [
+        {
+          "name": "Result",
+          "qualified_name": "Result",
+          "kind": "type",
+          "start_line": 3,
+          "end_line": 3,
+          "signature": "pub type Result<T, E = EngineError> = std::result::Result<T, E>;"
+        },
+        {
+          "name": "EngineError",
+          "qualified_name": "EngineError",
+          "kind": "enum",
+          "start_line": 6,
+          "end_line": 47,
+          "signature": "pub enum EngineError {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.294650944Z"
+    },
+    "crates/oxide-engine/src/lib.rs": {
+      "relative_path": "crates/oxide-engine/src/lib.rs",
+      "language": "rust",
+      "size_bytes": 603,
+      "line_count": 25,
+      "content_hash": "d7dff341a4157eb1943a0fb76d8b5d697431bf102a7af3c9aaf8666243d4f565",
+      "symbols": [
+        {
+          "name": "engine",
+          "qualified_name": "engine",
+          "kind": "module",
+          "start_line": 21,
+          "end_line": 21,
+          "signature": "pub mod engine;"
+        },
+        {
+          "name": "pipeline",
+          "qualified_name": "pipeline",
+          "kind": "module",
+          "start_line": 22,
+          "end_line": 22,
+          "signature": "pub mod pipeline;"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.282368184Z"
     },
     "crates/oxide-hardware/oxide-backend-cpu/src/lib.rs": {
       "relative_path": "crates/oxide-hardware/oxide-backend-cpu/src/lib.rs",
@@ -1062,171 +1086,1619 @@
           "signature": "fn synchronize(&self) -> Result<()> {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.490022319Z"
+      "last_scanned_at": "2026-10-05T09:18:40.287921250Z"
     },
-    "crates/oxide-models/src/llama3.rs": {
-      "relative_path": "crates/oxide-models/src/llama3.rs",
+    "crates/oxide-hardware/oxide-backend-metal/src/lib.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-metal/src/lib.rs",
       "language": "rust",
-      "size_bytes": 1245,
-      "line_count": 61,
-      "content_hash": "3c93225b2fe593989c660514f4b14d47a61101b5e614d525defa0486daee9dc6",
+      "size_bytes": 2349,
+      "line_count": 91,
+      "content_hash": "02718df04e44640f54598cbd69737b7228e7e011a48f253d6bd30de038d088c9",
       "symbols": [
         {
-          "name": "Llama3Config",
-          "qualified_name": "Llama3Config",
+          "name": "MetalEventHandle",
+          "qualified_name": "MetalEventHandle",
           "kind": "struct",
-          "start_line": 5,
+          "start_line": 27,
+          "end_line": 29,
+          "signature": "pub struct MetalEventHandle {"
+        },
+        {
+          "name": "MetalBackend",
+          "qualified_name": "MetalBackend",
+          "kind": "struct",
+          "start_line": 31,
+          "end_line": 35,
+          "signature": "pub struct MetalBackend {"
+        },
+        {
+          "name": "fmt",
+          "qualified_name": "impl fmt::Debug for MetalBackend::fmt",
+          "kind": "method",
+          "start_line": 38,
+          "end_line": 44,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl MetalBackend::new",
+          "kind": "method",
+          "start_line": 49,
+          "end_line": 55,
+          "signature": "pub fn new(device_id: usize, max_slots: usize) -> Self {"
+        },
+        {
+          "name": "Event",
+          "qualified_name": "impl HardwareBackend for MetalBackend::Event",
+          "kind": "type",
+          "start_line": 59,
+          "end_line": 59,
+          "signature": "type Event = MetalEventHandle;"
+        },
+        {
+          "name": "dispatch_step_kernel",
+          "qualified_name": "impl HardwareBackend for MetalBackend::dispatch_step_kernel",
+          "kind": "method",
+          "start_line": 61,
+          "end_line": 73,
+          "signature": "fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {"
+        },
+        {
+          "name": "query_event_completed",
+          "qualified_name": "impl HardwareBackend for MetalBackend::query_event_completed",
+          "kind": "method",
+          "start_line": 75,
+          "end_line": 77,
+          "signature": "fn query_event_completed(&self, _event: Self::Event) -> bool {"
+        },
+        {
+          "name": "read_sampled_token_host",
+          "qualified_name": "impl HardwareBackend for MetalBackend::read_sampled_token_host",
+          "kind": "method",
+          "start_line": 79,
+          "end_line": 86,
+          "signature": "fn read_sampled_token_host(&self, slot_idx: u16) -> u32 {"
+        },
+        {
+          "name": "synchronize",
+          "qualified_name": "impl HardwareBackend for MetalBackend::synchronize",
+          "kind": "method",
+          "start_line": 88,
+          "end_line": 90,
+          "signature": "fn synchronize(&self) -> Result<()> {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.284749935Z"
+    },
+    "crates/oxide-models/src/monarch.rs": {
+      "relative_path": "crates/oxide-models/src/monarch.rs",
+      "language": "rust",
+      "size_bytes": 2728,
+      "line_count": 81,
+      "content_hash": "b1604904e74f3ad82acd751f5741c378d1c444c9f6a07dca9c908d0d2d45ad3f",
+      "symbols": [
+        {
+          "name": "MonarchMlp",
+          "qualified_name": "MonarchMlp",
+          "kind": "struct",
+          "start_line": 7,
           "end_line": 13,
-          "signature": "pub struct Llama3Config {"
+          "signature": "pub struct MonarchMlp {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl MonarchMlp::new",
+          "kind": "method",
+          "start_line": 17,
+          "end_line": 32,
+          "signature": "pub fn new(hidden_dim: usize) -> Self {"
+        },
+        {
+          "name": "forward",
+          "qualified_name": "impl MonarchMlp::forward",
+          "kind": "method",
+          "start_line": 35,
+          "end_line": 80,
+          "signature": "pub fn forward(&self, input: &[f32], output: &mut [f32]) -> Result<()> {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.289494441Z"
+    },
+    "crates/oxide-cli/Cargo.toml": {
+      "relative_path": "crates/oxide-cli/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 651,
+      "line_count": 27,
+      "content_hash": "8cbd437ccd7d1a70b27bfef50184b45300b42b584bf217d0b08ae21b1e2bc750",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "bin",
+          "qualified_name": "[bin]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[[bin]]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 12,
+          "end_line": 12,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.290539277Z"
+    },
+    "crates/oxide-quant/src/lib.rs": {
+      "relative_path": "crates/oxide-quant/src/lib.rs",
+      "language": "rust",
+      "size_bytes": 748,
+      "line_count": 31,
+      "content_hash": "c7fd13dc36db4442aad98fb392120fb5f73013b41087444f79cadac806f04fb9",
+      "symbols": [
+        {
+          "name": "cq2",
+          "qualified_name": "cq2",
+          "kind": "module",
+          "start_line": 23,
+          "end_line": 23,
+          "signature": "pub mod cq2;"
+        },
+        {
+          "name": "nvfp4",
+          "qualified_name": "nvfp4",
+          "kind": "module",
+          "start_line": 24,
+          "end_line": 24,
+          "signature": "pub mod nvfp4;"
+        },
+        {
+          "name": "pq2_0",
+          "qualified_name": "pq2_0",
+          "kind": "module",
+          "start_line": 25,
+          "end_line": 25,
+          "signature": "pub mod pq2_0;"
+        },
+        {
+          "name": "ptq1_0",
+          "qualified_name": "ptq1_0",
+          "kind": "module",
+          "start_line": 26,
+          "end_line": 26,
+          "signature": "pub mod ptq1_0;"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.292137401Z"
+    },
+    "crates/oxide-core/tests/golden_tensor_verification.rs": {
+      "relative_path": "crates/oxide-core/tests/golden_tensor_verification.rs",
+      "language": "rust",
+      "size_bytes": 1870,
+      "line_count": 63,
+      "content_hash": "f968dae9fb513625c1eba001722d0b5271afd64c8f5966f19c26da685b86ba3b",
+      "symbols": [
+        {
+          "name": "chebyshev_distance",
+          "qualified_name": "chebyshev_distance",
+          "kind": "function",
+          "start_line": 4,
+          "end_line": 10,
+          "signature": "pub fn chebyshev_distance(u: &[f32], v: &[f32]) -> f32 {"
+        },
+        {
+          "name": "cosine_similarity",
+          "qualified_name": "cosine_similarity",
+          "kind": "function",
+          "start_line": 13,
+          "end_line": 30,
+          "signature": "pub fn cosine_similarity(u: &[f32], v: &[f32]) -> f32 {"
+        },
+        {
+          "name": "test_device_ptr_invariants",
+          "qualified_name": "test_device_ptr_invariants",
+          "kind": "function",
+          "start_line": 33,
+          "end_line": 45,
+          "signature": "fn test_device_ptr_invariants() {"
+        },
+        {
+          "name": "test_golden_tensor_similarity_metrics",
+          "qualified_name": "test_golden_tensor_similarity_metrics",
+          "kind": "function",
+          "start_line": 48,
+          "end_line": 63,
+          "signature": "fn test_golden_tensor_similarity_metrics() {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.293198859Z"
+    },
+    "Cargo.toml": {
+      "relative_path": "Cargo.toml",
+      "language": "toml",
+      "size_bytes": 2223,
+      "line_count": 71,
+      "content_hash": "01bb31d0b15d230690f32d4570fe4357e95a0e980bcd8d04cff68265e208964b",
+      "symbols": [
+        {
+          "name": "workspace",
+          "qualified_name": "[workspace]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[workspace]"
+        },
+        {
+          "name": "workspace.package",
+          "qualified_name": "[workspace.package]",
+          "kind": "module",
+          "start_line": 18,
+          "end_line": 18,
+          "signature": "[workspace.package]"
+        },
+        {
+          "name": "workspace.dependencies",
+          "qualified_name": "[workspace.dependencies]",
+          "kind": "module",
+          "start_line": 25,
+          "end_line": 25,
+          "signature": "[workspace.dependencies]"
+        },
+        {
+          "name": "profile.release",
+          "qualified_name": "[profile.release]",
+          "kind": "module",
+          "start_line": 59,
+          "end_line": 59,
+          "signature": "[profile.release]"
+        },
+        {
+          "name": "profile.release-specialized",
+          "qualified_name": "[profile.release-specialized]",
+          "kind": "module",
+          "start_line": 68,
+          "end_line": 68,
+          "signature": "[profile.release-specialized]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.303155671Z"
+    },
+    "crates/oxide-hardware/oxide-backend-tpu/src/arch.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-tpu/src/arch.rs",
+      "language": "rust",
+      "size_bytes": 4083,
+      "line_count": 103,
+      "content_hash": "c4035ae0c7f16e8a741ea312adae94ba9c953e45d21f4fc372d33118bbbc577b",
+      "symbols": [
+        {
+          "name": "TpuExecutionPlan",
+          "qualified_name": "TpuExecutionPlan",
+          "kind": "struct",
+          "start_line": 7,
+          "end_line": 17,
+          "signature": "pub struct TpuExecutionPlan {"
+        },
+        {
+          "name": "for_profile",
+          "qualified_name": "impl TpuExecutionPlan::for_profile",
+          "kind": "method",
+          "start_line": 22,
+          "end_line": 102,
+          "signature": "pub const fn for_profile(profile: &GpuDeviceProfile) -> Self {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.286212706Z"
+    },
+    "crates/oxide-server/Cargo.toml": {
+      "relative_path": "crates/oxide-server/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 507,
+      "line_count": 21,
+      "content_hash": "b803c49aeddf3ebcb909e96e0c4e8e19ad1bf0198f3966b148118c9df37b6dc6",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.300143456Z"
+    },
+    "crates/oxide-hardware/oxide-backend-rocm/src/rccl.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-rocm/src/rccl.rs",
+      "language": "rust",
+      "size_bytes": 942,
+      "line_count": 37,
+      "content_hash": "e4ee14e74c16112f80695f977ac5a0cc2b8b24b945bd933805945513c45fff34",
+      "symbols": [
+        {
+          "name": "RcclCommunicator",
+          "qualified_name": "RcclCommunicator",
+          "kind": "struct",
+          "start_line": 6,
+          "end_line": 9,
+          "signature": "pub struct RcclCommunicator {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl RcclCommunicator::new",
+          "kind": "method",
+          "start_line": 13,
+          "end_line": 15,
+          "signature": "pub const fn new(rank: usize, world_size: usize) -> Self {"
+        },
+        {
+          "name": "all_reduce_f32",
+          "qualified_name": "impl RcclCommunicator::all_reduce_f32",
+          "kind": "method",
+          "start_line": 18,
+          "end_line": 26,
+          "signature": "pub fn all_reduce_f32("
+        },
+        {
+          "name": "rank",
+          "qualified_name": "impl RcclCommunicator::rank",
+          "kind": "method",
+          "start_line": 29,
+          "end_line": 31,
+          "signature": "pub const fn rank(&self) -> usize {"
+        },
+        {
+          "name": "world_size",
+          "qualified_name": "impl RcclCommunicator::world_size",
+          "kind": "method",
+          "start_line": 34,
+          "end_line": 36,
+          "signature": "pub const fn world_size(&self) -> usize {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.284426986Z"
+    },
+    "crates/oxide-hardware/oxide-backend-cpu/src/ternary.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-cpu/src/ternary.rs",
+      "language": "rust",
+      "size_bytes": 1608,
+      "line_count": 46,
+      "content_hash": "7420b1115d12ad60801f19160c5784642e7a19becfc0af847801646d72cfe1d2",
+      "symbols": [
+        {
+          "name": "ternary_gemv_cpu",
+          "qualified_name": "ternary_gemv_cpu",
+          "kind": "function",
+          "start_line": 5,
+          "end_line": 18,
+          "signature": "pub fn ternary_gemv_cpu(activations: &[f32], blocks: &[TernaryBlock128]) -> f32 {"
+        },
+        {
+          "name": "ternary_dot_product_avx512",
+          "qualified_name": "ternary_dot_product_avx512",
+          "kind": "function",
+          "start_line": 25,
+          "end_line": 46,
+          "signature": "pub unsafe fn ternary_dot_product_avx512("
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.288101722Z"
+    },
+    "crates/oxide-hardware/oxide-backend-cuda/src/arch.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-cuda/src/arch.rs",
+      "language": "rust",
+      "size_bytes": 2491,
+      "line_count": 69,
+      "content_hash": "8ab2f244fb80b51889c4fdb600f1ed39f1044bf01356439ce702990ea6f06401",
+      "symbols": [
+        {
+          "name": "KernelExecutionPlan",
+          "qualified_name": "KernelExecutionPlan",
+          "kind": "struct",
+          "start_line": 7,
+          "end_line": 15,
+          "signature": "pub struct KernelExecutionPlan {"
+        },
+        {
+          "name": "for_profile",
+          "qualified_name": "impl KernelExecutionPlan::for_profile",
+          "kind": "method",
+          "start_line": 20,
+          "end_line": 68,
+          "signature": "pub const fn for_profile(profile: &GpuDeviceProfile) -> Self {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.287604237Z"
+    },
+    "crates/oxide-hardware/oxide-backend-cuda/src/nccl.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-cuda/src/nccl.rs",
+      "language": "rust",
+      "size_bytes": 925,
+      "line_count": 37,
+      "content_hash": "491471c3dabd25001eff0da7792709109af40877b48e6706e42a16c29b4d59b3",
+      "symbols": [
+        {
+          "name": "NcclCommunicator",
+          "qualified_name": "NcclCommunicator",
+          "kind": "struct",
+          "start_line": 6,
+          "end_line": 9,
+          "signature": "pub struct NcclCommunicator {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl NcclCommunicator::new",
+          "kind": "method",
+          "start_line": 13,
+          "end_line": 15,
+          "signature": "pub const fn new(rank: usize, world_size: usize) -> Self {"
+        },
+        {
+          "name": "all_reduce_f32",
+          "qualified_name": "impl NcclCommunicator::all_reduce_f32",
+          "kind": "method",
+          "start_line": 18,
+          "end_line": 26,
+          "signature": "pub fn all_reduce_f32("
+        },
+        {
+          "name": "rank",
+          "qualified_name": "impl NcclCommunicator::rank",
+          "kind": "method",
+          "start_line": 29,
+          "end_line": 31,
+          "signature": "pub const fn rank(&self) -> usize {"
+        },
+        {
+          "name": "world_size",
+          "qualified_name": "impl NcclCommunicator::world_size",
+          "kind": "method",
+          "start_line": 34,
+          "end_line": 36,
+          "signature": "pub const fn world_size(&self) -> usize {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.286988022Z"
+    },
+    "crates/oxide-models/tests/monarch_engram_tests.rs": {
+      "relative_path": "crates/oxide-models/tests/monarch_engram_tests.rs",
+      "language": "rust",
+      "size_bytes": 1244,
+      "line_count": 45,
+      "content_hash": "f68db07e221cbf5d85c1c5d851d0ee417cfd1849f4a46567d47357428ab68969",
+      "symbols": [
+        {
+          "name": "test_monarch_mlp_forward",
+          "qualified_name": "test_monarch_mlp_forward",
+          "kind": "function",
+          "start_line": 6,
+          "end_line": 18,
+          "signature": "fn test_monarch_mlp_forward() {"
+        },
+        {
+          "name": "test_engram_gather_table",
+          "qualified_name": "test_engram_gather_table",
+          "kind": "function",
+          "start_line": 21,
+          "end_line": 33,
+          "signature": "fn test_engram_gather_table() {"
+        },
+        {
+          "name": "test_needle_subnetwork_depth_ladder",
+          "qualified_name": "test_needle_subnetwork_depth_ladder",
+          "kind": "function",
+          "start_line": 36,
+          "end_line": 45,
+          "signature": "fn test_needle_subnetwork_depth_ladder() {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.288404487Z"
+    },
+    "crates/oxide-models/Cargo.toml": {
+      "relative_path": "crates/oxide-models/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 360,
+      "line_count": 16,
+      "content_hash": "77c7cbc183c0032b2eb3c8b55a682143e17c646529607683fef8091039a7634f",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.289742589Z"
+    },
+    "crates/oxide-hardware/oxide-backend-rocm/tests/amd_topology_tests.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-rocm/tests/amd_topology_tests.rs",
+      "language": "rust",
+      "size_bytes": 5475,
+      "line_count": 130,
+      "content_hash": "90eb654905c506c93b1f1be78c4ebcd0939f3f87bdc0ba4a20c233f6ec261082",
+      "symbols": [
+        {
+          "name": "test_amd_instinct_mi300x_and_mi325x",
+          "qualified_name": "test_amd_instinct_mi300x_and_mi325x",
+          "kind": "function",
+          "start_line": 7,
+          "end_line": 26,
+          "signature": "fn test_amd_instinct_mi300x_and_mi325x() {"
+        },
+        {
+          "name": "test_amd_instinct_mi350x_and_mi355x_cdna4",
+          "qualified_name": "test_amd_instinct_mi350x_and_mi355x_cdna4",
+          "kind": "function",
+          "start_line": 29,
+          "end_line": 44,
+          "signature": "fn test_amd_instinct_mi350x_and_mi355x_cdna4() {"
+        },
+        {
+          "name": "test_amd_commercial_radeon_rx_and_pro",
+          "qualified_name": "test_amd_commercial_radeon_rx_and_pro",
+          "kind": "function",
+          "start_line": 47,
+          "end_line": 62,
+          "signature": "fn test_amd_commercial_radeon_rx_and_pro() {"
+        },
+        {
+          "name": "test_amd_apu_with_npu_strix_point_and_hawk_point",
+          "qualified_name": "test_amd_apu_with_npu_strix_point_and_hawk_point",
+          "kind": "function",
+          "start_line": 65,
+          "end_line": 83,
+          "signature": "fn test_amd_apu_with_npu_strix_point_and_hawk_point() {"
+        },
+        {
+          "name": "test_amd_ryzen_ai_max_plus_395_strix_halo",
+          "qualified_name": "test_amd_ryzen_ai_max_plus_395_strix_halo",
+          "kind": "function",
+          "start_line": 86,
+          "end_line": 114,
+          "signature": "fn test_amd_ryzen_ai_max_plus_395_strix_halo() {"
+        },
+        {
+          "name": "test_rocm_backend_instantiation_and_kernel_dispatch",
+          "qualified_name": "test_rocm_backend_instantiation_and_kernel_dispatch",
+          "kind": "function",
+          "start_line": 117,
+          "end_line": 130,
+          "signature": "fn test_rocm_backend_instantiation_and_kernel_dispatch() {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.283589930Z"
+    },
+    "crates/oxide-models/src/bonsai2.rs": {
+      "relative_path": "crates/oxide-models/src/bonsai2.rs",
+      "language": "rust",
+      "size_bytes": 1359,
+      "line_count": 62,
+      "content_hash": "600b48afce937b6a29f2c8bf493c5bc30b83cd3eed81719edc988e9b88c515f0",
+      "symbols": [
+        {
+          "name": "TernaryBonsai2Config",
+          "qualified_name": "TernaryBonsai2Config",
+          "kind": "struct",
+          "start_line": 6,
+          "end_line": 14,
+          "signature": "pub struct TernaryBonsai2Config {"
         },
         {
           "name": "default",
-          "qualified_name": "impl Default for Llama3Config::default",
+          "qualified_name": "impl Default for TernaryBonsai2Config::default",
           "kind": "method",
-          "start_line": 16,
-          "end_line": 26,
+          "start_line": 17,
+          "end_line": 27,
           "signature": "fn default() -> Self {"
         },
         {
           "name": "model_name",
-          "qualified_name": "impl ModelConfig for Llama3Config::model_name",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::model_name",
           "kind": "method",
-          "start_line": 30,
-          "end_line": 32,
+          "start_line": 31,
+          "end_line": 33,
           "signature": "fn model_name(&self) -> &'static str {"
         },
         {
           "name": "hidden_dim",
-          "qualified_name": "impl ModelConfig for Llama3Config::hidden_dim",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::hidden_dim",
           "kind": "method",
-          "start_line": 34,
-          "end_line": 36,
+          "start_line": 35,
+          "end_line": 37,
           "signature": "fn hidden_dim(&self) -> usize {"
         },
         {
           "name": "num_layers",
-          "qualified_name": "impl ModelConfig for Llama3Config::num_layers",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::num_layers",
           "kind": "method",
-          "start_line": 38,
-          "end_line": 40,
+          "start_line": 39,
+          "end_line": 41,
           "signature": "fn num_layers(&self) -> usize {"
         },
         {
           "name": "num_heads",
-          "qualified_name": "impl ModelConfig for Llama3Config::num_heads",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::num_heads",
           "kind": "method",
-          "start_line": 42,
-          "end_line": 44,
+          "start_line": 43,
+          "end_line": 45,
           "signature": "fn num_heads(&self) -> usize {"
         },
         {
           "name": "num_kv_heads",
-          "qualified_name": "impl ModelConfig for Llama3Config::num_kv_heads",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::num_kv_heads",
           "kind": "method",
-          "start_line": 46,
-          "end_line": 48,
+          "start_line": 47,
+          "end_line": 49,
           "signature": "fn num_kv_heads(&self) -> usize {"
         },
         {
           "name": "head_dim",
-          "qualified_name": "impl ModelConfig for Llama3Config::head_dim",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::head_dim",
           "kind": "method",
-          "start_line": 50,
-          "end_line": 52,
+          "start_line": 51,
+          "end_line": 53,
           "signature": "fn head_dim(&self) -> usize {"
         },
         {
           "name": "vocab_size",
-          "qualified_name": "impl ModelConfig for Llama3Config::vocab_size",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::vocab_size",
           "kind": "method",
-          "start_line": 54,
-          "end_line": 56,
+          "start_line": 55,
+          "end_line": 57,
           "signature": "fn vocab_size(&self) -> usize {"
         },
         {
           "name": "max_seq_len",
-          "qualified_name": "impl ModelConfig for Llama3Config::max_seq_len",
+          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::max_seq_len",
           "kind": "method",
-          "start_line": 58,
-          "end_line": 60,
+          "start_line": 59,
+          "end_line": 61,
           "signature": "fn max_seq_len(&self) -> usize {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.490845123Z"
+      "last_scanned_at": "2026-10-05T09:18:40.288592082Z"
     },
-    "crates/oxide-quant/src/ptq1_0.rs": {
-      "relative_path": "crates/oxide-quant/src/ptq1_0.rs",
-      "language": "rust",
-      "size_bytes": 3430,
-      "line_count": 111,
-      "content_hash": "a717f11ff7b257aa75a30b9bc867de7dfaed8eb5e0b5d3c6f6a0c12e02702dea",
+    "scripts/dump_golden_tensors.py": {
+      "relative_path": "scripts/dump_golden_tensors.py",
+      "language": "python",
+      "size_bytes": 1797,
+      "line_count": 50,
+      "content_hash": "f96aaa5cd6e3d4f1a788c3dff8f98335b892a7f6400897b4cbe41c9750197045",
       "symbols": [
         {
-          "name": "Ternary1_58Bit",
-          "qualified_name": "Ternary1_58Bit",
+          "name": "generate_synthetic_golden_fixtures",
+          "qualified_name": "generate_synthetic_golden_fixtures",
+          "kind": "function",
+          "start_line": 15,
+          "end_line": 47,
+          "signature": "def generate_synthetic_golden_fixtures(output_dir: str = \"fixtures/golden\"):"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.303450125Z"
+    },
+    "crates/oxide-cli/src/main.rs": {
+      "relative_path": "crates/oxide-cli/src/main.rs",
+      "language": "rust",
+      "size_bytes": 7851,
+      "line_count": 198,
+      "content_hash": "52c929754ca4446d8a3a11ebe7dae49cbba58ea4fcbcedbc3fa2b334c00d7a39",
+      "symbols": [
+        {
+          "name": "ModelArg",
+          "qualified_name": "ModelArg",
+          "kind": "enum",
+          "start_line": 18,
+          "end_line": 22,
+          "signature": "enum ModelArg {"
+        },
+        {
+          "name": "BackendArg",
+          "qualified_name": "BackendArg",
+          "kind": "enum",
+          "start_line": 25,
+          "end_line": 30,
+          "signature": "enum BackendArg {"
+        },
+        {
+          "name": "Cli",
+          "qualified_name": "Cli",
           "kind": "struct",
-          "start_line": 6,
-          "end_line": 6,
-          "signature": "pub struct Ternary1_58Bit;"
+          "start_line": 38,
+          "end_line": 57,
+          "signature": "struct Cli {"
+        },
+        {
+          "name": "main",
+          "qualified_name": "main",
+          "kind": "function",
+          "start_line": 60,
+          "end_line": 198,
+          "signature": "async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.290498908Z"
+    },
+    "crates/oxide-server/src/dfa.rs": {
+      "relative_path": "crates/oxide-server/src/dfa.rs",
+      "language": "rust",
+      "size_bytes": 3599,
+      "line_count": 106,
+      "content_hash": "d7aa550a5201a05c18f1f88166e7ea1f632523ad338029a5ecf242110c4a27d5",
+      "symbols": [
+        {
+          "name": "DFA_ERROR_STATE",
+          "qualified_name": "DFA_ERROR_STATE",
+          "kind": "constant",
+          "start_line": 3,
+          "end_line": 3,
+          "signature": "pub const DFA_ERROR_STATE: u32 = u32::MAX;"
+        },
+        {
+          "name": "DfaSchemaGrammar",
+          "qualified_name": "DfaSchemaGrammar",
+          "kind": "struct",
+          "start_line": 7,
+          "end_line": 11,
+          "signature": "pub struct DfaSchemaGrammar {"
+        },
+        {
+          "name": "new_simple_json_validator",
+          "qualified_name": "impl DfaSchemaGrammar::new_simple_json_validator",
+          "kind": "method",
+          "start_line": 16,
+          "end_line": 64,
+          "signature": "pub fn new_simple_json_validator() -> Self {"
+        },
+        {
+          "name": "transition",
+          "qualified_name": "impl DfaSchemaGrammar::transition",
+          "kind": "method",
+          "start_line": 67,
+          "end_line": 84,
+          "signature": "pub fn transition(&self, current_state: u32, byte: u8) -> Result<u32> {"
+        },
+        {
+          "name": "apply_dfa_mask",
+          "qualified_name": "impl DfaSchemaGrammar::apply_dfa_mask",
+          "kind": "method",
+          "start_line": 87,
+          "end_line": 105,
+          "signature": "pub fn apply_dfa_mask(&self, current_state: u32, token_bytes: &[Vec<u8>], logits: &mut [f32]) {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.300116148Z"
+    },
+    "crates/oxide-server/src/lib.rs": {
+      "relative_path": "crates/oxide-server/src/lib.rs",
+      "language": "rust",
+      "size_bytes": 3773,
+      "line_count": 129,
+      "content_hash": "c77e941468ed5ab5d0477004d5c4b1bb78e4f06982830b1647a679a94ce3d95d",
+      "symbols": [
+        {
+          "name": "dfa",
+          "qualified_name": "dfa",
+          "kind": "module",
+          "start_line": 21,
+          "end_line": 21,
+          "signature": "pub mod dfa;"
+        },
+        {
+          "name": "ChatCompletionRequest",
+          "qualified_name": "ChatCompletionRequest",
+          "kind": "struct",
+          "start_line": 40,
+          "end_line": 46,
+          "signature": "pub struct ChatCompletionRequest {"
+        },
+        {
+          "name": "ChatCompletionChunk",
+          "qualified_name": "ChatCompletionChunk",
+          "kind": "struct",
+          "start_line": 49,
+          "end_line": 56,
+          "signature": "pub struct ChatCompletionChunk {"
+        },
+        {
+          "name": "ServerState",
+          "qualified_name": "ServerState",
+          "kind": "struct",
+          "start_line": 59,
+          "end_line": 62,
+          "signature": "pub struct ServerState {"
+        },
+        {
+          "name": "create_router",
+          "qualified_name": "create_router",
+          "kind": "function",
+          "start_line": 64,
+          "end_line": 71,
+          "signature": "pub fn create_router(state: ServerState) -> Router {"
+        },
+        {
+          "name": "health_handler",
+          "qualified_name": "health_handler",
+          "kind": "function",
+          "start_line": 73,
+          "end_line": 75,
+          "signature": "async fn health_handler() -> &'static str {"
+        },
+        {
+          "name": "chat_completions_handler",
+          "qualified_name": "chat_completions_handler",
+          "kind": "function",
+          "start_line": 77,
+          "end_line": 118,
+          "signature": "async fn chat_completions_handler("
+        },
+        {
+          "name": "start_server",
+          "qualified_name": "start_server",
+          "kind": "function",
+          "start_line": 120,
+          "end_line": 129,
+          "signature": "pub async fn start_server("
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.299761141Z"
+    },
+    "crates/oxide-hardware/oxide-backend-tpu/src/lib.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-tpu/src/lib.rs",
+      "language": "rust",
+      "size_bytes": 3845,
+      "line_count": 140,
+      "content_hash": "965fd639cdff15a8b65662616e0bedcc7cb4e1747a96257bfdd989a7e42949e8",
+      "symbols": [
+        {
+          "name": "arch",
+          "qualified_name": "arch",
+          "kind": "module",
+          "start_line": 21,
+          "end_line": 21,
+          "signature": "pub mod arch;"
+        },
+        {
+          "name": "ici",
+          "qualified_name": "ici",
+          "kind": "module",
+          "start_line": 22,
+          "end_line": 22,
+          "signature": "pub mod ici;"
+        },
+        {
+          "name": "TpuEventHandle",
+          "qualified_name": "TpuEventHandle",
+          "kind": "struct",
+          "start_line": 34,
+          "end_line": 36,
+          "signature": "pub struct TpuEventHandle {"
+        },
+        {
+          "name": "TpuBackend",
+          "qualified_name": "TpuBackend",
+          "kind": "struct",
+          "start_line": 38,
+          "end_line": 44,
+          "signature": "pub struct TpuBackend {"
+        },
+        {
+          "name": "fmt",
+          "qualified_name": "impl fmt::Debug for TpuBackend::fmt",
+          "kind": "method",
+          "start_line": 47,
+          "end_line": 61,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+        },
+        {
+          "name": "new_with_profile",
+          "qualified_name": "impl TpuBackend::new_with_profile",
+          "kind": "method",
+          "start_line": 67,
+          "end_line": 84,
+          "signature": "pub fn new_with_profile("
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl TpuBackend::new",
+          "kind": "method",
+          "start_line": 87,
+          "end_line": 89,
+          "signature": "pub fn new(device_id: usize, max_slots: usize) -> Self {"
+        },
+        {
+          "name": "profile",
+          "qualified_name": "impl TpuBackend::profile",
+          "kind": "method",
+          "start_line": 92,
+          "end_line": 94,
+          "signature": "pub const fn profile(&self) -> &GpuDeviceProfile {"
+        },
+        {
+          "name": "execution_plan",
+          "qualified_name": "impl TpuBackend::execution_plan",
+          "kind": "method",
+          "start_line": 97,
+          "end_line": 99,
+          "signature": "pub const fn execution_plan(&self) -> &TpuExecutionPlan {"
+        },
+        {
+          "name": "device_id",
+          "qualified_name": "impl TpuBackend::device_id",
+          "kind": "method",
+          "start_line": 102,
+          "end_line": 104,
+          "signature": "pub const fn device_id(&self) -> usize {"
+        },
+        {
+          "name": "Event",
+          "qualified_name": "impl HardwareBackend for TpuBackend::Event",
+          "kind": "type",
+          "start_line": 108,
+          "end_line": 108,
+          "signature": "type Event = TpuEventHandle;"
+        },
+        {
+          "name": "dispatch_step_kernel",
+          "qualified_name": "impl HardwareBackend for TpuBackend::dispatch_step_kernel",
+          "kind": "method",
+          "start_line": 110,
+          "end_line": 122,
+          "signature": "fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {"
+        },
+        {
+          "name": "query_event_completed",
+          "qualified_name": "impl HardwareBackend for TpuBackend::query_event_completed",
+          "kind": "method",
+          "start_line": 124,
+          "end_line": 126,
+          "signature": "fn query_event_completed(&self, _event: Self::Event) -> bool {"
+        },
+        {
+          "name": "read_sampled_token_host",
+          "qualified_name": "impl HardwareBackend for TpuBackend::read_sampled_token_host",
+          "kind": "method",
+          "start_line": 128,
+          "end_line": 135,
+          "signature": "fn read_sampled_token_host(&self, slot_idx: u16) -> u32 {"
+        },
+        {
+          "name": "synchronize",
+          "qualified_name": "impl HardwareBackend for TpuBackend::synchronize",
+          "kind": "method",
+          "start_line": 137,
+          "end_line": 139,
+          "signature": "fn synchronize(&self) -> Result<()> {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.285959808Z"
+    },
+    "crates/oxide-server/tests/dfa_grammar_tests.rs": {
+      "relative_path": "crates/oxide-server/tests/dfa_grammar_tests.rs",
+      "language": "rust",
+      "size_bytes": 1086,
+      "line_count": 36,
+      "content_hash": "62fc25903465e26249a17e8d3a594c258c053e7c376d8e6d41fdab9ab81aa367",
+      "symbols": [
+        {
+          "name": "test_dfa_json_validator",
+          "qualified_name": "test_dfa_json_validator",
+          "kind": "function",
+          "start_line": 4,
+          "end_line": 19,
+          "signature": "fn test_dfa_json_validator() {"
+        },
+        {
+          "name": "test_dfa_logit_masking",
+          "qualified_name": "test_dfa_logit_masking",
+          "kind": "function",
+          "start_line": 22,
+          "end_line": 36,
+          "signature": "fn test_dfa_logit_masking() {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.299263657Z"
+    },
+    "crates/oxide-alloc/tests/static_arena_allocation_tests.rs": {
+      "relative_path": "crates/oxide-alloc/tests/static_arena_allocation_tests.rs",
+      "language": "rust",
+      "size_bytes": 2293,
+      "line_count": 68,
+      "content_hash": "902a40cb29f1ab7771334b9f3fee82d2527c316ea1fbc4178c6743648194360f",
+      "symbols": [
+        {
+          "name": "test_host_pinned_arena_allocation",
+          "qualified_name": "test_host_pinned_arena_allocation",
+          "kind": "function",
+          "start_line": 5,
+          "end_line": 24,
+          "signature": "fn test_host_pinned_arena_allocation() {"
+        },
+        {
+          "name": "test_device_memory_arena_slot_binding",
+          "qualified_name": "test_device_memory_arena_slot_binding",
+          "kind": "function",
+          "start_line": 27,
+          "end_line": 49,
+          "signature": "fn test_device_memory_arena_slot_binding() {"
+        },
+        {
+          "name": "test_transactional_speculative_rollback",
+          "qualified_name": "test_transactional_speculative_rollback",
+          "kind": "function",
+          "start_line": 52,
+          "end_line": 68,
+          "signature": "fn test_transactional_speculative_rollback() {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.290863413Z"
+    },
+    "crates/oxide-engine/src/engine.rs": {
+      "relative_path": "crates/oxide-engine/src/engine.rs",
+      "language": "rust",
+      "size_bytes": 1791,
+      "line_count": 56,
+      "content_hash": "692f26c93e574640412f74d8f585f64f7c8cd75bbb87fe3dbadacca6dd6f2e52",
+      "symbols": [
+        {
+          "name": "OxideEngine",
+          "qualified_name": "OxideEngine",
+          "kind": "struct",
+          "start_line": 8,
+          "end_line": 12,
+          "signature": "pub struct OxideEngine<B: HardwareBackend, M: ModelConfig, Q: QuantScheme> {"
+        },
+        {
+          "name": "fmt",
+          "qualified_name": "impl fmt::Debug for OxideEngine<B, M, Q>::fmt",
+          "kind": "method",
+          "start_line": 15,
+          "end_line": 20,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl OxideEngine<B, M, Q>::new",
+          "kind": "method",
+          "start_line": 25,
+          "end_line": 31,
+          "signature": "pub const fn new(backend: B, config: M) -> Self {"
+        },
+        {
+          "name": "step_monomorphized",
+          "qualified_name": "impl OxideEngine<B, M, Q>::step_monomorphized",
+          "kind": "method",
+          "start_line": 35,
+          "end_line": 50,
+          "signature": "pub fn step_monomorphized(&mut self, cmd: &StepCommand) -> Result<StepCompletion> {"
+        },
+        {
+          "name": "config",
+          "qualified_name": "impl OxideEngine<B, M, Q>::config",
+          "kind": "method",
+          "start_line": 53,
+          "end_line": 55,
+          "signature": "pub const fn config(&self) -> &M {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.282853796Z"
+    },
+    "crates/oxide-quant/src/cq2.rs": {
+      "relative_path": "crates/oxide-quant/src/cq2.rs",
+      "language": "rust",
+      "size_bytes": 339,
+      "line_count": 17,
+      "content_hash": "bb3178db3aa950453312538173cc3cf731df55c6d8a503d749666649ced8c945",
+      "symbols": [
+        {
+          "name": "NeedleCQ2",
+          "qualified_name": "NeedleCQ2",
+          "kind": "struct",
+          "start_line": 5,
+          "end_line": 5,
+          "signature": "pub struct NeedleCQ2;"
         },
         {
           "name": "bits_per_weight",
-          "qualified_name": "impl QuantScheme for Ternary1_58Bit::bits_per_weight",
+          "qualified_name": "impl QuantScheme for NeedleCQ2::bits_per_weight",
           "kind": "method",
-          "start_line": 10,
-          "end_line": 12,
+          "start_line": 9,
+          "end_line": 11,
           "signature": "fn bits_per_weight() -> f32 {"
         },
         {
           "name": "block_size",
-          "qualified_name": "impl QuantScheme for Ternary1_58Bit::block_size",
+          "qualified_name": "impl QuantScheme for NeedleCQ2::block_size",
           "kind": "method",
-          "start_line": 15,
-          "end_line": 17,
+          "start_line": 14,
+          "end_line": 16,
           "signature": "fn block_size() -> usize {"
-        },
-        {
-          "name": "TernaryBlock128",
-          "qualified_name": "TernaryBlock128",
-          "kind": "struct",
-          "start_line": 24,
-          "end_line": 27,
-          "signature": "pub struct TernaryBlock128 {"
-        },
-        {
-          "name": "unpack_sign",
-          "qualified_name": "impl TernaryBlock128::unpack_sign",
-          "kind": "method",
-          "start_line": 34,
-          "end_line": 42,
-          "signature": "pub fn unpack_sign(&self, idx: usize) -> f32 {"
-        },
-        {
-          "name": "scale",
-          "qualified_name": "impl TernaryBlock128::scale",
-          "kind": "method",
-          "start_line": 47,
-          "end_line": 49,
-          "signature": "pub fn scale(&self) -> f32 {"
-        },
-        {
-          "name": "dot_product_128",
-          "qualified_name": "impl TernaryBlock128::dot_product_128",
-          "kind": "method",
-          "start_line": 53,
-          "end_line": 77,
-          "signature": "pub fn dot_product_128(&self, activations: &[f32; 128]) -> f32 {"
-        },
-        {
-          "name": "f16_to_f32",
-          "qualified_name": "f16_to_f32",
-          "kind": "function",
-          "start_line": 83,
-          "end_line": 111,
-          "signature": "pub fn f16_to_f32(h: u16) -> f32 {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.494422478Z"
+      "last_scanned_at": "2026-10-05T09:18:40.292202703Z"
+    },
+    "crates/oxide-quant/src/nvfp4.rs": {
+      "relative_path": "crates/oxide-quant/src/nvfp4.rs",
+      "language": "rust",
+      "size_bytes": 341,
+      "line_count": 17,
+      "content_hash": "d371e9cc422554fa0184433457375fab8878497fcc337660f68d4e9a1ab20119",
+      "symbols": [
+        {
+          "name": "NvFp4",
+          "qualified_name": "NvFp4",
+          "kind": "struct",
+          "start_line": 5,
+          "end_line": 5,
+          "signature": "pub struct NvFp4;"
+        },
+        {
+          "name": "bits_per_weight",
+          "qualified_name": "impl QuantScheme for NvFp4::bits_per_weight",
+          "kind": "method",
+          "start_line": 9,
+          "end_line": 11,
+          "signature": "fn bits_per_weight() -> f32 {"
+        },
+        {
+          "name": "block_size",
+          "qualified_name": "impl QuantScheme for NvFp4::block_size",
+          "kind": "method",
+          "start_line": 14,
+          "end_line": 16,
+          "signature": "fn block_size() -> usize {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.292250195Z"
+    },
+    "crates/oxide-core/src/hardware.rs": {
+      "relative_path": "crates/oxide-core/src/hardware.rs",
+      "language": "rust",
+      "size_bytes": 49601,
+      "line_count": 1187,
+      "content_hash": "221622f36552610e6aaedb0e1c736383d1637183265783d2eff1ae6efd8dd81e",
+      "symbols": [
+        {
+          "name": "GpuArchitecture",
+          "qualified_name": "GpuArchitecture",
+          "kind": "enum",
+          "start_line": 5,
+          "end_line": 39,
+          "signature": "pub enum GpuArchitecture {"
+        },
+        {
+          "name": "ComputeCapability",
+          "qualified_name": "ComputeCapability",
+          "kind": "struct",
+          "start_line": 43,
+          "end_line": 46,
+          "signature": "pub struct ComputeCapability {"
+        },
+        {
+          "name": "SM_70_VOLTA",
+          "qualified_name": "impl ComputeCapability::SM_70_VOLTA",
+          "kind": "constant",
+          "start_line": 50,
+          "end_line": 50,
+          "signature": "pub const SM_70_VOLTA: Self = Self { major: 7, minor: 0 };"
+        },
+        {
+          "name": "SM_75_TURING",
+          "qualified_name": "impl ComputeCapability::SM_75_TURING",
+          "kind": "constant",
+          "start_line": 51,
+          "end_line": 51,
+          "signature": "pub const SM_75_TURING: Self = Self { major: 7, minor: 5 };"
+        },
+        {
+          "name": "SM_80_AMPERE_DC",
+          "qualified_name": "impl ComputeCapability::SM_80_AMPERE_DC",
+          "kind": "constant",
+          "start_line": 52,
+          "end_line": 52,
+          "signature": "pub const SM_80_AMPERE_DC: Self = Self { major: 8, minor: 0 };"
+        },
+        {
+          "name": "SM_86_AMPERE_CLIENT",
+          "qualified_name": "impl ComputeCapability::SM_86_AMPERE_CLIENT",
+          "kind": "constant",
+          "start_line": 53,
+          "end_line": 53,
+          "signature": "pub const SM_86_AMPERE_CLIENT: Self = Self { major: 8, minor: 6 };"
+        },
+        {
+          "name": "SM_87_ORIN",
+          "qualified_name": "impl ComputeCapability::SM_87_ORIN",
+          "kind": "constant",
+          "start_line": 54,
+          "end_line": 54,
+          "signature": "pub const SM_87_ORIN: Self = Self { major: 8, minor: 7 };"
+        },
+        {
+          "name": "SM_89_ADA",
+          "qualified_name": "impl ComputeCapability::SM_89_ADA",
+          "kind": "constant",
+          "start_line": 55,
+          "end_line": 55,
+          "signature": "pub const SM_89_ADA: Self = Self { major: 8, minor: 9 };"
+        },
+        {
+          "name": "SM_90_HOPPER",
+          "qualified_name": "impl ComputeCapability::SM_90_HOPPER",
+          "kind": "constant",
+          "start_line": 56,
+          "end_line": 56,
+          "signature": "pub const SM_90_HOPPER: Self = Self { major: 9, minor: 0 };"
+        },
+        {
+          "name": "SM_100_BLACKWELL",
+          "qualified_name": "impl ComputeCapability::SM_100_BLACKWELL",
+          "kind": "constant",
+          "start_line": 57,
+          "end_line": 60,
+          "signature": "pub const SM_100_BLACKWELL: Self = Self {"
+        },
+        {
+          "name": "SM_120_BLACKWELL_CLIENT",
+          "qualified_name": "impl ComputeCapability::SM_120_BLACKWELL_CLIENT",
+          "kind": "constant",
+          "start_line": 61,
+          "end_line": 64,
+          "signature": "pub const SM_120_BLACKWELL_CLIENT: Self = Self {"
+        },
+        {
+          "name": "GFX_908_CDNA1",
+          "qualified_name": "impl ComputeCapability::GFX_908_CDNA1",
+          "kind": "constant",
+          "start_line": 67,
+          "end_line": 67,
+          "signature": "pub const GFX_908_CDNA1: Self = Self { major: 9, minor: 8 };"
+        },
+        {
+          "name": "GFX_90A_CDNA2",
+          "qualified_name": "impl ComputeCapability::GFX_90A_CDNA2",
+          "kind": "constant",
+          "start_line": 68,
+          "end_line": 71,
+          "signature": "pub const GFX_90A_CDNA2: Self = Self {"
+        },
+        {
+          "name": "GFX_942_CDNA3",
+          "qualified_name": "impl ComputeCapability::GFX_942_CDNA3",
+          "kind": "constant",
+          "start_line": 72,
+          "end_line": 75,
+          "signature": "pub const GFX_942_CDNA3: Self = Self {"
+        },
+        {
+          "name": "GFX_950_CDNA4",
+          "qualified_name": "impl ComputeCapability::GFX_950_CDNA4",
+          "kind": "constant",
+          "start_line": 76,
+          "end_line": 79,
+          "signature": "pub const GFX_950_CDNA4: Self = Self {"
+        },
+        {
+          "name": "GFX_1030_RDNA2",
+          "qualified_name": "impl ComputeCapability::GFX_1030_RDNA2",
+          "kind": "constant",
+          "start_line": 80,
+          "end_line": 83,
+          "signature": "pub const GFX_1030_RDNA2: Self = Self {"
+        },
+        {
+          "name": "GFX_1100_RDNA3",
+          "qualified_name": "impl ComputeCapability::GFX_1100_RDNA3",
+          "kind": "constant",
+          "start_line": 84,
+          "end_line": 87,
+          "signature": "pub const GFX_1100_RDNA3: Self = Self {"
+        },
+        {
+          "name": "GFX_1150_RDNA3_5",
+          "qualified_name": "impl ComputeCapability::GFX_1150_RDNA3_5",
+          "kind": "constant",
+          "start_line": 88,
+          "end_line": 91,
+          "signature": "pub const GFX_1150_RDNA3_5: Self = Self {"
+        },
+        {
+          "name": "GFX_1151_RDNA3_5",
+          "qualified_name": "impl ComputeCapability::GFX_1151_RDNA3_5",
+          "kind": "constant",
+          "start_line": 92,
+          "end_line": 95,
+          "signature": "pub const GFX_1151_RDNA3_5: Self = Self {"
+        },
+        {
+          "name": "GFX_1200_RDNA4",
+          "qualified_name": "impl ComputeCapability::GFX_1200_RDNA4",
+          "kind": "constant",
+          "start_line": 96,
+          "end_line": 99,
+          "signature": "pub const GFX_1200_RDNA4: Self = Self {"
+        },
+        {
+          "name": "TPU_V2",
+          "qualified_name": "impl ComputeCapability::TPU_V2",
+          "kind": "constant",
+          "start_line": 102,
+          "end_line": 105,
+          "signature": "pub const TPU_V2: Self = Self {"
+        },
+        {
+          "name": "TPU_V3",
+          "qualified_name": "impl ComputeCapability::TPU_V3",
+          "kind": "constant",
+          "start_line": 106,
+          "end_line": 109,
+          "signature": "pub const TPU_V3: Self = Self {"
+        },
+        {
+          "name": "TPU_V4",
+          "qualified_name": "impl ComputeCapability::TPU_V4",
+          "kind": "constant",
+          "start_line": 110,
+          "end_line": 113,
+          "signature": "pub const TPU_V4: Self = Self {"
+        },
+        {
+          "name": "TPU_V5E",
+          "qualified_name": "impl ComputeCapability::TPU_V5E",
+          "kind": "constant",
+          "start_line": 114,
+          "end_line": 117,
+          "signature": "pub const TPU_V5E: Self = Self {"
+        },
+        {
+          "name": "TPU_V5P",
+          "qualified_name": "impl ComputeCapability::TPU_V5P",
+          "kind": "constant",
+          "start_line": 118,
+          "end_line": 121,
+          "signature": "pub const TPU_V5P: Self = Self {"
+        },
+        {
+          "name": "TPU_V6E_TRILLIUM",
+          "qualified_name": "impl ComputeCapability::TPU_V6E_TRILLIUM",
+          "kind": "constant",
+          "start_line": 122,
+          "end_line": 125,
+          "signature": "pub const TPU_V6E_TRILLIUM: Self = Self {"
+        },
+        {
+          "name": "EDGE_TPU",
+          "qualified_name": "impl ComputeCapability::EDGE_TPU",
+          "kind": "constant",
+          "start_line": 126,
+          "end_line": 129,
+          "signature": "pub const EDGE_TPU: Self = Self {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl ComputeCapability::new",
+          "kind": "method",
+          "start_line": 132,
+          "end_line": 134,
+          "signature": "pub const fn new(major: u32, minor: u32) -> Self {"
+        },
+        {
+          "name": "architecture",
+          "qualified_name": "impl ComputeCapability::architecture",
+          "kind": "method",
+          "start_line": 137,
+          "end_line": 162,
+          "signature": "pub const fn architecture(self) -> GpuArchitecture {"
+        },
+        {
+          "name": "fmt",
+          "qualified_name": "impl fmt::Display for ComputeCapability::fmt",
+          "kind": "method",
+          "start_line": 166,
+          "end_line": 190,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+        },
+        {
+          "name": "HardwareFormFactor",
+          "qualified_name": "HardwareFormFactor",
+          "kind": "enum",
+          "start_line": 195,
+          "end_line": 208,
+          "signature": "pub enum HardwareFormFactor {"
+        },
+        {
+          "name": "MemoryTechnology",
+          "qualified_name": "MemoryTechnology",
+          "kind": "enum",
+          "start_line": 212,
+          "end_line": 224,
+          "signature": "pub enum MemoryTechnology {"
+        },
+        {
+          "name": "TensorCoreGeneration",
+          "qualified_name": "TensorCoreGeneration",
+          "kind": "enum",
+          "start_line": 228,
+          "end_line": 244,
+          "signature": "pub enum TensorCoreGeneration {"
+        },
+        {
+          "name": "GpuDeviceProfile",
+          "qualified_name": "GpuDeviceProfile",
+          "kind": "struct",
+          "start_line": 248,
+          "end_line": 269,
+          "signature": "pub struct GpuDeviceProfile {"
+        },
+        {
+          "name": "from_known_device_name",
+          "qualified_name": "impl GpuDeviceProfile::from_known_device_name",
+          "kind": "method",
+          "start_line": 274,
+          "end_line": 1155,
+          "signature": "pub fn from_known_device_name(name: &str) -> Option<Self> {"
+        },
+        {
+          "name": "optimal_gemv_threads",
+          "qualified_name": "impl GpuDeviceProfile::optimal_gemv_threads",
+          "kind": "method",
+          "start_line": 1159,
+          "end_line": 1186,
+          "signature": "pub const fn optimal_gemv_threads(&self) -> u32 {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.298943082Z"
+    },
+    "crates/oxide-core/src/dag.rs": {
+      "relative_path": "crates/oxide-core/src/dag.rs",
+      "language": "rust",
+      "size_bytes": 1932,
+      "line_count": 76,
+      "content_hash": "81d6239a8f79486cfb4c026ef94ba4d4ce7ab51a85146b893b6eb20a52e4f90f",
+      "symbols": [
+        {
+          "name": "PhysicalBlockId",
+          "qualified_name": "PhysicalBlockId",
+          "kind": "type",
+          "start_line": 5,
+          "end_line": 5,
+          "signature": "pub type PhysicalBlockId = u32;"
+        },
+        {
+          "name": "TreeNode",
+          "qualified_name": "TreeNode",
+          "kind": "struct",
+          "start_line": 9,
+          "end_line": 15,
+          "signature": "pub struct TreeNode {"
+        },
+        {
+          "name": "new_root",
+          "qualified_name": "impl TreeNode::new_root",
+          "kind": "method",
+          "start_line": 19,
+          "end_line": 27,
+          "signature": "pub fn new_root(node_id: u64, token_id: u32, block_id: PhysicalBlockId) -> Arc<Self> {"
+        },
+        {
+          "name": "create_child",
+          "qualified_name": "impl TreeNode::create_child",
+          "kind": "method",
+          "start_line": 30,
+          "end_line": 44,
+          "signature": "pub fn create_child("
+        },
+        {
+          "name": "SharedPhysicalBlock",
+          "qualified_name": "SharedPhysicalBlock",
+          "kind": "struct",
+          "start_line": 49,
+          "end_line": 52,
+          "signature": "pub struct SharedPhysicalBlock {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl SharedPhysicalBlock::new",
+          "kind": "method",
+          "start_line": 56,
+          "end_line": 61,
+          "signature": "pub const fn new(block_id: PhysicalBlockId) -> Self {"
+        },
+        {
+          "name": "fork",
+          "qualified_name": "impl SharedPhysicalBlock::fork",
+          "kind": "method",
+          "start_line": 65,
+          "end_line": 67,
+          "signature": "pub fn fork(&self) {"
+        },
+        {
+          "name": "release",
+          "qualified_name": "impl SharedPhysicalBlock::release",
+          "kind": "method",
+          "start_line": 71,
+          "end_line": 75,
+          "signature": "pub fn release(&self, free_list: &SegQueue<PhysicalBlockId>) {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.293812700Z"
+    },
+    "crates/oxide-engine/src/pipeline.rs": {
+      "relative_path": "crates/oxide-engine/src/pipeline.rs",
+      "language": "rust",
+      "size_bytes": 2393,
+      "line_count": 48,
+      "content_hash": "52cd96b6c1726d2de00272c34165788d36a09c240fbbeab9c2801a4dfc3a872b",
+      "symbols": [
+        {
+          "name": "SpecializedPipeline",
+          "qualified_name": "SpecializedPipeline",
+          "kind": "enum",
+          "start_line": 18,
+          "end_line": 29,
+          "signature": "pub enum SpecializedPipeline {"
+        },
+        {
+          "name": "step",
+          "qualified_name": "impl SpecializedPipeline::step",
+          "kind": "method",
+          "start_line": 34,
+          "end_line": 47,
+          "signature": "pub fn step(&mut self, cmd: &StepCommand) -> Result<StepCompletion> {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.282613958Z"
+    },
+    "crates/oxide-quant/tests/ptq1_0_tests.rs": {
+      "relative_path": "crates/oxide-quant/tests/ptq1_0_tests.rs",
+      "language": "rust",
+      "size_bytes": 1274,
+      "line_count": 39,
+      "content_hash": "f1522f07f5f4b5111a90962eacd6444699784d887a1de56e2a508d16313f26ba",
+      "symbols": [
+        {
+          "name": "test_f16_conversion",
+          "qualified_name": "test_f16_conversion",
+          "kind": "function",
+          "start_line": 4,
+          "end_line": 11,
+          "signature": "fn test_f16_conversion() {"
+        },
+        {
+          "name": "test_ternary_block_unpack_and_dot_product",
+          "qualified_name": "test_ternary_block_unpack_and_dot_product",
+          "kind": "function",
+          "start_line": 14,
+          "end_line": 39,
+          "signature": "fn test_ternary_block_unpack_and_dot_product() {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.292018669Z"
     },
     "crates/oxide-core/src/typestate.rs": {
       "relative_path": "crates/oxide-core/src/typestate.rs",
@@ -1340,211 +2812,109 @@
           "signature": "pub fn terminate(self) -> SequenceRequest<'arena, Terminal> {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.496437337Z"
+      "last_scanned_at": "2026-10-05T09:18:40.294531025Z"
     },
-    "crates/oxide-core/tests/golden_tensor_verification.rs": {
-      "relative_path": "crates/oxide-core/tests/golden_tensor_verification.rs",
-      "language": "rust",
-      "size_bytes": 1870,
-      "line_count": 63,
-      "content_hash": "f968dae9fb513625c1eba001722d0b5271afd64c8f5966f19c26da685b86ba3b",
+    "crates/oxide-engine/Cargo.toml": {
+      "relative_path": "crates/oxide-engine/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 544,
+      "line_count": 21,
+      "content_hash": "7ee7e1d893ec427b3874325dd52239ef77abcca68848b303ad09271f5693fc79",
       "symbols": [
         {
-          "name": "chebyshev_distance",
-          "qualified_name": "chebyshev_distance",
-          "kind": "function",
-          "start_line": 4,
-          "end_line": 10,
-          "signature": "pub fn chebyshev_distance(u: &[f32], v: &[f32]) -> f32 {"
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
         },
         {
-          "name": "cosine_similarity",
-          "qualified_name": "cosine_similarity",
-          "kind": "function",
-          "start_line": 13,
-          "end_line": 30,
-          "signature": "pub fn cosine_similarity(u: &[f32], v: &[f32]) -> f32 {"
-        },
-        {
-          "name": "test_device_ptr_invariants",
-          "qualified_name": "test_device_ptr_invariants",
-          "kind": "function",
-          "start_line": 33,
-          "end_line": 45,
-          "signature": "fn test_device_ptr_invariants() {"
-        },
-        {
-          "name": "test_golden_tensor_similarity_metrics",
-          "qualified_name": "test_golden_tensor_similarity_metrics",
-          "kind": "function",
-          "start_line": 48,
-          "end_line": 63,
-          "signature": "fn test_golden_tensor_similarity_metrics() {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.494927083Z"
-    },
-    "crates/oxide-hardware/oxide-backend-cuda/src/arch.rs": {
-      "relative_path": "crates/oxide-hardware/oxide-backend-cuda/src/arch.rs",
-      "language": "rust",
-      "size_bytes": 2495,
-      "line_count": 67,
-      "content_hash": "44a4abe923fd6990db72c79fbe1b2525f414100e53071f83d1104927042ff7fb",
-      "symbols": [
-        {
-          "name": "KernelExecutionPlan",
-          "qualified_name": "KernelExecutionPlan",
-          "kind": "struct",
-          "start_line": 5,
-          "end_line": 13,
-          "signature": "pub struct KernelExecutionPlan {"
-        },
-        {
-          "name": "for_profile",
-          "qualified_name": "impl KernelExecutionPlan::for_profile",
-          "kind": "method",
-          "start_line": 18,
-          "end_line": 66,
-          "signature": "pub const fn for_profile(profile: &GpuDeviceProfile) -> Self {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.489701746Z"
-    },
-    "crates/oxide-models/tests/monarch_engram_tests.rs": {
-      "relative_path": "crates/oxide-models/tests/monarch_engram_tests.rs",
-      "language": "rust",
-      "size_bytes": 1244,
-      "line_count": 45,
-      "content_hash": "f68db07e221cbf5d85c1c5d851d0ee417cfd1849f4a46567d47357428ab68969",
-      "symbols": [
-        {
-          "name": "test_monarch_mlp_forward",
-          "qualified_name": "test_monarch_mlp_forward",
-          "kind": "function",
-          "start_line": 6,
-          "end_line": 18,
-          "signature": "fn test_monarch_mlp_forward() {"
-        },
-        {
-          "name": "test_engram_gather_table",
-          "qualified_name": "test_engram_gather_table",
-          "kind": "function",
-          "start_line": 21,
-          "end_line": 33,
-          "signature": "fn test_engram_gather_table() {"
-        },
-        {
-          "name": "test_needle_subnetwork_depth_ladder",
-          "qualified_name": "test_needle_subnetwork_depth_ladder",
-          "kind": "function",
-          "start_line": 36,
-          "end_line": 45,
-          "signature": "fn test_needle_subnetwork_depth_ladder() {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.490449749Z"
-    },
-    "crates/oxide-quant/tests/ptq1_0_tests.rs": {
-      "relative_path": "crates/oxide-quant/tests/ptq1_0_tests.rs",
-      "language": "rust",
-      "size_bytes": 1274,
-      "line_count": 39,
-      "content_hash": "f1522f07f5f4b5111a90962eacd6444699784d887a1de56e2a508d16313f26ba",
-      "symbols": [
-        {
-          "name": "test_f16_conversion",
-          "qualified_name": "test_f16_conversion",
-          "kind": "function",
-          "start_line": 4,
-          "end_line": 11,
-          "signature": "fn test_f16_conversion() {"
-        },
-        {
-          "name": "test_ternary_block_unpack_and_dot_product",
-          "qualified_name": "test_ternary_block_unpack_and_dot_product",
-          "kind": "function",
-          "start_line": 14,
-          "end_line": 39,
-          "signature": "fn test_ternary_block_unpack_and_dot_product() {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.493750462Z"
-    },
-    "crates/oxide-engine/src/engine.rs": {
-      "relative_path": "crates/oxide-engine/src/engine.rs",
-      "language": "rust",
-      "size_bytes": 1791,
-      "line_count": 56,
-      "content_hash": "692f26c93e574640412f74d8f585f64f7c8cd75bbb87fe3dbadacca6dd6f2e52",
-      "symbols": [
-        {
-          "name": "OxideEngine",
-          "qualified_name": "OxideEngine",
-          "kind": "struct",
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
           "start_line": 8,
-          "end_line": 12,
-          "signature": "pub struct OxideEngine<B: HardwareBackend, M: ModelConfig, Q: QuantScheme> {"
-        },
-        {
-          "name": "fmt",
-          "qualified_name": "impl fmt::Debug for OxideEngine<B, M, Q>::fmt",
-          "kind": "method",
-          "start_line": 15,
-          "end_line": 20,
-          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl OxideEngine<B, M, Q>::new",
-          "kind": "method",
-          "start_line": 25,
-          "end_line": 31,
-          "signature": "pub const fn new(backend: B, config: M) -> Self {"
-        },
-        {
-          "name": "step_monomorphized",
-          "qualified_name": "impl OxideEngine<B, M, Q>::step_monomorphized",
-          "kind": "method",
-          "start_line": 35,
-          "end_line": 50,
-          "signature": "pub fn step_monomorphized(&mut self, cmd: &StepCommand) -> Result<StepCompletion> {"
-        },
-        {
-          "name": "config",
-          "qualified_name": "impl OxideEngine<B, M, Q>::config",
-          "kind": "method",
-          "start_line": 53,
-          "end_line": 55,
-          "signature": "pub const fn config(&self) -> &M {"
+          "end_line": 8,
+          "signature": "[dependencies]"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.487921973Z"
+      "last_scanned_at": "2026-10-05T09:18:40.282878729Z"
     },
-    "crates/oxide-engine/src/lib.rs": {
-      "relative_path": "crates/oxide-engine/src/lib.rs",
-      "language": "rust",
-      "size_bytes": 603,
-      "line_count": 25,
-      "content_hash": "d7dff341a4157eb1943a0fb76d8b5d697431bf102a7af3c9aaf8666243d4f565",
+    "crates/oxide-hardware/oxide-backend-cuda/Cargo.toml": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-cuda/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 318,
+      "line_count": 14,
+      "content_hash": "f3fe36910ba602f0355f6019577a2815343a8001c4a48f0bef6bc8bb97b8d9bc",
       "symbols": [
         {
-          "name": "engine",
-          "qualified_name": "engine",
+          "name": "package",
+          "qualified_name": "[package]",
           "kind": "module",
-          "start_line": 21,
-          "end_line": 21,
-          "signature": "pub mod engine;"
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
         },
         {
-          "name": "pipeline",
-          "qualified_name": "pipeline",
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
           "kind": "module",
-          "start_line": 22,
-          "end_line": 22,
-          "signature": "pub mod pipeline;"
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.487494543Z"
+      "last_scanned_at": "2026-10-05T09:18:40.287624422Z"
+    },
+    "crates/oxide-core/src/traits.rs": {
+      "relative_path": "crates/oxide-core/src/traits.rs",
+      "language": "rust",
+      "size_bytes": 1891,
+      "line_count": 56,
+      "content_hash": "4ab57a50fab7dc3142877bc6da4b5d038c68e63b1f43d883b9ba4a7f4f8b9a7e",
+      "symbols": [
+        {
+          "name": "HardwareBackend",
+          "qualified_name": "HardwareBackend",
+          "kind": "trait",
+          "start_line": 7,
+          "end_line": 21,
+          "signature": "pub trait HardwareBackend: Send + Sync + 'static + Debug {"
+        },
+        {
+          "name": "ModelConfig",
+          "qualified_name": "ModelConfig",
+          "kind": "trait",
+          "start_line": 24,
+          "end_line": 33,
+          "signature": "pub trait ModelConfig: Send + Sync + 'static + Debug + Clone {"
+        },
+        {
+          "name": "QuantScheme",
+          "qualified_name": "QuantScheme",
+          "kind": "trait",
+          "start_line": 36,
+          "end_line": 39,
+          "signature": "pub trait QuantScheme: Send + Sync + 'static + Debug + Copy {"
+        },
+        {
+          "name": "OpticalComputeFabric",
+          "qualified_name": "OpticalComputeFabric",
+          "kind": "trait",
+          "start_line": 42,
+          "end_line": 53,
+          "signature": "pub trait OpticalComputeFabric: HardwareBackend {"
+        },
+        {
+          "name": "HardwareSupports",
+          "qualified_name": "HardwareSupports",
+          "kind": "trait",
+          "start_line": 56,
+          "end_line": 56,
+          "signature": "pub trait HardwareSupports<B: HardwareBackend, M: ModelConfig> {}"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.293614419Z"
     },
     "crates/oxide-hardware/oxide-backend-cuda/tests/gpu_topology_tests.rs": {
       "relative_path": "crates/oxide-hardware/oxide-backend-cuda/tests/gpu_topology_tests.rs",
@@ -1586,59 +2956,410 @@
           "signature": "fn test_cuda_backend_autonomic_plan_dispatch() {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.488944244Z"
+      "last_scanned_at": "2026-10-05T09:18:40.286834858Z"
     },
-    "crates/oxide-models/src/manifest.rs": {
-      "relative_path": "crates/oxide-models/src/manifest.rs",
+    "fixtures/golden/manifest.json": {
+      "relative_path": "fixtures/golden/manifest.json",
+      "language": "json",
+      "size_bytes": 257,
+      "line_count": 13,
+      "content_hash": "68f8ebdc9fea4edbd7c541ae6e17b14ec802f90759701d62a29153baef345183",
+      "symbols": [],
+      "last_scanned_at": "2026-10-05T09:18:40.300198073Z"
+    },
+    "crates/oxide-hardware/oxide-backend-metal/Cargo.toml": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-metal/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 319,
+      "line_count": 14,
+      "content_hash": "2d8293d1c28918581ee4ab78871037ad3a2586f7d20245a700e2643355fce87c",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.284773682Z"
+    },
+    "crates/oxide-alloc/src/transactional.rs": {
+      "relative_path": "crates/oxide-alloc/src/transactional.rs",
       "language": "rust",
-      "size_bytes": 2324,
-      "line_count": 55,
-      "content_hash": "87b9813977ab9ea6e387b3ca8ed80f51e3a7e406c7707ac7f0201df2c43f704a",
+      "size_bytes": 1958,
+      "line_count": 67,
+      "content_hash": "3c5695f18b8b24613004d2dce6b4e3cbb17bb1915a86a5dcd2a43144c7606c0d",
       "symbols": [
         {
-          "name": "OxideModelHeader",
-          "qualified_name": "OxideModelHeader",
+          "name": "TransactionalBlockTable",
+          "qualified_name": "TransactionalBlockTable",
           "kind": "struct",
-          "start_line": 10,
-          "end_line": 29,
-          "signature": "pub struct OxideModelHeader {"
+          "start_line": 4,
+          "end_line": 8,
+          "signature": "pub struct TransactionalBlockTable {"
         },
         {
-          "name": "OXIDE_MAGIC",
-          "qualified_name": "OXIDE_MAGIC",
-          "kind": "constant",
-          "start_line": 31,
-          "end_line": 31,
-          "signature": "pub const OXIDE_MAGIC: &[u8; 8] = b\"OXIDEMOD\";"
-        },
-        {
-          "name": "open_mmap",
-          "qualified_name": "impl OxideModelHeader::open_mmap",
+          "name": "fmt",
+          "qualified_name": "impl fmt::Debug for TransactionalBlockTable::fmt",
           "kind": "method",
-          "start_line": 35,
-          "end_line": 54,
-          "signature": "pub fn open_mmap<P: AsRef<Path>>(path: P) -> Result<(Self, memmap2::Mmap)> {"
+          "start_line": 11,
+          "end_line": 17,
+          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl TransactionalBlockTable::new",
+          "kind": "method",
+          "start_line": 22,
+          "end_line": 28,
+          "signature": "pub const fn new(block_size: usize) -> Self {"
+        },
+        {
+          "name": "push_block",
+          "qualified_name": "impl TransactionalBlockTable::push_block",
+          "kind": "method",
+          "start_line": 31,
+          "end_line": 33,
+          "signature": "pub fn push_block(&mut self, block_id: u32) {"
+        },
+        {
+          "name": "commit_speculation",
+          "qualified_name": "impl TransactionalBlockTable::commit_speculation",
+          "kind": "method",
+          "start_line": 36,
+          "end_line": 38,
+          "signature": "pub fn commit_speculation(&mut self, accepted_tokens: usize) {"
+        },
+        {
+          "name": "rollback",
+          "qualified_name": "impl TransactionalBlockTable::rollback",
+          "kind": "method",
+          "start_line": 42,
+          "end_line": 51,
+          "signature": "pub fn rollback(&mut self, accepted_tokens: usize, _total_speculated: usize) {"
+        },
+        {
+          "name": "physical_blocks",
+          "qualified_name": "impl TransactionalBlockTable::physical_blocks",
+          "kind": "method",
+          "start_line": 54,
+          "end_line": 56,
+          "signature": "pub fn physical_blocks(&self) -> &[u32] {"
+        },
+        {
+          "name": "active_tokens",
+          "qualified_name": "impl TransactionalBlockTable::active_tokens",
+          "kind": "method",
+          "start_line": 59,
+          "end_line": 61,
+          "signature": "pub const fn active_tokens(&self) -> usize {"
+        },
+        {
+          "name": "block_size",
+          "qualified_name": "impl TransactionalBlockTable::block_size",
+          "kind": "method",
+          "start_line": 64,
+          "end_line": 66,
+          "signature": "pub const fn block_size(&self) -> usize {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.491708295Z"
+      "last_scanned_at": "2026-10-05T09:18:40.291189924Z"
     },
-    "scripts/dump_golden_tensors.py": {
-      "relative_path": "scripts/dump_golden_tensors.py",
-      "language": "python",
-      "size_bytes": 1797,
-      "line_count": 50,
-      "content_hash": "f96aaa5cd6e3d4f1a788c3dff8f98335b892a7f6400897b4cbe41c9750197045",
+    "crates/oxide-hardware/oxide-backend-rocm/src/arch.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-rocm/src/arch.rs",
+      "language": "rust",
+      "size_bytes": 3505,
+      "line_count": 92,
+      "content_hash": "b6ce03d3453a2adcb573dff1f4eb2cef26635e3d209c015d60b1ca0fd00aa55b",
       "symbols": [
         {
-          "name": "generate_synthetic_golden_fixtures",
-          "qualified_name": "generate_synthetic_golden_fixtures",
-          "kind": "function",
-          "start_line": 15,
-          "end_line": 47,
-          "signature": "def generate_synthetic_golden_fixtures(output_dir: str = \"fixtures/golden\"):"
+          "name": "RocmExecutionPlan",
+          "qualified_name": "RocmExecutionPlan",
+          "kind": "struct",
+          "start_line": 7,
+          "end_line": 17,
+          "signature": "pub struct RocmExecutionPlan {"
+        },
+        {
+          "name": "for_profile",
+          "qualified_name": "impl RocmExecutionPlan::for_profile",
+          "kind": "method",
+          "start_line": 22,
+          "end_line": 91,
+          "signature": "pub const fn for_profile(profile: &GpuDeviceProfile) -> Self {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.502211210Z"
+      "last_scanned_at": "2026-10-05T09:18:40.284328439Z"
+    },
+    "crates/oxide-alloc/src/lib.rs": {
+      "relative_path": "crates/oxide-alloc/src/lib.rs",
+      "language": "rust",
+      "size_bytes": 752,
+      "line_count": 29,
+      "content_hash": "451209b92db5363c417c879e0529bf449aafdd51548b715026927dbaee10a0da",
+      "symbols": [
+        {
+          "name": "device_arena",
+          "qualified_name": "device_arena",
+          "kind": "module",
+          "start_line": 23,
+          "end_line": 23,
+          "signature": "pub mod device_arena;"
+        },
+        {
+          "name": "host_arena",
+          "qualified_name": "host_arena",
+          "kind": "module",
+          "start_line": 24,
+          "end_line": 24,
+          "signature": "pub mod host_arena;"
+        },
+        {
+          "name": "transactional",
+          "qualified_name": "transactional",
+          "kind": "module",
+          "start_line": 25,
+          "end_line": 25,
+          "signature": "pub mod transactional;"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.290979770Z"
+    },
+    "crates/oxide-hardware/oxide-backend-tpu/tests/tpu_topology_tests.rs": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-tpu/tests/tpu_topology_tests.rs",
+      "language": "rust",
+      "size_bytes": 4789,
+      "line_count": 117,
+      "content_hash": "feecb221795d680d27619ccf072c0a49bd2820b2bc48c36897dbfb37171463ab",
+      "symbols": [
+        {
+          "name": "test_google_tpu_v6e_trillium",
+          "qualified_name": "test_google_tpu_v6e_trillium",
+          "kind": "function",
+          "start_line": 7,
+          "end_line": 29,
+          "signature": "fn test_google_tpu_v6e_trillium() {"
+        },
+        {
+          "name": "test_google_tpu_v5p_and_v5e",
+          "qualified_name": "test_google_tpu_v5p_and_v5e",
+          "kind": "function",
+          "start_line": 32,
+          "end_line": 52,
+          "signature": "fn test_google_tpu_v5p_and_v5e() {"
+        },
+        {
+          "name": "test_google_tpu_v4_and_v3",
+          "qualified_name": "test_google_tpu_v4_and_v3",
+          "kind": "function",
+          "start_line": 55,
+          "end_line": 71,
+          "signature": "fn test_google_tpu_v4_and_v3() {"
+        },
+        {
+          "name": "test_google_tpu_v2_and_edge_coral",
+          "qualified_name": "test_google_tpu_v2_and_edge_coral",
+          "kind": "function",
+          "start_line": 74,
+          "end_line": 94,
+          "signature": "fn test_google_tpu_v2_and_edge_coral() {"
+        },
+        {
+          "name": "test_tpu_backend_dispatch_and_ici_comm",
+          "qualified_name": "test_tpu_backend_dispatch_and_ici_comm",
+          "kind": "function",
+          "start_line": 97,
+          "end_line": 117,
+          "signature": "fn test_tpu_backend_dispatch_and_ici_comm() {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.285378024Z"
+    },
+    "crates/oxide-quant/src/pq2_0.rs": {
+      "relative_path": "crates/oxide-quant/src/pq2_0.rs",
+      "language": "rust",
+      "size_bytes": 336,
+      "line_count": 17,
+      "content_hash": "0648571caa786900c1b14e495e1fb5639c7a321887237f3c7dbc41738b71d38f",
+      "symbols": [
+        {
+          "name": "PackedQuant2_0",
+          "qualified_name": "PackedQuant2_0",
+          "kind": "struct",
+          "start_line": 5,
+          "end_line": 5,
+          "signature": "pub struct PackedQuant2_0;"
+        },
+        {
+          "name": "bits_per_weight",
+          "qualified_name": "impl QuantScheme for PackedQuant2_0::bits_per_weight",
+          "kind": "method",
+          "start_line": 9,
+          "end_line": 11,
+          "signature": "fn bits_per_weight() -> f32 {"
+        },
+        {
+          "name": "block_size",
+          "qualified_name": "impl QuantScheme for PackedQuant2_0::block_size",
+          "kind": "method",
+          "start_line": 14,
+          "end_line": 16,
+          "signature": "fn block_size() -> usize {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.292296501Z"
+    },
+    "crates/oxide-hardware/oxide-backend-cpu/Cargo.toml": {
+      "relative_path": "crates/oxide-hardware/oxide-backend-cpu/Cargo.toml",
+      "language": "toml",
+      "size_bytes": 317,
+      "line_count": 14,
+      "content_hash": "ad8b4a5c12948702acc0a9e84ea10293cffcb6393c33f07efd8cd36465030379",
+      "symbols": [
+        {
+          "name": "package",
+          "qualified_name": "[package]",
+          "kind": "module",
+          "start_line": 1,
+          "end_line": 1,
+          "signature": "[package]"
+        },
+        {
+          "name": "dependencies",
+          "qualified_name": "[dependencies]",
+          "kind": "module",
+          "start_line": 8,
+          "end_line": 8,
+          "signature": "[dependencies]"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.288121906Z"
+    },
+    "crates/oxide-core/src/worker.rs": {
+      "relative_path": "crates/oxide-core/src/worker.rs",
+      "language": "rust",
+      "size_bytes": 4242,
+      "line_count": 139,
+      "content_hash": "a1bfaeb3c119b1ddc0a1515ebb408f622baab32b01dfba71dee29bd480b9d1a1",
+      "symbols": [
+        {
+          "name": "StepCommand",
+          "qualified_name": "StepCommand",
+          "kind": "struct",
+          "start_line": 12,
+          "end_line": 18,
+          "signature": "pub struct StepCommand {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl StepCommand::new",
+          "kind": "method",
+          "start_line": 22,
+          "end_line": 35,
+          "signature": "pub const fn new("
+        },
+        {
+          "name": "StepCompletion",
+          "qualified_name": "StepCompletion",
+          "kind": "struct",
+          "start_line": 41,
+          "end_line": 46,
+          "signature": "pub struct StepCompletion {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl StepCompletion::new",
+          "kind": "method",
+          "start_line": 50,
+          "end_line": 57,
+          "signature": "pub const fn new(sequence_id: u64, sampled_token: u32, is_terminal: bool) -> Self {"
+        },
+        {
+          "name": "ExecutionWorker",
+          "qualified_name": "ExecutionWorker",
+          "kind": "struct",
+          "start_line": 62,
+          "end_line": 66,
+          "signature": "pub struct ExecutionWorker<B: HardwareBackend> {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl ExecutionWorker<B>::new",
+          "kind": "method",
+          "start_line": 70,
+          "end_line": 76,
+          "signature": "pub fn new(backend: B, running: Arc<AtomicBool>) -> Self {"
+        },
+        {
+          "name": "pin_to_core",
+          "qualified_name": "impl ExecutionWorker<B>::pin_to_core",
+          "kind": "method",
+          "start_line": 79,
+          "end_line": 86,
+          "signature": "pub fn pin_to_core(&self, core_id: usize) -> bool {"
+        },
+        {
+          "name": "run_loop",
+          "qualified_name": "impl ExecutionWorker<B>::run_loop",
+          "kind": "method",
+          "start_line": 90,
+          "end_line": 138,
+          "signature": "pub fn run_loop("
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.294193828Z"
+    },
+    "crates/oxide-models/src/engram.rs": {
+      "relative_path": "crates/oxide-models/src/engram.rs",
+      "language": "rust",
+      "size_bytes": 1434,
+      "line_count": 46,
+      "content_hash": "e5484ef0b24b0ca4e09a720f5433fcf3742d0756c106b01b57b9ec7579b4a3b1",
+      "symbols": [
+        {
+          "name": "EngramGatherTable",
+          "qualified_name": "EngramGatherTable",
+          "kind": "struct",
+          "start_line": 5,
+          "end_line": 10,
+          "signature": "pub struct EngramGatherTable {"
+        },
+        {
+          "name": "new",
+          "qualified_name": "impl EngramGatherTable::new",
+          "kind": "method",
+          "start_line": 14,
+          "end_line": 21,
+          "signature": "pub fn new(num_entries: usize, vector_dim: usize) -> Self {"
+        },
+        {
+          "name": "compute_slot",
+          "qualified_name": "impl EngramGatherTable::compute_slot",
+          "kind": "method",
+          "start_line": 25,
+          "end_line": 35,
+          "signature": "pub fn compute_slot(&self, tokens: &[u32]) -> usize {"
+        },
+        {
+          "name": "gather",
+          "qualified_name": "impl EngramGatherTable::gather",
+          "kind": "method",
+          "start_line": 38,
+          "end_line": 45,
+          "signature": "pub fn gather(&self, tokens: &[u32], dest: &mut [f32]) -> Result<()> {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.289220171Z"
     },
     "crates/oxide-core/tests/dag_tests.rs": {
       "relative_path": "crates/oxide-core/tests/dag_tests.rs",
@@ -1664,7 +3385,97 @@
           "signature": "fn test_lock_free_cow_block_fork_release() {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.494658752Z"
+      "last_scanned_at": "2026-10-05T09:18:40.292929339Z"
+    },
+    "crates/oxide-models/src/llama3.rs": {
+      "relative_path": "crates/oxide-models/src/llama3.rs",
+      "language": "rust",
+      "size_bytes": 1245,
+      "line_count": 61,
+      "content_hash": "3c93225b2fe593989c660514f4b14d47a61101b5e614d525defa0486daee9dc6",
+      "symbols": [
+        {
+          "name": "Llama3Config",
+          "qualified_name": "Llama3Config",
+          "kind": "struct",
+          "start_line": 5,
+          "end_line": 13,
+          "signature": "pub struct Llama3Config {"
+        },
+        {
+          "name": "default",
+          "qualified_name": "impl Default for Llama3Config::default",
+          "kind": "method",
+          "start_line": 16,
+          "end_line": 26,
+          "signature": "fn default() -> Self {"
+        },
+        {
+          "name": "model_name",
+          "qualified_name": "impl ModelConfig for Llama3Config::model_name",
+          "kind": "method",
+          "start_line": 30,
+          "end_line": 32,
+          "signature": "fn model_name(&self) -> &'static str {"
+        },
+        {
+          "name": "hidden_dim",
+          "qualified_name": "impl ModelConfig for Llama3Config::hidden_dim",
+          "kind": "method",
+          "start_line": 34,
+          "end_line": 36,
+          "signature": "fn hidden_dim(&self) -> usize {"
+        },
+        {
+          "name": "num_layers",
+          "qualified_name": "impl ModelConfig for Llama3Config::num_layers",
+          "kind": "method",
+          "start_line": 38,
+          "end_line": 40,
+          "signature": "fn num_layers(&self) -> usize {"
+        },
+        {
+          "name": "num_heads",
+          "qualified_name": "impl ModelConfig for Llama3Config::num_heads",
+          "kind": "method",
+          "start_line": 42,
+          "end_line": 44,
+          "signature": "fn num_heads(&self) -> usize {"
+        },
+        {
+          "name": "num_kv_heads",
+          "qualified_name": "impl ModelConfig for Llama3Config::num_kv_heads",
+          "kind": "method",
+          "start_line": 46,
+          "end_line": 48,
+          "signature": "fn num_kv_heads(&self) -> usize {"
+        },
+        {
+          "name": "head_dim",
+          "qualified_name": "impl ModelConfig for Llama3Config::head_dim",
+          "kind": "method",
+          "start_line": 50,
+          "end_line": 52,
+          "signature": "fn head_dim(&self) -> usize {"
+        },
+        {
+          "name": "vocab_size",
+          "qualified_name": "impl ModelConfig for Llama3Config::vocab_size",
+          "kind": "method",
+          "start_line": 54,
+          "end_line": 56,
+          "signature": "fn vocab_size(&self) -> usize {"
+        },
+        {
+          "name": "max_seq_len",
+          "qualified_name": "impl ModelConfig for Llama3Config::max_seq_len",
+          "kind": "method",
+          "start_line": 58,
+          "end_line": 60,
+          "signature": "fn max_seq_len(&self) -> usize {"
+        }
+      ],
+      "last_scanned_at": "2026-10-05T09:18:40.288840231Z"
     },
     "crates/oxide-models/src/needle.rs": {
       "relative_path": "crates/oxide-models/src/needle.rs",
@@ -1786,1112 +3597,9 @@
           "signature": "fn default() -> Self {"
         }
       ],
-      "last_scanned_at": "2026-10-05T09:06:44.491039841Z"
-    },
-    "crates/oxide-core/src/macros.rs": {
-      "relative_path": "crates/oxide-core/src/macros.rs",
-      "language": "rust",
-      "size_bytes": 913,
-      "line_count": 27,
-      "content_hash": "a832a63ae6c1a86c4990196675f442d7ce64da9051272acd7d67e7342ef8593f",
-      "symbols": [
-        {
-          "name": "size_of_val",
-          "qualified_name": "size_of_val",
-          "kind": "function",
-          "start_line": 25,
-          "end_line": 27,
-          "signature": "pub const fn size_of_val<T>() -> usize {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.495043439Z"
-    },
-    "crates/oxide-server/src/dfa.rs": {
-      "relative_path": "crates/oxide-server/src/dfa.rs",
-      "language": "rust",
-      "size_bytes": 3599,
-      "line_count": 106,
-      "content_hash": "d7aa550a5201a05c18f1f88166e7ea1f632523ad338029a5ecf242110c4a27d5",
-      "symbols": [
-        {
-          "name": "DFA_ERROR_STATE",
-          "qualified_name": "DFA_ERROR_STATE",
-          "kind": "constant",
-          "start_line": 3,
-          "end_line": 3,
-          "signature": "pub const DFA_ERROR_STATE: u32 = u32::MAX;"
-        },
-        {
-          "name": "DfaSchemaGrammar",
-          "qualified_name": "DfaSchemaGrammar",
-          "kind": "struct",
-          "start_line": 7,
-          "end_line": 11,
-          "signature": "pub struct DfaSchemaGrammar {"
-        },
-        {
-          "name": "new_simple_json_validator",
-          "qualified_name": "impl DfaSchemaGrammar::new_simple_json_validator",
-          "kind": "method",
-          "start_line": 16,
-          "end_line": 64,
-          "signature": "pub fn new_simple_json_validator() -> Self {"
-        },
-        {
-          "name": "transition",
-          "qualified_name": "impl DfaSchemaGrammar::transition",
-          "kind": "method",
-          "start_line": 67,
-          "end_line": 84,
-          "signature": "pub fn transition(&self, current_state: u32, byte: u8) -> Result<u32> {"
-        },
-        {
-          "name": "apply_dfa_mask",
-          "qualified_name": "impl DfaSchemaGrammar::apply_dfa_mask",
-          "kind": "method",
-          "start_line": 87,
-          "end_line": 105,
-          "signature": "pub fn apply_dfa_mask(&self, current_state: u32, token_bytes: &[Vec<u8>], logits: &mut [f32]) {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.499589637Z"
-    },
-    "crates/oxide-models/src/lib.rs": {
-      "relative_path": "crates/oxide-models/src/lib.rs",
-      "language": "rust",
-      "size_bytes": 859,
-      "line_count": 34,
-      "content_hash": "876f8bd42f5d5f7ba69e6f32fd4f903795463467d19749b6be97dcddf84fb11d",
-      "symbols": [
-        {
-          "name": "bonsai2",
-          "qualified_name": "bonsai2",
-          "kind": "module",
-          "start_line": 22,
-          "end_line": 22,
-          "signature": "pub mod bonsai2;"
-        },
-        {
-          "name": "engram",
-          "qualified_name": "engram",
-          "kind": "module",
-          "start_line": 23,
-          "end_line": 23,
-          "signature": "pub mod engram;"
-        },
-        {
-          "name": "llama3",
-          "qualified_name": "llama3",
-          "kind": "module",
-          "start_line": 24,
-          "end_line": 24,
-          "signature": "pub mod llama3;"
-        },
-        {
-          "name": "manifest",
-          "qualified_name": "manifest",
-          "kind": "module",
-          "start_line": 25,
-          "end_line": 25,
-          "signature": "pub mod manifest;"
-        },
-        {
-          "name": "monarch",
-          "qualified_name": "monarch",
-          "kind": "module",
-          "start_line": 26,
-          "end_line": 26,
-          "signature": "pub mod monarch;"
-        },
-        {
-          "name": "needle",
-          "qualified_name": "needle",
-          "kind": "module",
-          "start_line": 27,
-          "end_line": 27,
-          "signature": "pub mod needle;"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.490714519Z"
-    },
-    "crates/oxide-core/src/dag.rs": {
-      "relative_path": "crates/oxide-core/src/dag.rs",
-      "language": "rust",
-      "size_bytes": 1932,
-      "line_count": 76,
-      "content_hash": "81d6239a8f79486cfb4c026ef94ba4d4ce7ab51a85146b893b6eb20a52e4f90f",
-      "symbols": [
-        {
-          "name": "PhysicalBlockId",
-          "qualified_name": "PhysicalBlockId",
-          "kind": "type",
-          "start_line": 5,
-          "end_line": 5,
-          "signature": "pub type PhysicalBlockId = u32;"
-        },
-        {
-          "name": "TreeNode",
-          "qualified_name": "TreeNode",
-          "kind": "struct",
-          "start_line": 9,
-          "end_line": 15,
-          "signature": "pub struct TreeNode {"
-        },
-        {
-          "name": "new_root",
-          "qualified_name": "impl TreeNode::new_root",
-          "kind": "method",
-          "start_line": 19,
-          "end_line": 27,
-          "signature": "pub fn new_root(node_id: u64, token_id: u32, block_id: PhysicalBlockId) -> Arc<Self> {"
-        },
-        {
-          "name": "create_child",
-          "qualified_name": "impl TreeNode::create_child",
-          "kind": "method",
-          "start_line": 30,
-          "end_line": 44,
-          "signature": "pub fn create_child("
-        },
-        {
-          "name": "SharedPhysicalBlock",
-          "qualified_name": "SharedPhysicalBlock",
-          "kind": "struct",
-          "start_line": 49,
-          "end_line": 52,
-          "signature": "pub struct SharedPhysicalBlock {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl SharedPhysicalBlock::new",
-          "kind": "method",
-          "start_line": 56,
-          "end_line": 61,
-          "signature": "pub const fn new(block_id: PhysicalBlockId) -> Self {"
-        },
-        {
-          "name": "fork",
-          "qualified_name": "impl SharedPhysicalBlock::fork",
-          "kind": "method",
-          "start_line": 65,
-          "end_line": 67,
-          "signature": "pub fn fork(&self) {"
-        },
-        {
-          "name": "release",
-          "qualified_name": "impl SharedPhysicalBlock::release",
-          "kind": "method",
-          "start_line": 71,
-          "end_line": 75,
-          "signature": "pub fn release(&self, free_list: &SegQueue<PhysicalBlockId>) {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.495572978Z"
-    },
-    "crates/oxide-core/src/worker.rs": {
-      "relative_path": "crates/oxide-core/src/worker.rs",
-      "language": "rust",
-      "size_bytes": 4242,
-      "line_count": 139,
-      "content_hash": "a1bfaeb3c119b1ddc0a1515ebb408f622baab32b01dfba71dee29bd480b9d1a1",
-      "symbols": [
-        {
-          "name": "StepCommand",
-          "qualified_name": "StepCommand",
-          "kind": "struct",
-          "start_line": 12,
-          "end_line": 18,
-          "signature": "pub struct StepCommand {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl StepCommand::new",
-          "kind": "method",
-          "start_line": 22,
-          "end_line": 35,
-          "signature": "pub const fn new("
-        },
-        {
-          "name": "StepCompletion",
-          "qualified_name": "StepCompletion",
-          "kind": "struct",
-          "start_line": 41,
-          "end_line": 46,
-          "signature": "pub struct StepCompletion {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl StepCompletion::new",
-          "kind": "method",
-          "start_line": 50,
-          "end_line": 57,
-          "signature": "pub const fn new(sequence_id: u64, sampled_token: u32, is_terminal: bool) -> Self {"
-        },
-        {
-          "name": "ExecutionWorker",
-          "qualified_name": "ExecutionWorker",
-          "kind": "struct",
-          "start_line": 62,
-          "end_line": 66,
-          "signature": "pub struct ExecutionWorker<B: HardwareBackend> {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl ExecutionWorker<B>::new",
-          "kind": "method",
-          "start_line": 70,
-          "end_line": 76,
-          "signature": "pub fn new(backend: B, running: Arc<AtomicBool>) -> Self {"
-        },
-        {
-          "name": "pin_to_core",
-          "qualified_name": "impl ExecutionWorker<B>::pin_to_core",
-          "kind": "method",
-          "start_line": 79,
-          "end_line": 86,
-          "signature": "pub fn pin_to_core(&self, core_id: usize) -> bool {"
-        },
-        {
-          "name": "run_loop",
-          "qualified_name": "impl ExecutionWorker<B>::run_loop",
-          "kind": "method",
-          "start_line": 90,
-          "end_line": 138,
-          "signature": "pub fn run_loop("
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.496053837Z"
-    },
-    "crates/oxide-alloc/tests/static_arena_allocation_tests.rs": {
-      "relative_path": "crates/oxide-alloc/tests/static_arena_allocation_tests.rs",
-      "language": "rust",
-      "size_bytes": 2293,
-      "line_count": 68,
-      "content_hash": "902a40cb29f1ab7771334b9f3fee82d2527c316ea1fbc4178c6743648194360f",
-      "symbols": [
-        {
-          "name": "test_host_pinned_arena_allocation",
-          "qualified_name": "test_host_pinned_arena_allocation",
-          "kind": "function",
-          "start_line": 5,
-          "end_line": 24,
-          "signature": "fn test_host_pinned_arena_allocation() {"
-        },
-        {
-          "name": "test_device_memory_arena_slot_binding",
-          "qualified_name": "test_device_memory_arena_slot_binding",
-          "kind": "function",
-          "start_line": 27,
-          "end_line": 49,
-          "signature": "fn test_device_memory_arena_slot_binding() {"
-        },
-        {
-          "name": "test_transactional_speculative_rollback",
-          "qualified_name": "test_transactional_speculative_rollback",
-          "kind": "function",
-          "start_line": 52,
-          "end_line": 68,
-          "signature": "fn test_transactional_speculative_rollback() {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.492583340Z"
-    },
-    "crates/oxide-models/src/monarch.rs": {
-      "relative_path": "crates/oxide-models/src/monarch.rs",
-      "language": "rust",
-      "size_bytes": 2728,
-      "line_count": 81,
-      "content_hash": "b1604904e74f3ad82acd751f5741c378d1c444c9f6a07dca9c908d0d2d45ad3f",
-      "symbols": [
-        {
-          "name": "MonarchMlp",
-          "qualified_name": "MonarchMlp",
-          "kind": "struct",
-          "start_line": 7,
-          "end_line": 13,
-          "signature": "pub struct MonarchMlp {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl MonarchMlp::new",
-          "kind": "method",
-          "start_line": 17,
-          "end_line": 32,
-          "signature": "pub fn new(hidden_dim: usize) -> Self {"
-        },
-        {
-          "name": "forward",
-          "qualified_name": "impl MonarchMlp::forward",
-          "kind": "method",
-          "start_line": 35,
-          "end_line": 80,
-          "signature": "pub fn forward(&self, input: &[f32], output: &mut [f32]) -> Result<()> {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.491483894Z"
-    },
-    "crates/oxide-core/Cargo.toml": {
-      "relative_path": "crates/oxide-core/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 454,
-      "line_count": 19,
-      "content_hash": "27fc8f6406d79484d97146ed5d526be30d75d49b77cafafc1836ca7f33a460bd",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.498535309Z"
-    },
-    "crates/oxide-models/src/engram.rs": {
-      "relative_path": "crates/oxide-models/src/engram.rs",
-      "language": "rust",
-      "size_bytes": 1434,
-      "line_count": 46,
-      "content_hash": "e5484ef0b24b0ca4e09a720f5433fcf3742d0756c106b01b57b9ec7579b4a3b1",
-      "symbols": [
-        {
-          "name": "EngramGatherTable",
-          "qualified_name": "EngramGatherTable",
-          "kind": "struct",
-          "start_line": 5,
-          "end_line": 10,
-          "signature": "pub struct EngramGatherTable {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl EngramGatherTable::new",
-          "kind": "method",
-          "start_line": 14,
-          "end_line": 21,
-          "signature": "pub fn new(num_entries: usize, vector_dim: usize) -> Self {"
-        },
-        {
-          "name": "compute_slot",
-          "qualified_name": "impl EngramGatherTable::compute_slot",
-          "kind": "method",
-          "start_line": 25,
-          "end_line": 35,
-          "signature": "pub fn compute_slot(&self, tokens: &[u32]) -> usize {"
-        },
-        {
-          "name": "gather",
-          "qualified_name": "impl EngramGatherTable::gather",
-          "kind": "method",
-          "start_line": 38,
-          "end_line": 45,
-          "signature": "pub fn gather(&self, tokens: &[u32], dest: &mut [f32]) -> Result<()> {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.491214375Z"
-    },
-    "fixtures/golden/manifest.json": {
-      "relative_path": "fixtures/golden/manifest.json",
-      "language": "json",
-      "size_bytes": 257,
-      "line_count": 13,
-      "content_hash": "68f8ebdc9fea4edbd7c541ae6e17b14ec802f90759701d62a29153baef345183",
-      "symbols": [],
-      "last_scanned_at": "2026-10-05T09:06:44.499657313Z"
-    },
-    "crates/oxide-models/Cargo.toml": {
-      "relative_path": "crates/oxide-models/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 360,
-      "line_count": 16,
-      "content_hash": "77c7cbc183c0032b2eb3c8b55a682143e17c646529607683fef8091039a7634f",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.491729666Z"
-    },
-    "crates/oxide-hardware/oxide-backend-metal/Cargo.toml": {
-      "relative_path": "crates/oxide-hardware/oxide-backend-metal/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 319,
-      "line_count": 14,
-      "content_hash": "2d8293d1c28918581ee4ab78871037ad3a2586f7d20245a700e2643355fce87c",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.488313784Z"
-    },
-    "crates/oxide-alloc/src/transactional.rs": {
-      "relative_path": "crates/oxide-alloc/src/transactional.rs",
-      "language": "rust",
-      "size_bytes": 1958,
-      "line_count": 67,
-      "content_hash": "3c5695f18b8b24613004d2dce6b4e3cbb17bb1915a86a5dcd2a43144c7606c0d",
-      "symbols": [
-        {
-          "name": "TransactionalBlockTable",
-          "qualified_name": "TransactionalBlockTable",
-          "kind": "struct",
-          "start_line": 4,
-          "end_line": 8,
-          "signature": "pub struct TransactionalBlockTable {"
-        },
-        {
-          "name": "fmt",
-          "qualified_name": "impl fmt::Debug for TransactionalBlockTable::fmt",
-          "kind": "method",
-          "start_line": 11,
-          "end_line": 17,
-          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl TransactionalBlockTable::new",
-          "kind": "method",
-          "start_line": 22,
-          "end_line": 28,
-          "signature": "pub const fn new(block_size: usize) -> Self {"
-        },
-        {
-          "name": "push_block",
-          "qualified_name": "impl TransactionalBlockTable::push_block",
-          "kind": "method",
-          "start_line": 31,
-          "end_line": 33,
-          "signature": "pub fn push_block(&mut self, block_id: u32) {"
-        },
-        {
-          "name": "commit_speculation",
-          "qualified_name": "impl TransactionalBlockTable::commit_speculation",
-          "kind": "method",
-          "start_line": 36,
-          "end_line": 38,
-          "signature": "pub fn commit_speculation(&mut self, accepted_tokens: usize) {"
-        },
-        {
-          "name": "rollback",
-          "qualified_name": "impl TransactionalBlockTable::rollback",
-          "kind": "method",
-          "start_line": 42,
-          "end_line": 51,
-          "signature": "pub fn rollback(&mut self, accepted_tokens: usize, _total_speculated: usize) {"
-        },
-        {
-          "name": "physical_blocks",
-          "qualified_name": "impl TransactionalBlockTable::physical_blocks",
-          "kind": "method",
-          "start_line": 54,
-          "end_line": 56,
-          "signature": "pub fn physical_blocks(&self) -> &[u32] {"
-        },
-        {
-          "name": "active_tokens",
-          "qualified_name": "impl TransactionalBlockTable::active_tokens",
-          "kind": "method",
-          "start_line": 59,
-          "end_line": 61,
-          "signature": "pub const fn active_tokens(&self) -> usize {"
-        },
-        {
-          "name": "block_size",
-          "qualified_name": "impl TransactionalBlockTable::block_size",
-          "kind": "method",
-          "start_line": 64,
-          "end_line": 66,
-          "signature": "pub const fn block_size(&self) -> usize {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.492899163Z"
-    },
-    "crates/oxide-quant/src/pq2_0.rs": {
-      "relative_path": "crates/oxide-quant/src/pq2_0.rs",
-      "language": "rust",
-      "size_bytes": 336,
-      "line_count": 17,
-      "content_hash": "0648571caa786900c1b14e495e1fb5639c7a321887237f3c7dbc41738b71d38f",
-      "symbols": [
-        {
-          "name": "PackedQuant2_0",
-          "qualified_name": "PackedQuant2_0",
-          "kind": "struct",
-          "start_line": 5,
-          "end_line": 5,
-          "signature": "pub struct PackedQuant2_0;"
-        },
-        {
-          "name": "bits_per_weight",
-          "qualified_name": "impl QuantScheme for PackedQuant2_0::bits_per_weight",
-          "kind": "method",
-          "start_line": 9,
-          "end_line": 11,
-          "signature": "fn bits_per_weight() -> f32 {"
-        },
-        {
-          "name": "block_size",
-          "qualified_name": "impl QuantScheme for PackedQuant2_0::block_size",
-          "kind": "method",
-          "start_line": 14,
-          "end_line": 16,
-          "signature": "fn block_size() -> usize {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.494015232Z"
-    },
-    "crates/oxide-alloc/src/lib.rs": {
-      "relative_path": "crates/oxide-alloc/src/lib.rs",
-      "language": "rust",
-      "size_bytes": 752,
-      "line_count": 29,
-      "content_hash": "451209b92db5363c417c879e0529bf449aafdd51548b715026927dbaee10a0da",
-      "symbols": [
-        {
-          "name": "device_arena",
-          "qualified_name": "device_arena",
-          "kind": "module",
-          "start_line": 23,
-          "end_line": 23,
-          "signature": "pub mod device_arena;"
-        },
-        {
-          "name": "host_arena",
-          "qualified_name": "host_arena",
-          "kind": "module",
-          "start_line": 24,
-          "end_line": 24,
-          "signature": "pub mod host_arena;"
-        },
-        {
-          "name": "transactional",
-          "qualified_name": "transactional",
-          "kind": "module",
-          "start_line": 25,
-          "end_line": 25,
-          "signature": "pub mod transactional;"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.492699696Z"
-    },
-    "crates/oxide-alloc/src/host_arena.rs": {
-      "relative_path": "crates/oxide-alloc/src/host_arena.rs",
-      "language": "rust",
-      "size_bytes": 3532,
-      "line_count": 106,
-      "content_hash": "e21a03a02322af03e8bccf24187ead83c61a565d50fddacdc63b8d3176cc429f",
-      "symbols": [
-        {
-          "name": "HostPinnedArena",
-          "qualified_name": "HostPinnedArena",
-          "kind": "struct",
-          "start_line": 6,
-          "end_line": 11,
-          "signature": "pub struct HostPinnedArena {"
-        },
-        {
-          "name": "fmt",
-          "qualified_name": "impl fmt::Debug for HostPinnedArena::fmt",
-          "kind": "method",
-          "start_line": 19,
-          "end_line": 26,
-          "signature": "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl HostPinnedArena::new",
-          "kind": "method",
-          "start_line": 31,
-          "end_line": 55,
-          "signature": "pub fn new(capacity_bytes: usize) -> Result<Self> {"
-        },
-        {
-          "name": "alloc_slice",
-          "qualified_name": "impl HostPinnedArena::alloc_slice",
-          "kind": "method",
-          "start_line": 58,
-          "end_line": 77,
-          "signature": "pub fn alloc_slice<T: Copy>(&mut self, count: usize) -> Result<&mut [T]> {"
-        },
-        {
-          "name": "reset",
-          "qualified_name": "impl HostPinnedArena::reset",
-          "kind": "method",
-          "start_line": 80,
-          "end_line": 82,
-          "signature": "pub fn reset(&mut self) {"
-        },
-        {
-          "name": "capacity",
-          "qualified_name": "impl HostPinnedArena::capacity",
-          "kind": "method",
-          "start_line": 86,
-          "end_line": 88,
-          "signature": "pub const fn capacity(&self) -> usize {"
-        },
-        {
-          "name": "allocated_bytes",
-          "qualified_name": "impl HostPinnedArena::allocated_bytes",
-          "kind": "method",
-          "start_line": 92,
-          "end_line": 94,
-          "signature": "pub const fn allocated_bytes(&self) -> usize {"
-        },
-        {
-          "name": "drop",
-          "qualified_name": "impl Drop for HostPinnedArena::drop",
-          "kind": "method",
-          "start_line": 98,
-          "end_line": 105,
-          "signature": "fn drop(&mut self) {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.493535560Z"
-    },
-    "crates/oxide-hardware/oxide-backend-cuda/src/nccl.rs": {
-      "relative_path": "crates/oxide-hardware/oxide-backend-cuda/src/nccl.rs",
-      "language": "rust",
-      "size_bytes": 925,
-      "line_count": 37,
-      "content_hash": "491471c3dabd25001eff0da7792709109af40877b48e6706e42a16c29b4d59b3",
-      "symbols": [
-        {
-          "name": "NcclCommunicator",
-          "qualified_name": "NcclCommunicator",
-          "kind": "struct",
-          "start_line": 6,
-          "end_line": 9,
-          "signature": "pub struct NcclCommunicator {"
-        },
-        {
-          "name": "new",
-          "qualified_name": "impl NcclCommunicator::new",
-          "kind": "method",
-          "start_line": 13,
-          "end_line": 15,
-          "signature": "pub const fn new(rank: usize, world_size: usize) -> Self {"
-        },
-        {
-          "name": "all_reduce_f32",
-          "qualified_name": "impl NcclCommunicator::all_reduce_f32",
-          "kind": "method",
-          "start_line": 18,
-          "end_line": 26,
-          "signature": "pub fn all_reduce_f32("
-        },
-        {
-          "name": "rank",
-          "qualified_name": "impl NcclCommunicator::rank",
-          "kind": "method",
-          "start_line": 29,
-          "end_line": 31,
-          "signature": "pub const fn rank(&self) -> usize {"
-        },
-        {
-          "name": "world_size",
-          "qualified_name": "impl NcclCommunicator::world_size",
-          "kind": "method",
-          "start_line": 34,
-          "end_line": 36,
-          "signature": "pub const fn world_size(&self) -> usize {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.489097407Z"
-    },
-    "crates/oxide-engine/Cargo.toml": {
-      "relative_path": "crates/oxide-engine/Cargo.toml",
-      "language": "toml",
-      "size_bytes": 473,
-      "line_count": 19,
-      "content_hash": "e7e7a3c0a3a5920f933188d528e811dc23c3cae61e36f1c2ce06d472363c8cdf",
-      "symbols": [
-        {
-          "name": "package",
-          "qualified_name": "[package]",
-          "kind": "module",
-          "start_line": 1,
-          "end_line": 1,
-          "signature": "[package]"
-        },
-        {
-          "name": "dependencies",
-          "qualified_name": "[dependencies]",
-          "kind": "module",
-          "start_line": 8,
-          "end_line": 8,
-          "signature": "[dependencies]"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.487946907Z"
-    },
-    "crates/oxide-models/src/bonsai2.rs": {
-      "relative_path": "crates/oxide-models/src/bonsai2.rs",
-      "language": "rust",
-      "size_bytes": 1359,
-      "line_count": 62,
-      "content_hash": "600b48afce937b6a29f2c8bf493c5bc30b83cd3eed81719edc988e9b88c515f0",
-      "symbols": [
-        {
-          "name": "TernaryBonsai2Config",
-          "qualified_name": "TernaryBonsai2Config",
-          "kind": "struct",
-          "start_line": 6,
-          "end_line": 14,
-          "signature": "pub struct TernaryBonsai2Config {"
-        },
-        {
-          "name": "default",
-          "qualified_name": "impl Default for TernaryBonsai2Config::default",
-          "kind": "method",
-          "start_line": 17,
-          "end_line": 27,
-          "signature": "fn default() -> Self {"
-        },
-        {
-          "name": "model_name",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::model_name",
-          "kind": "method",
-          "start_line": 31,
-          "end_line": 33,
-          "signature": "fn model_name(&self) -> &'static str {"
-        },
-        {
-          "name": "hidden_dim",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::hidden_dim",
-          "kind": "method",
-          "start_line": 35,
-          "end_line": 37,
-          "signature": "fn hidden_dim(&self) -> usize {"
-        },
-        {
-          "name": "num_layers",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::num_layers",
-          "kind": "method",
-          "start_line": 39,
-          "end_line": 41,
-          "signature": "fn num_layers(&self) -> usize {"
-        },
-        {
-          "name": "num_heads",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::num_heads",
-          "kind": "method",
-          "start_line": 43,
-          "end_line": 45,
-          "signature": "fn num_heads(&self) -> usize {"
-        },
-        {
-          "name": "num_kv_heads",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::num_kv_heads",
-          "kind": "method",
-          "start_line": 47,
-          "end_line": 49,
-          "signature": "fn num_kv_heads(&self) -> usize {"
-        },
-        {
-          "name": "head_dim",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::head_dim",
-          "kind": "method",
-          "start_line": 51,
-          "end_line": 53,
-          "signature": "fn head_dim(&self) -> usize {"
-        },
-        {
-          "name": "vocab_size",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::vocab_size",
-          "kind": "method",
-          "start_line": 55,
-          "end_line": 57,
-          "signature": "fn vocab_size(&self) -> usize {"
-        },
-        {
-          "name": "max_seq_len",
-          "qualified_name": "impl ModelConfig for TernaryBonsai2Config::max_seq_len",
-          "kind": "method",
-          "start_line": 59,
-          "end_line": 61,
-          "signature": "fn max_seq_len(&self) -> usize {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.490606474Z"
-    },
-    "crates/oxide-cli/src/main.rs": {
-      "relative_path": "crates/oxide-cli/src/main.rs",
-      "language": "rust",
-      "size_bytes": 4570,
-      "line_count": 130,
-      "content_hash": "84493d89762e0f85d2d57270c31da5b734a647ebf67f4e1bad6cfdab2c784ede",
-      "symbols": [
-        {
-          "name": "ModelArg",
-          "qualified_name": "ModelArg",
-          "kind": "enum",
-          "start_line": 16,
-          "end_line": 20,
-          "signature": "enum ModelArg {"
-        },
-        {
-          "name": "BackendArg",
-          "qualified_name": "BackendArg",
-          "kind": "enum",
-          "start_line": 23,
-          "end_line": 26,
-          "signature": "enum BackendArg {"
-        },
-        {
-          "name": "Cli",
-          "qualified_name": "Cli",
-          "kind": "struct",
-          "start_line": 34,
-          "end_line": 53,
-          "signature": "struct Cli {"
-        },
-        {
-          "name": "main",
-          "qualified_name": "main",
-          "kind": "function",
-          "start_line": 56,
-          "end_line": 130,
-          "signature": "async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.492217649Z"
-    },
-    "crates/oxide-server/src/lib.rs": {
-      "relative_path": "crates/oxide-server/src/lib.rs",
-      "language": "rust",
-      "size_bytes": 3773,
-      "line_count": 129,
-      "content_hash": "c77e941468ed5ab5d0477004d5c4b1bb78e4f06982830b1647a679a94ce3d95d",
-      "symbols": [
-        {
-          "name": "dfa",
-          "qualified_name": "dfa",
-          "kind": "module",
-          "start_line": 21,
-          "end_line": 21,
-          "signature": "pub mod dfa;"
-        },
-        {
-          "name": "ChatCompletionRequest",
-          "qualified_name": "ChatCompletionRequest",
-          "kind": "struct",
-          "start_line": 40,
-          "end_line": 46,
-          "signature": "pub struct ChatCompletionRequest {"
-        },
-        {
-          "name": "ChatCompletionChunk",
-          "qualified_name": "ChatCompletionChunk",
-          "kind": "struct",
-          "start_line": 49,
-          "end_line": 56,
-          "signature": "pub struct ChatCompletionChunk {"
-        },
-        {
-          "name": "ServerState",
-          "qualified_name": "ServerState",
-          "kind": "struct",
-          "start_line": 59,
-          "end_line": 62,
-          "signature": "pub struct ServerState {"
-        },
-        {
-          "name": "create_router",
-          "qualified_name": "create_router",
-          "kind": "function",
-          "start_line": 64,
-          "end_line": 71,
-          "signature": "pub fn create_router(state: ServerState) -> Router {"
-        },
-        {
-          "name": "health_handler",
-          "qualified_name": "health_handler",
-          "kind": "function",
-          "start_line": 73,
-          "end_line": 75,
-          "signature": "async fn health_handler() -> &'static str {"
-        },
-        {
-          "name": "chat_completions_handler",
-          "qualified_name": "chat_completions_handler",
-          "kind": "function",
-          "start_line": 77,
-          "end_line": 118,
-          "signature": "async fn chat_completions_handler("
-        },
-        {
-          "name": "start_server",
-          "qualified_name": "start_server",
-          "kind": "function",
-          "start_line": 120,
-          "end_line": 129,
-          "signature": "pub async fn start_server("
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.499219197Z"
-    },
-    "crates/oxide-hardware/oxide-backend-cpu/src/ternary.rs": {
-      "relative_path": "crates/oxide-hardware/oxide-backend-cpu/src/ternary.rs",
-      "language": "rust",
-      "size_bytes": 1608,
-      "line_count": 46,
-      "content_hash": "7420b1115d12ad60801f19160c5784642e7a19becfc0af847801646d72cfe1d2",
-      "symbols": [
-        {
-          "name": "ternary_gemv_cpu",
-          "qualified_name": "ternary_gemv_cpu",
-          "kind": "function",
-          "start_line": 5,
-          "end_line": 18,
-          "signature": "pub fn ternary_gemv_cpu(activations: &[f32], blocks: &[TernaryBlock128]) -> f32 {"
-        },
-        {
-          "name": "ternary_dot_product_avx512",
-          "qualified_name": "ternary_dot_product_avx512",
-          "kind": "function",
-          "start_line": 25,
-          "end_line": 46,
-          "signature": "pub unsafe fn ternary_dot_product_avx512("
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.490212288Z"
-    },
-    "crates/oxide-core/src/lib.rs": {
-      "relative_path": "crates/oxide-core/src/lib.rs",
-      "language": "rust",
-      "size_bytes": 1293,
-      "line_count": 45,
-      "content_hash": "19609f41e2e70823bb5e49e4b5c3a8ce84a9e748799a36e5a474562c617f6ed7",
-      "symbols": [
-        {
-          "name": "dag",
-          "qualified_name": "dag",
-          "kind": "module",
-          "start_line": 25,
-          "end_line": 25,
-          "signature": "pub mod dag;"
-        },
-        {
-          "name": "error",
-          "qualified_name": "error",
-          "kind": "module",
-          "start_line": 26,
-          "end_line": 26,
-          "signature": "pub mod error;"
-        },
-        {
-          "name": "hardware",
-          "qualified_name": "hardware",
-          "kind": "module",
-          "start_line": 27,
-          "end_line": 27,
-          "signature": "pub mod hardware;"
-        },
-        {
-          "name": "macros",
-          "qualified_name": "macros",
-          "kind": "module",
-          "start_line": 28,
-          "end_line": 28,
-          "signature": "pub mod macros;"
-        },
-        {
-          "name": "memory",
-          "qualified_name": "memory",
-          "kind": "module",
-          "start_line": 29,
-          "end_line": 29,
-          "signature": "pub mod memory;"
-        },
-        {
-          "name": "traits",
-          "qualified_name": "traits",
-          "kind": "module",
-          "start_line": 30,
-          "end_line": 30,
-          "signature": "pub mod traits;"
-        },
-        {
-          "name": "typestate",
-          "qualified_name": "typestate",
-          "kind": "module",
-          "start_line": 31,
-          "end_line": 31,
-          "signature": "pub mod typestate;"
-        },
-        {
-          "name": "worker",
-          "qualified_name": "worker",
-          "kind": "module",
-          "start_line": 32,
-          "end_line": 32,
-          "signature": "pub mod worker;"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.495197789Z"
-    },
-    "crates/oxide-server/tests/dfa_grammar_tests.rs": {
-      "relative_path": "crates/oxide-server/tests/dfa_grammar_tests.rs",
-      "language": "rust",
-      "size_bytes": 1086,
-      "line_count": 36,
-      "content_hash": "62fc25903465e26249a17e8d3a594c258c053e7c376d8e6d41fdab9ab81aa367",
-      "symbols": [
-        {
-          "name": "test_dfa_json_validator",
-          "qualified_name": "test_dfa_json_validator",
-          "kind": "function",
-          "start_line": 4,
-          "end_line": 19,
-          "signature": "fn test_dfa_json_validator() {"
-        },
-        {
-          "name": "test_dfa_logit_masking",
-          "qualified_name": "test_dfa_logit_masking",
-          "kind": "function",
-          "start_line": 22,
-          "end_line": 36,
-          "signature": "fn test_dfa_logit_masking() {"
-        }
-      ],
-      "last_scanned_at": "2026-10-05T09:06:44.498730027Z"
+      "last_scanned_at": "2026-10-05T09:18:40.289040887Z"
     }
   },
-  "total_symbols": 290,
-  "last_updated": "2026-10-05T09:06:44.502244455Z"
+  "total_symbols": 366,
+  "last_updated": "2026-10-05T09:18:40.303476246Z"
 }

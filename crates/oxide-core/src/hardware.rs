@@ -27,6 +27,15 @@ pub enum GpuArchitecture {
 
     // AMD XDNA NPU Architectures
     XdnaNpu, // XDNA 1 / XDNA 2 Tile Engine (10-55 TOPS)
+
+    // Google Cloud & Edge TPU Architectures
+    GoogleTpuV2,          // TPU v2 (128x128 MXU, HBM)
+    GoogleTpuV3,          // TPU v3 (Dual 128x128 MXU, HBM2, Liquid Cooled)
+    GoogleTpuV4,          // TPU v4 / v4i (Quad 128x128 MXU, 3D Torus OCS, HBM2)
+    GoogleTpuV5e,         // TPU v5e ViperLite (LLM Inference/Training cost-optimized)
+    GoogleTpuV5p,         // TPU v5p (95GB HBM2e, 459 TFLOPS BF16, 4800 Gbps 3D Torus ICI)
+    GoogleTpuV6eTrillium, // TPU v6e Trillium (32GB HBM3, 920 TFLOPS BF16/FP8, 3rd Gen SparseCore)
+    GoogleEdgeTpu,        // Google Coral Edge TPU (4 TOPS INT8, PCIe/USB/M.2)
 }
 
 /// Compute Capability / Target ISA Version.
@@ -80,9 +89,43 @@ impl ComputeCapability {
         major: 11,
         minor: 50,
     };
+    pub const GFX_1151_RDNA3_5: Self = Self {
+        major: 11,
+        minor: 51,
+    };
     pub const GFX_1200_RDNA4: Self = Self {
         major: 12,
         minor: 0,
+    };
+
+    // Google TPU Targets
+    pub const TPU_V2: Self = Self {
+        major: 20,
+        minor: 2,
+    };
+    pub const TPU_V3: Self = Self {
+        major: 20,
+        minor: 3,
+    };
+    pub const TPU_V4: Self = Self {
+        major: 20,
+        minor: 4,
+    };
+    pub const TPU_V5E: Self = Self {
+        major: 20,
+        minor: 50,
+    };
+    pub const TPU_V5P: Self = Self {
+        major: 20,
+        minor: 51,
+    };
+    pub const TPU_V6E_TRILLIUM: Self = Self {
+        major: 20,
+        minor: 60,
+    };
+    pub const EDGE_TPU: Self = Self {
+        major: 20,
+        minor: 1,
     };
 
     #[must_use]
@@ -104,9 +147,16 @@ impl ComputeCapability {
             (9, 50) => GpuArchitecture::Cdna4,
             (10, 30) => GpuArchitecture::Rdna2,
             (11, 0) => GpuArchitecture::Rdna3,
-            (11, 50) => GpuArchitecture::Rdna3_5,
+            (11, 50..=51) => GpuArchitecture::Rdna3_5,
             (12, 0) => GpuArchitecture::Rdna4,
             (10..=12, _) => GpuArchitecture::Blackwell,
+            (20, 1) => GpuArchitecture::GoogleEdgeTpu,
+            (20, 2) => GpuArchitecture::GoogleTpuV2,
+            (20, 3) => GpuArchitecture::GoogleTpuV3,
+            (20, 4) => GpuArchitecture::GoogleTpuV4,
+            (20, 50) => GpuArchitecture::GoogleTpuV5e,
+            (20, 51) => GpuArchitecture::GoogleTpuV5p,
+            (20, 60) => GpuArchitecture::GoogleTpuV6eTrillium,
             _ => GpuArchitecture::Ampere,
         }
     }
@@ -114,13 +164,24 @@ impl ComputeCapability {
 
 impl fmt::Display for ComputeCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.major == 9
+        if self.major == 20 {
+            match self.minor {
+                1 => write!(f, "tpu_edge"),
+                2 => write!(f, "tpu_v2"),
+                3 => write!(f, "tpu_v3"),
+                4 => write!(f, "tpu_v4"),
+                50 => write!(f, "tpu_v5e"),
+                51 => write!(f, "tpu_v5p"),
+                60 => write!(f, "tpu_v6e_trillium"),
+                _ => write!(f, "tpu_v{}", self.minor),
+            }
+        } else if self.major == 9
             && (self.minor == 8 || self.minor == 10 || self.minor == 42 || self.minor == 50)
         {
             write!(f, "gfx9{:02x}", self.minor)
         } else if self.major >= 10
             && self.major <= 12
-            && (self.minor == 30 || self.minor == 50 || self.minor == 0)
+            && (self.minor == 30 || self.minor == 50 || self.minor == 51 || self.minor == 0)
         {
             write!(f, "gfx{}{}", self.major, self.minor)
         } else {
@@ -137,7 +198,10 @@ pub enum HardwareFormFactor {
     EnterpriseRackServer, // 1U-8U Enterprise Server (e.g. N1X Servers)
     DatacenterSxmNvl,   // SXM5 / SXM6 / NVL72 High-Density Multi-GPU
     DatacenterOamInstinct, // OAM / UBB AMD Instinct Datacenter Module
+    DatacenterTpuPod3dTorus, // Google Cloud TPU v4/v5p 3D Torus OCS Pod
+    DatacenterTpuPod2dTorus, // Google Cloud TPU v2/v3/v5e/v6e 2D Torus Pod
     EdgeEmbedded,       // Jetson Orin / Embedded APU Modules
+    EdgeTpuModule,      // Google Coral Edge TPU USB/PCIe/M.2
     DgxStationSpark,    // NVIDIA DGX Spark / Station AI nodes
     SuperchipGraceBlackwell, // Grace-Blackwell Coherent Memory Substrate
     ApuUnifiedMemoryWithNpu, // AMD Ryzen AI / Strix Point / MI300A Coherent Unified APU + XDNA NPU
@@ -149,25 +213,34 @@ pub enum MemoryTechnology {
     Gddr6,
     Gddr6X,
     Gddr7,
+    Hbm,
+    Hbm2,
     Hbm2e,
     Hbm3,
     Hbm3e,
     UnifiedLpddr5X,
     UnifiedDdr5Coherent,
+    SramOnChip,
 }
 
 /// Tensor / Matrix Core hardware generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TensorCoreGeneration {
-    Gen1Volta,        // NVIDIA FP16 MMA
-    Gen2Turing,       // NVIDIA INT4, INT8, FP16
-    Gen3Ampere,       // NVIDIA BF16, TF32, Structured 2:4 Sparsity
-    Gen4HopperAda,    // NVIDIA FP8 E4M3/E5M2, DPX, Async TMA
-    Gen5Blackwell,    // NVIDIA NVFP4, Microscaling MXFP4/MXFP8
-    AmdMfmaCdna3,     // AMD CDNA 3 MFMA (MI300X/MI325X: FP8, BF16, INT8, FP16)
-    AmdMfmaCdna4,     // AMD CDNA 4 MFMA (MI350X/MI355X: FP4, FP6, FP8, Microscaling)
-    AmdRdnaWmma,      // AMD RDNA 3/3.5/4 WMMA Matrix Accelerator
-    AmdXdnaNpuEngine, // AMD XDNA 1 / XDNA 2 Spatial NPU Tile Array
+    Gen1Volta,               // NVIDIA FP16 MMA
+    Gen2Turing,              // NVIDIA INT4, INT8, FP16
+    Gen3Ampere,              // NVIDIA BF16, TF32, Structured 2:4 Sparsity
+    Gen4HopperAda,           // NVIDIA FP8 E4M3/E5M2, DPX, Async TMA
+    Gen5Blackwell,           // NVIDIA NVFP4, Microscaling MXFP4/MXFP8
+    AmdMfmaCdna3,            // AMD CDNA 3 MFMA (MI300X/MI325X: FP8, BF16, INT8, FP16)
+    AmdMfmaCdna4,            // AMD CDNA 4 MFMA (MI350X/MI355X: FP4, FP6, FP8, Microscaling)
+    AmdRdnaWmma,             // AMD RDNA 3/3.5/4 WMMA Matrix Accelerator
+    AmdXdnaNpuEngine,        // AMD XDNA 1 / XDNA 2 Spatial NPU Tile Array
+    GoogleTpuMxuV2,          // Google TPU v2 128x128 BF16 Matrix Multiply Unit
+    GoogleTpuMxuV3,          // Google TPU v3 Dual 128x128 BF16 MXU
+    GoogleTpuMxuV4,          // Google TPU v4 Quad 128x128 BF16/INT8 MXU + SparseCore
+    GoogleTpuMxuV5,          // Google TPU v5e/v5p MXU + 2nd Gen SparseCore
+    GoogleTpuMxuV6Trillium,  // Google TPU v6e Trillium FP8/BF16/INT8 MXU + 3rd Gen SparseCore
+    GoogleEdgeTpuInt8Engine, // Google Coral Edge TPU 4 TOPS INT8 Systolic Engine
 }
 
 /// Comprehensive hardware profiling descriptor for target GPU / accelerator / APU.
@@ -414,7 +487,47 @@ impl GpuDeviceProfile {
         // 3. AMD RYZEN AI APUS WITH EMBEDDED NPU
         // ==========================================
 
-        // AMD Ryzen AI 300 Series (Strix Point / Strix Halo: RDNA 3.5 + XDNA 2 NPU 50+ TOPS)
+        // AMD Ryzen AI Max+ 395 & AI Max 300 Series (Strix Halo: 40 CUs RDNA 3.5 + XDNA 2 NPU 50+ TOPS, 256-bit LPDDR5X)
+        if n.contains("395")
+            || n.contains("ai max")
+            || n.contains("strix halo")
+            || n.contains("8060s")
+            || n.contains("8050s")
+        {
+            let is_390 = n.contains("390") || n.contains("8050s");
+            let is_385 = n.contains("385");
+            let cus = if is_385 {
+                24
+            } else if is_390 {
+                32
+            } else {
+                40 // Ryzen AI Max+ 395 / Radeon 8060S (40 CUs, 2560 shaders)
+            };
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::GFX_1151_RDNA3_5,
+                architecture: GpuArchitecture::Rdna3_5,
+                form_factor: HardwareFormFactor::ApuUnifiedMemoryWithNpu,
+                memory_tech: MemoryTechnology::UnifiedLpddr5X,
+                tensor_core_gen: TensorCoreGeneration::AmdXdnaNpuEngine,
+                sm_count: cus,
+                vram_capacity_bytes: 128 * 1024 * 1024 * 1024, // Up to 128GB unified LPDDR5X-8533 memory pool
+                memory_bus_width_bits: 256,
+                memory_bandwidth_gbps: 273.0,
+                l2_cache_bytes: 64 * 1024 * 1024, // 32MB MALL Infinity Cache + CPU L3 Cache
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: true, // XDNA 2 supports Block FP4 / Microscaling
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // AMD Ryzen AI 300 Series (Strix Point: RDNA 3.5 + XDNA 2 NPU 50+ TOPS)
         if n.contains("ryzen ai")
             || n.contains("strix")
             || n.contains("hx 370")
@@ -832,6 +945,212 @@ impl GpuDeviceProfile {
             });
         }
 
+        // ==========================================
+        // 5. GOOGLE CLOUD & EDGE TPUS
+        // ==========================================
+
+        // Google TPU v6e "Trillium" (32GB HBM3, 920 TFLOPS BF16/FP8, 3rd Gen SparseCore, 3.2 Tbps ICI)
+        if n.contains("trillium")
+            || n.contains("tpu v6")
+            || n.contains("tpuv6")
+            || n.contains("v6e")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::TPU_V6E_TRILLIUM,
+                architecture: GpuArchitecture::GoogleTpuV6eTrillium,
+                form_factor: HardwareFormFactor::DatacenterTpuPod2dTorus,
+                memory_tech: MemoryTechnology::Hbm3,
+                tensor_core_gen: TensorCoreGeneration::GoogleTpuMxuV6Trillium,
+                sm_count: 8, // 4 Dual-MXUs + SparseCore
+                vram_capacity_bytes: 32 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 4096,
+                memory_bandwidth_gbps: 1600.0,
+                l2_cache_bytes: 64 * 1024 * 1024,
+                smem_per_sm_bytes: 128 * 1024,
+                smem_per_block_bytes: 128 * 1024,
+                max_threads_per_sm: 2048,
+                supports_tma: true,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // 3.2 Tbps Inter-Chip Interconnect
+                nvlink_bandwidth_gbps: 3200.0,
+            });
+        }
+
+        // Google TPU v5p (95GB HBM2e, 459 TFLOPS BF16, 4800 Gbps 3D Torus ICI)
+        if n.contains("tpu v5p") || n.contains("tpuv5p") || n.contains("v5p") {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::TPU_V5P,
+                architecture: GpuArchitecture::GoogleTpuV5p,
+                form_factor: HardwareFormFactor::DatacenterTpuPod3dTorus,
+                memory_tech: MemoryTechnology::Hbm2e,
+                tensor_core_gen: TensorCoreGeneration::GoogleTpuMxuV5,
+                sm_count: 4, // 4 MXUs (128x128) + 2nd Gen SparseCore
+                vram_capacity_bytes: 95 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 4096,
+                memory_bandwidth_gbps: 2760.0,
+                l2_cache_bytes: 64 * 1024 * 1024,
+                smem_per_sm_bytes: 128 * 1024,
+                smem_per_block_bytes: 128 * 1024,
+                max_threads_per_sm: 2048,
+                supports_tma: true,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // 4.8 Tbps 3D Torus ICI
+                nvlink_bandwidth_gbps: 4800.0,
+            });
+        }
+
+        // Google TPU v5e "ViperLite" (16GB HBM2, 197 TFLOPS INT8, 2D Torus ICI)
+        if n.contains("tpu v5e")
+            || n.contains("tpuv5e")
+            || n.contains("v5e")
+            || n.contains("viperlite")
+            || n.contains("tpu v5")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::TPU_V5E,
+                architecture: GpuArchitecture::GoogleTpuV5e,
+                form_factor: HardwareFormFactor::DatacenterTpuPod2dTorus,
+                memory_tech: MemoryTechnology::Hbm2,
+                tensor_core_gen: TensorCoreGeneration::GoogleTpuMxuV5,
+                sm_count: 1, // 1 MXU (128x128)
+                vram_capacity_bytes: 16 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 1024,
+                memory_bandwidth_gbps: 820.0,
+                l2_cache_bytes: 32 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // 1.6 Tbps 2D Torus ICI
+                nvlink_bandwidth_gbps: 1600.0,
+            });
+        }
+
+        // Google TPU v4 / v4i (32GB HBM2, 275 TFLOPS BF16, 3D Torus OCS, SparseCore)
+        if n.contains("tpu v4") || n.contains("tpuv4") || n.contains("v4i") || n.contains("tpu-v4")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::TPU_V4,
+                architecture: GpuArchitecture::GoogleTpuV4,
+                form_factor: HardwareFormFactor::DatacenterTpuPod3dTorus,
+                memory_tech: MemoryTechnology::Hbm2,
+                tensor_core_gen: TensorCoreGeneration::GoogleTpuMxuV4,
+                sm_count: 4, // 4 MXUs (128x128) + SparseCore
+                vram_capacity_bytes: 32 * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 2048,
+                memory_bandwidth_gbps: 1200.0,
+                l2_cache_bytes: 32 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // 4.8 Tbps 3D Torus Optical Circuit Switched ICI
+                nvlink_bandwidth_gbps: 4800.0,
+            });
+        }
+
+        // Google TPU v3 (16GB/32GB HBM2, 123 TFLOPS BF16, Dual MXUs, Liquid Cooled)
+        if n.contains("tpu v3") || n.contains("tpuv3") || n.contains("tpu-v3") {
+            let is_32gb = n.contains("32gb");
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::TPU_V3,
+                architecture: GpuArchitecture::GoogleTpuV3,
+                form_factor: HardwareFormFactor::DatacenterTpuPod2dTorus,
+                memory_tech: MemoryTechnology::Hbm2,
+                tensor_core_gen: TensorCoreGeneration::GoogleTpuMxuV3,
+                sm_count: 2, // 2 MXUs (128x128)
+                vram_capacity_bytes: if is_32gb {
+                    32 * 1024 * 1024 * 1024
+                } else {
+                    16 * 1024 * 1024 * 1024
+                },
+                memory_bus_width_bits: 1024,
+                memory_bandwidth_gbps: 900.0,
+                l2_cache_bytes: 16 * 1024 * 1024,
+                smem_per_sm_bytes: 32 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // 650 Gbps 2D Torus ICI
+                nvlink_bandwidth_gbps: 650.0,
+            });
+        }
+
+        // Google TPU v2 (8GB/16GB HBM, 45 TFLOPS BF16, 128x128 MXU)
+        if n.contains("tpu v2") || n.contains("tpuv2") || n.contains("tpu-v2") {
+            let is_16gb = n.contains("16gb");
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::TPU_V2,
+                architecture: GpuArchitecture::GoogleTpuV2,
+                form_factor: HardwareFormFactor::DatacenterTpuPod2dTorus,
+                memory_tech: MemoryTechnology::Hbm,
+                tensor_core_gen: TensorCoreGeneration::GoogleTpuMxuV2,
+                sm_count: 1, // 1 MXU (128x128)
+                vram_capacity_bytes: if is_16gb {
+                    16 * 1024 * 1024 * 1024
+                } else {
+                    8 * 1024 * 1024 * 1024
+                },
+                memory_bus_width_bits: 1024,
+                memory_bandwidth_gbps: 600.0,
+                l2_cache_bytes: 16 * 1024 * 1024,
+                smem_per_sm_bytes: 32 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: false,
+                supports_nvlink: true, // 600 Gbps 2D Torus ICI
+                nvlink_bandwidth_gbps: 600.0,
+            });
+        }
+
+        // Google Coral Edge TPU (4 TOPS INT8, PCIe/USB/M.2)
+        if n.contains("coral") || n.contains("edge tpu") || n.contains("edgetpu") {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::EDGE_TPU,
+                architecture: GpuArchitecture::GoogleEdgeTpu,
+                form_factor: HardwareFormFactor::EdgeTpuModule,
+                memory_tech: MemoryTechnology::SramOnChip,
+                tensor_core_gen: TensorCoreGeneration::GoogleEdgeTpuInt8Engine,
+                sm_count: 1,                          // 64x64 INT8 Systolic Array
+                vram_capacity_bytes: 8 * 1024 * 1024, // 8 MB on-chip SRAM / scratchpad
+                memory_bus_width_bits: 64,
+                memory_bandwidth_gbps: 32.0,
+                l2_cache_bytes: 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 512,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: false,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
         None
     }
 
@@ -839,11 +1158,17 @@ impl GpuDeviceProfile {
     #[must_use]
     pub const fn optimal_gemv_threads(&self) -> u32 {
         match self.architecture {
-            GpuArchitecture::Cdna4
+            GpuArchitecture::GoogleTpuV6eTrillium
+            | GpuArchitecture::GoogleTpuV5p
+            | GpuArchitecture::GoogleTpuV4
+            | GpuArchitecture::Cdna4
             | GpuArchitecture::Cdna3
             | GpuArchitecture::Blackwell
-            | GpuArchitecture::Hopper => 256, // 8 warps / Wave64 x 4 for TMA, NVFP4 & CDNA MFMA
-            GpuArchitecture::Rdna3
+            | GpuArchitecture::Hopper => 256, // 8 warps / Wave64 x 4 / High-throughput 128x128 MXU
+            GpuArchitecture::GoogleTpuV5e
+            | GpuArchitecture::GoogleTpuV3
+            | GpuArchitecture::GoogleTpuV2
+            | GpuArchitecture::Rdna3
             | GpuArchitecture::Rdna3_5
             | GpuArchitecture::Rdna4
             | GpuArchitecture::Ada
@@ -851,11 +1176,12 @@ impl GpuDeviceProfile {
             | GpuArchitecture::Orin
             | GpuArchitecture::Cdna2
             | GpuArchitecture::Cdna1
-            | GpuArchitecture::XdnaNpu => 128, // 4 warps / Wave32 x 4
-            GpuArchitecture::Turing
+            | GpuArchitecture::XdnaNpu => 128, // 4 warps / Wave32 x 4 / Standard MXU
+            GpuArchitecture::GoogleEdgeTpu
+            | GpuArchitecture::Turing
             | GpuArchitecture::Volta
             | GpuArchitecture::Rdna1
-            | GpuArchitecture::Rdna2 => 64, // 2 warps
+            | GpuArchitecture::Rdna2 => 64, // 2 warps / 64x64 Edge Systolic
         }
     }
 }

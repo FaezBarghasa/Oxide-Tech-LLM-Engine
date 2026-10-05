@@ -6,6 +6,7 @@ members = [
     "crates/oxide-hardware/oxide-backend-cuda",
     "crates/oxide-hardware/oxide-backend-rocm",
     "crates/oxide-hardware/oxide-backend-metal",
+    "crates/oxide-hardware/oxide-backend-tpu",
     "crates/oxide-hardware/oxide-backend-cpu",
     "crates/oxide-models",
     "crates/oxide-quant",
@@ -27,6 +28,7 @@ oxide-alloc = { path = "crates/oxide-alloc" }
 oxide-backend-cuda = { path = "crates/oxide-hardware/oxide-backend-cuda" }
 oxide-backend-rocm = { path = "crates/oxide-hardware/oxide-backend-rocm" }
 oxide-backend-metal = { path = "crates/oxide-hardware/oxide-backend-metal" }
+oxide-backend-tpu = { path = "crates/oxide-hardware/oxide-backend-tpu" }
 oxide-backend-cpu = { path = "crates/oxide-hardware/oxide-backend-cpu" }
 oxide-models = { path = "crates/oxide-models" }
 oxide-quant = { path = "crates/oxide-quant" }

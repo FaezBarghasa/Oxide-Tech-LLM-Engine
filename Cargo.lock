@@ -679,6 +679,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-backend-tpu"
+version = "0.1.0"
+dependencies = [
+ "oxide-alloc",
+ "oxide-core",
+ "oxide-quant",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "oxide-cli"
 version = "0.1.0"
 dependencies = [
@@ -688,6 +699,7 @@ dependencies = [
  "oxide-backend-cuda",
  "oxide-backend-metal",
  "oxide-backend-rocm",
+ "oxide-backend-tpu",
  "oxide-core",
  "oxide-engine",
  "oxide-models",
@@ -725,6 +737,7 @@ dependencies = [
  "oxide-backend-cuda",
  "oxide-backend-metal",
  "oxide-backend-rocm",
+ "oxide-backend-tpu",
  "oxide-core",
  "oxide-models",
  "oxide-quant",

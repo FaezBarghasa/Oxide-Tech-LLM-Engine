@@ -2,6 +2,7 @@ use clap::{Parser, ValueEnum};
 use oxide_backend_cpu::CpuBackend;
 use oxide_backend_cuda::CudaBackend;
 use oxide_backend_rocm::RocmBackend;
+use oxide_backend_tpu::TpuBackend;
 use oxide_engine::{OxideEngine, SpecializedPipeline};
 use oxide_models::bonsai2::TernaryBonsai2Config;
 use oxide_models::llama3::Llama3Config;
@@ -24,6 +25,7 @@ enum ModelArg {
 enum BackendArg {
     Cuda,
     Rocm,
+    Tpu,
     Cpu,
 }
 
@@ -49,7 +51,7 @@ struct Cli {
     #[arg(long, default_value_t = 64)]
     max_slots: usize,
 
-    /// Target GPU/APU model name (e.g. "RTX 4090", "H100", "B200", "MI300X", "MI325X", "MI350X", "MI355X", "RX 7900 XTX", "Ryzen AI 9 HX 370")
+    /// Target GPU/APU/TPU model name (e.g. "RTX 4090", "H100", "B200", "MI300X", "AI Max+ 395", "TPU v6e", "TPU v5p", "Coral Edge TPU")
     #[arg(long)]
     gpu: Option<String>,
 }
@@ -95,6 +97,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let engine = OxideEngine::new(backend, config);
             SpecializedPipeline::Bonsai2Rocm(engine)
         }
+        (ModelArg::Bonsai2, BackendArg::Tpu) => {
+            let backend = TpuBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
+            tracing::info!(
+                "Configured TPU Profile: {} | Arch: {:?} ({}) | MXU/SparseCore: {:?}",
+                backend.profile().name,
+                backend.profile().architecture,
+                backend.profile().compute_capability,
+                backend.profile().tensor_core_gen
+            );
+            let config = TernaryBonsai2Config::default();
+            let engine = OxideEngine::new(backend, config);
+            SpecializedPipeline::Bonsai2Tpu(engine)
+        }
         (ModelArg::Needle3, BackendArg::Cuda) => {
             let backend = CudaBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
             tracing::info!(
@@ -121,6 +136,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let engine = OxideEngine::new(backend, config);
             SpecializedPipeline::Needle3Rocm(engine)
         }
+        (ModelArg::Needle3, BackendArg::Tpu) => {
+            let backend = TpuBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
+            tracing::info!(
+                "Configured TPU Profile: {} | Arch: {:?} ({}) | Plan: {:?}",
+                backend.profile().name,
+                backend.profile().architecture,
+                backend.profile().compute_capability,
+                backend.execution_plan()
+            );
+            let config = CactusNeedleConfig::<8>::default();
+            let engine = OxideEngine::new(backend, config);
+            SpecializedPipeline::Needle3Tpu(engine)
+        }
         (ModelArg::Needle3, BackendArg::Cpu) => {
             let backend = CpuBackend::new(0, cli.max_slots);
             let config = CactusNeedleConfig::<8>::default();
@@ -138,6 +166,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let config = Llama3Config::default();
             let engine = OxideEngine::new(backend, config);
             SpecializedPipeline::Llama3Rocm(engine)
+        }
+        (ModelArg::Llama3, BackendArg::Tpu) => {
+            let backend = TpuBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
+            let config = Llama3Config::default();
+            let engine = OxideEngine::new(backend, config);
+            SpecializedPipeline::Llama3Tpu(engine)
         }
         (m, b) => {
             tracing::warn!(

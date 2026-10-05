@@ -2,6 +2,7 @@ use crate::engine::OxideEngine;
 use oxide_backend_cpu::CpuBackend;
 use oxide_backend_cuda::CudaBackend;
 use oxide_backend_rocm::RocmBackend;
+use oxide_backend_tpu::TpuBackend;
 use oxide_core::error::Result;
 use oxide_core::worker::{StepCommand, StepCompletion};
 use oxide_models::bonsai2::TernaryBonsai2Config;
@@ -17,11 +18,14 @@ use oxide_quant::ptq1_0::Ternary1_58Bit;
 pub enum SpecializedPipeline {
     Bonsai2Cuda(OxideEngine<CudaBackend, TernaryBonsai2Config, Ternary1_58Bit>),
     Bonsai2Rocm(OxideEngine<RocmBackend, TernaryBonsai2Config, Ternary1_58Bit>),
+    Bonsai2Tpu(OxideEngine<TpuBackend, TernaryBonsai2Config, Ternary1_58Bit>),
     Needle3Cuda(OxideEngine<CudaBackend, CactusNeedleConfig<8>, NeedleCQ2>),
     Needle3Rocm(OxideEngine<RocmBackend, CactusNeedleConfig<8>, NeedleCQ2>),
+    Needle3Tpu(OxideEngine<TpuBackend, CactusNeedleConfig<8>, NeedleCQ2>),
     Needle3Cpu(OxideEngine<CpuBackend, CactusNeedleConfig<8>, NeedleCQ2>),
     Llama3Cuda(OxideEngine<CudaBackend, Llama3Config, NvFp4>),
     Llama3Rocm(OxideEngine<RocmBackend, Llama3Config, NvFp4>),
+    Llama3Tpu(OxideEngine<TpuBackend, Llama3Config, NvFp4>),
 }
 
 impl SpecializedPipeline {
@@ -31,11 +35,14 @@ impl SpecializedPipeline {
         match self {
             Self::Bonsai2Cuda(engine) => engine.step_monomorphized(cmd),
             Self::Bonsai2Rocm(engine) => engine.step_monomorphized(cmd),
+            Self::Bonsai2Tpu(engine) => engine.step_monomorphized(cmd),
             Self::Needle3Cuda(engine) => engine.step_monomorphized(cmd),
             Self::Needle3Rocm(engine) => engine.step_monomorphized(cmd),
+            Self::Needle3Tpu(engine) => engine.step_monomorphized(cmd),
             Self::Needle3Cpu(engine) => engine.step_monomorphized(cmd),
             Self::Llama3Cuda(engine) => engine.step_monomorphized(cmd),
             Self::Llama3Rocm(engine) => engine.step_monomorphized(cmd),
+            Self::Llama3Tpu(engine) => engine.step_monomorphized(cmd),
         }
     }
 }
