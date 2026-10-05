@@ -15,7 +15,10 @@
     clippy::return_self_not_must_use,
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::manual_div_ceil,
+    clippy::cast_lossless
 )]
 
 pub mod engine;
@@ -28,13 +31,8 @@ pub mod tensor_split;
 pub use engine::OxideEngine;
 pub use hybrid::{DeviceRole, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition};
 pub use pipeline::SpecializedPipeline;
-pub use slot_manager::{
-    ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState,
-};
-pub use speculative::{
-    SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeVerificationResult,
-};
+pub use slot_manager::{ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState};
+pub use speculative::{SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeVerificationResult};
 pub use tensor_split::{
     AcceleratorKind, TensorSliceDescriptor, TensorSplitDistributionEngine, TensorSplitMode,
 };
-

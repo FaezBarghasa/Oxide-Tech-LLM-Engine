@@ -1,10 +1,10 @@
 use oxide_quant::int_quant::{
-    f16, BlockQ2_K, BlockQ3_K, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ6_K, BlockQ8_0,
+    BlockQ2_K, BlockQ3_K, BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ6_K, BlockQ8_0, f16,
 };
 
 #[test]
 fn test_f16_float_conversion() {
-    let original = 3.14159f32;
+    let original = std::f32::consts::PI;
     let half = f16::from_f32(original);
     let recovered = half.to_f32();
     assert!((recovered - original).abs() < 0.01);

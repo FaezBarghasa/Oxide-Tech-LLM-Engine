@@ -4,8 +4,8 @@
     clippy::undocumented_unsafe_blocks
 )]
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Execution State of an Individual Inference Slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

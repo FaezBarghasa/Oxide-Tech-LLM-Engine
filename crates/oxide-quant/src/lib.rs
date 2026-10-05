@@ -36,4 +36,3 @@ pub use int_quant::{
 pub use nvfp4::NvFp4;
 pub use pq2_0::PackedQuant2_0;
 pub use ptq1_0::{Ternary1_58Bit, TernaryBlock128};
-

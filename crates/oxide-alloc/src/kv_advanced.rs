@@ -68,8 +68,16 @@ impl QuantizedKvBlock {
                 }
             }
             KvQuantizationPrecision::Quant8_0 | KvQuantizationPrecision::Fp8E4M3 => {
-                let max_k = k.iter().copied().fold(0.0f32, |m, x| m.max(x.abs())).max(1e-6);
-                let max_v = v.iter().copied().fold(0.0f32, |m, x| m.max(x.abs())).max(1e-6);
+                let max_k = k
+                    .iter()
+                    .copied()
+                    .fold(0.0f32, |m, x| m.max(x.abs()))
+                    .max(1e-6);
+                let max_v = v
+                    .iter()
+                    .copied()
+                    .fold(0.0f32, |m, x| m.max(x.abs()))
+                    .max(1e-6);
                 let k_scale = max_k / 127.0;
                 let v_scale = max_v / 127.0;
 
@@ -94,8 +102,16 @@ impl QuantizedKvBlock {
                 }
             }
             KvQuantizationPrecision::Quant4_0 | KvQuantizationPrecision::Int4Packed => {
-                let max_k = k.iter().copied().fold(0.0f32, |m, x| m.max(x.abs())).max(1e-6);
-                let max_v = v.iter().copied().fold(0.0f32, |m, x| m.max(x.abs())).max(1e-6);
+                let max_k = k
+                    .iter()
+                    .copied()
+                    .fold(0.0f32, |m, x| m.max(x.abs()))
+                    .max(1e-6);
+                let max_v = v
+                    .iter()
+                    .copied()
+                    .fold(0.0f32, |m, x| m.max(x.abs()))
+                    .max(1e-6);
                 let k_scale = max_k / 7.0;
                 let v_scale = max_v / 7.0;
 
@@ -262,7 +278,11 @@ fn f16_bits_to_f32(bits: u16) -> f32 {
     }
     if exp == 31 {
         return if frac == 0 {
-            if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY }
+            if sign == 1 {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            }
         } else {
             f32::NAN
         };
@@ -305,7 +325,9 @@ impl ContextShiftManager {
         let prefix_len = self.preserved_prefix_tokens.min(current_tokens.len());
         let prefix = &current_tokens[..prefix_len];
 
-        let tokens_to_drop = self.shift_step_size.max(current_tokens.len() - self.max_context_length);
+        let tokens_to_drop = self
+            .shift_step_size
+            .max(current_tokens.len() - self.max_context_length);
         let start_recent = (prefix_len + tokens_to_drop).min(current_tokens.len());
         let recent = &current_tokens[start_recent..];
 

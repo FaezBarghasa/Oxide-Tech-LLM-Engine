@@ -23,9 +23,9 @@ pub enum ProjectorType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectorConfig {
     pub projector_type: ProjectorType,
-    pub input_dim: usize,      // Vision / Audio encoder output dim (e.g. 1024 or 1152)
+    pub input_dim: usize, // Vision / Audio encoder output dim (e.g. 1024 or 1152)
     pub intermediate_dim: usize, // Hidden dim (e.g. 4096)
-    pub output_dim: usize,     // LLM text embedding hidden dim (e.g. 4096 or 8192)
+    pub output_dim: usize, // LLM text embedding hidden dim (e.g. 4096 or 8192)
 }
 
 /// Multi-Modal Cross-Modal Alignment Projector Engine.
@@ -53,24 +53,22 @@ impl MultiModalProjector {
     }
 
     /// Projects modality feature vectors `[num_tokens, input_dim]` into LLM space `[num_tokens, output_dim]`.
-    pub fn project_features(
-        &self,
-        features: &[f32],
-        num_tokens: usize,
-        output: &mut [f32],
-    ) {
+    pub fn project_features(&self, features: &[f32], num_tokens: usize, output: &mut [f32]) {
         assert_eq!(features.len(), num_tokens * self.config.input_dim);
         assert_eq!(output.len(), num_tokens * self.config.output_dim);
 
         match self.config.projector_type {
             ProjectorType::Linear => {
                 for t in 0..num_tokens {
-                    let feat_slice = &features[t * self.config.input_dim..(t + 1) * self.config.input_dim];
-                    let out_slice = &mut output[t * self.config.output_dim..(t + 1) * self.config.output_dim];
+                    let feat_slice =
+                        &features[t * self.config.input_dim..(t + 1) * self.config.input_dim];
+                    let out_slice =
+                        &mut output[t * self.config.output_dim..(t + 1) * self.config.output_dim];
 
                     for o in 0..self.config.output_dim {
                         let mut sum = self.b1.get(o).copied().unwrap_or(0.0);
-                        let w_row = &self.w1[o * self.config.input_dim..(o + 1) * self.config.input_dim];
+                        let w_row =
+                            &self.w1[o * self.config.input_dim..(o + 1) * self.config.input_dim];
                         for i in 0..self.config.input_dim {
                             sum += feat_slice[i] * w_row[i];
                         }
@@ -78,30 +76,40 @@ impl MultiModalProjector {
                     }
                 }
             }
-            ProjectorType::MlpGelu | ProjectorType::PerceiverResampler { .. } | ProjectorType::SpatialDownsample { .. } => {
+            ProjectorType::MlpGelu
+            | ProjectorType::PerceiverResampler { .. }
+            | ProjectorType::SpatialDownsample { .. } => {
                 let mut hidden = vec![0.0; self.config.intermediate_dim];
 
                 for t in 0..num_tokens {
-                    let feat_slice = &features[t * self.config.input_dim..(t + 1) * self.config.input_dim];
-                    let out_slice = &mut output[t * self.config.output_dim..(t + 1) * self.config.output_dim];
+                    let feat_slice =
+                        &features[t * self.config.input_dim..(t + 1) * self.config.input_dim];
+                    let out_slice =
+                        &mut output[t * self.config.output_dim..(t + 1) * self.config.output_dim];
 
                     // 1. Layer 1 + GELU
                     for h in 0..self.config.intermediate_dim {
                         let mut sum = self.b1[h];
-                        let w1_row = &self.w1[h * self.config.input_dim..(h + 1) * self.config.input_dim];
+                        let w1_row =
+                            &self.w1[h * self.config.input_dim..(h + 1) * self.config.input_dim];
                         for i in 0..self.config.input_dim {
                             sum += feat_slice[i] * w1_row[i];
                         }
                         // GELU approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
                         let x = sum;
-                        let cdf = 0.5 * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x.powi(3))).tanh());
+                        let cdf = 0.5
+                            * (1.0
+                                + ((2.0 / std::f32::consts::PI).sqrt()
+                                    * (x + 0.044715 * x.powi(3)))
+                                .tanh());
                         hidden[h] = x * cdf;
                     }
 
                     // 2. Layer 2
                     for o in 0..self.config.output_dim {
                         let mut sum = self.b2[o];
-                        let w2_row = &self.w2[o * self.config.intermediate_dim..(o + 1) * self.config.intermediate_dim];
+                        let w2_row = &self.w2[o * self.config.intermediate_dim
+                            ..(o + 1) * self.config.intermediate_dim];
                         for h in 0..self.config.intermediate_dim {
                             sum += hidden[h] * w2_row[h];
                         }

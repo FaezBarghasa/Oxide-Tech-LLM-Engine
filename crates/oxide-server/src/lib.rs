@@ -15,7 +15,11 @@
     clippy::return_self_not_must_use,
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::format_push_string,
+    clippy::unused_async,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines
 )]
 
 pub mod dfa;
@@ -276,7 +280,9 @@ async fn chat_completions_handler(
             yield Ok::<Event, Infallible>(Event::default().data("[DONE]"));
         };
 
-        Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+        Sse::new(stream)
+            .keep_alive(KeepAlive::default())
+            .into_response()
     } else {
         let mut generated_text = String::new();
         let mut cur_token: u32 = 42;
@@ -382,9 +388,7 @@ async fn completions_handler(
     Json(resp).into_response()
 }
 
-async fn embeddings_handler(
-    Json(payload): Json<EmbeddingRequest>,
-) -> Json<EmbeddingResponse> {
+async fn embeddings_handler(Json(payload): Json<EmbeddingRequest>) -> Json<EmbeddingResponse> {
     let inputs: Vec<String> = match payload.input {
         serde_json::Value::String(s) => vec![s],
         serde_json::Value::Array(arr) => arr

@@ -113,7 +113,10 @@ impl ChatTemplateParser {
                         ChatRole::Assistant => "assistant",
                         ChatRole::Tool => "tool",
                     };
-                    prompt.push_str(&format!("<|im_start|>{role_str}\n{}<|im_end|>\n", msg.content));
+                    prompt.push_str(&format!(
+                        "<|im_start|>{role_str}\n{}<|im_end|>\n",
+                        msg.content
+                    ));
                 }
                 if self.add_generation_prompt {
                     prompt.push_str("<|im_start|>assistant\n");
@@ -162,7 +165,10 @@ impl ChatTemplateParser {
                 for msg in messages {
                     match msg.role {
                         ChatRole::System => {
-                            prompt.push_str(&format!("[SYSTEM_PROMPT] {} [/SYSTEM_PROMPT]", msg.content));
+                            prompt.push_str(&format!(
+                                "[SYSTEM_PROMPT] {} [/SYSTEM_PROMPT]",
+                                msg.content
+                            ));
                         }
                         ChatRole::User => {
                             prompt.push_str(&format!("[INST] {} [/INST]", msg.content));
@@ -171,7 +177,10 @@ impl ChatTemplateParser {
                             prompt.push_str(&format!("{}</s>", msg.content));
                         }
                         ChatRole::Tool => {
-                            prompt.push_str(&format!("[TOOL_RESULTS] {} [/TOOL_RESULTS]", msg.content));
+                            prompt.push_str(&format!(
+                                "[TOOL_RESULTS] {} [/TOOL_RESULTS]",
+                                msg.content
+                            ));
                         }
                     }
                 }

@@ -17,12 +17,8 @@ fn test_speculative_decoding_verification() {
     let target_probs = vec![0.95, 0.85, 0.1]; // Token 103 rejected
     let target_recovery = vec![101, 102, 999];
 
-    let result = engine.verify_draft_tokens(
-        &draft_tokens,
-        &draft_probs,
-        &target_probs,
-        &target_recovery,
-    );
+    let result =
+        engine.verify_draft_tokens(&draft_tokens, &draft_probs, &target_probs, &target_recovery);
 
     assert_eq!(result.accepted_tokens, vec![101, 102]);
     assert_eq!(result.num_accepted, 2);

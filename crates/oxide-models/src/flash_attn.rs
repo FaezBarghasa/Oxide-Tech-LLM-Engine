@@ -85,10 +85,13 @@ impl FlashAttentionEngine {
             let q_end = (q_start + br).min(seq_len_q);
             let q_len = q_end - q_start;
 
-            let mut tile_states = vec![OnlineSoftmaxTile {
-                max_score: f32::NEG_INFINITY,
-                sum_exp: 0.0,
-            }; q_len];
+            let mut tile_states = vec![
+                OnlineSoftmaxTile {
+                    max_score: f32::NEG_INFINITY,
+                    sum_exp: 0.0,
+                };
+                q_len
+            ];
 
             for kv_blk in 0..num_kv_blocks {
                 let kv_start = kv_blk * bc;
@@ -136,7 +139,8 @@ impl FlashAttentionEngine {
                         }
                     }
 
-                    let out_slice = &mut output[global_q_idx * head_dim..(global_q_idx + 1) * head_dim];
+                    let out_slice =
+                        &mut output[global_q_idx * head_dim..(global_q_idx + 1) * head_dim];
 
                     // Rescale previous accumulated output
                     if row_state.sum_exp > 0.0 {
@@ -149,7 +153,8 @@ impl FlashAttentionEngine {
                     for (j, &p) in s_row.iter().enumerate().take(kv_len) {
                         if p > 0.0 {
                             let global_kv_idx = kv_start + j;
-                            let v_vec = &v[global_kv_idx * head_dim..(global_kv_idx + 1) * head_dim];
+                            let v_vec =
+                                &v[global_kv_idx * head_dim..(global_kv_idx + 1) * head_dim];
                             for d in 0..head_dim {
                                 out_slice[d] += p * v_vec[d];
                             }

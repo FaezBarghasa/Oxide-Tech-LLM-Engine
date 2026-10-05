@@ -23,7 +23,8 @@
     clippy::manual_checked_ops,
     clippy::manual_div_ceil,
     clippy::chunks_exact_to_as_chunks,
-    clippy::redundant_closure_for_method_calls
+    clippy::redundant_closure_for_method_calls,
+    clippy::unreadable_literal
 )]
 
 pub mod device_arena;
@@ -43,4 +44,3 @@ pub use kv_advanced::{
     QuantizedKvBlock,
 };
 pub use transactional::TransactionalBlockTable;
-

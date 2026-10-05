@@ -2147,8 +2147,13 @@ impl DecisionMakingModelEngine {
         let mut max_q = f32::NEG_INFINITY;
 
         for (idx, action) in candidate_actions.iter().enumerate() {
-            let act_dot = action.iter().zip(observation_state.iter()).map(|(&a, &s)| a * s).sum::<f32>();
-            let q = act_dot / (1.0 + state_norm) - self.risk_aversion_factor * (action.len() as f32 * 0.05);
+            let act_dot = action
+                .iter()
+                .zip(observation_state.iter())
+                .map(|(&a, &s)| a * s)
+                .sum::<f32>();
+            let q = act_dot / (1.0 + state_norm)
+                - self.risk_aversion_factor * (action.len() as f32 * 0.05);
             if q > max_q {
                 max_q = q;
                 best_idx = idx;
@@ -2191,7 +2196,8 @@ impl DecisionMakingModelEngine {
             continuous_deltas.push(g - s);
         }
 
-        let confidence = (1.0 / (1.0 + continuous_deltas.iter().map(|d| d.abs()).sum::<f32>())).clamp(0.0, 1.0);
+        let confidence =
+            (1.0 / (1.0 + continuous_deltas.iter().map(|d| d.abs()).sum::<f32>())).clamp(0.0, 1.0);
 
         Ok(LayaPolicyAction {
             latent_trajectory: trajectory,
@@ -2224,4 +2230,3 @@ impl DecisionMakingModelEngine {
         })
     }
 }
-

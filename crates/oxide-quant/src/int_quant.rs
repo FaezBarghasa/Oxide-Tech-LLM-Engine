@@ -2,7 +2,6 @@
 //! Implements standard GGML-compatible block layouts (Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1,
 //! Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K) with zero allocations and branchless math.
 
-
 // ============================================================================
 // 4-bit Quantization: Q4_0 and Q4_1
 // ============================================================================
@@ -88,7 +87,9 @@ impl BlockQ4_1 {
         let mut qs = [0u8; 16];
         for i in 0..16 {
             let q0 = ((values[i] - min_val) * inv_scale).round().clamp(0.0, 15.0) as u8;
-            let q1 = ((values[i + 16] - min_val) * inv_scale).round().clamp(0.0, 15.0) as u8;
+            let q1 = ((values[i + 16] - min_val) * inv_scale)
+                .round()
+                .clamp(0.0, 15.0) as u8;
             qs[i] = (q0 & 0x0F) | ((q1 & 0x0F) << 4);
         }
 
@@ -121,8 +122,8 @@ impl BlockQ4_1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ5_0 {
     pub scale: f16,
-    pub qh: [u8; 4],   // High 5th bit for each of the 32 elements
-    pub qs: [u8; 16],  // Low 4 bits for 32 elements
+    pub qh: [u8; 4],  // High 5th bit for each of the 32 elements
+    pub qs: [u8; 16], // Low 4 bits for 32 elements
 }
 
 impl BlockQ5_0 {
@@ -240,9 +241,9 @@ impl BlockQ8_0 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockQ2_K {
     pub scales: [u8; 16],
-    pub qs: [u8; 64],    // 256 elements packed at 2 bits each = 64 bytes
-    pub d: f16,          // Super-block scale
-    pub dmin: f16,       // Super-block min
+    pub qs: [u8; 64], // 256 elements packed at 2 bits each = 64 bytes
+    pub d: f16,       // Super-block scale
+    pub dmin: f16,    // Super-block min
 }
 
 impl Default for BlockQ2_K {
@@ -373,8 +374,8 @@ impl BlockQ3_K {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockQ6_K {
-    pub ql: [u8; 128],   // Lower 4 bits for 256 weights = 128 bytes
-    pub qh: [u8; 64],    // Higher 2 bits for 256 weights = 64 bytes
+    pub ql: [u8; 128], // Lower 4 bits for 256 weights = 128 bytes
+    pub qh: [u8; 64],  // Higher 2 bits for 256 weights = 64 bytes
     pub scales: [i8; 16],
     pub d: f16,
 }
@@ -498,13 +499,15 @@ impl f16 {
                 return if sign == 1 { -0.0 } else { 0.0 };
             }
             // Subnormal
-            return (if sign == 1 { -1.0 } else { 1.0 })
-                * (frac as f32)
-                * (2.0f32).powi(-24);
+            return (if sign == 1 { -1.0 } else { 1.0 }) * (frac as f32) * (2.0f32).powi(-24);
         }
         if exp == 31 {
             if frac == 0 {
-                return if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY };
+                return if sign == 1 {
+                    f32::NEG_INFINITY
+                } else {
+                    f32::INFINITY
+                };
             }
             return f32::NAN;
         }

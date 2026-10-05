@@ -120,7 +120,9 @@ impl HybridMultiDevicePipeline {
                 DeviceRole::Gpu(gpu_id) => {
                     // GPU stage execution (simulated direct kernel dispatch across layers)
                     let num_layers = partition.end_layer - partition.start_layer;
-                    for i in 0..self.active_hidden_dim.min(self.intermediate_activation_buffer.len())
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
                     {
                         self.intermediate_activation_buffer[i] +=
                             (gpu_id as f32 + 1.0) * (num_layers as f32) * 0.01;
@@ -129,14 +131,18 @@ impl HybridMultiDevicePipeline {
                 DeviceRole::Cpu => {
                     // CPU SIMD stage execution for offloaded layers
                     let num_layers = partition.end_layer - partition.start_layer;
-                    for i in 0..self.active_hidden_dim.min(self.intermediate_activation_buffer.len())
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
                     {
                         self.intermediate_activation_buffer[i] += (num_layers as f32) * 0.005;
                     }
                 }
                 DeviceRole::Npu => {
                     let num_layers = partition.end_layer - partition.start_layer;
-                    for i in 0..self.active_hidden_dim.min(self.intermediate_activation_buffer.len())
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
                     {
                         self.intermediate_activation_buffer[i] += (num_layers as f32) * 0.008;
                     }

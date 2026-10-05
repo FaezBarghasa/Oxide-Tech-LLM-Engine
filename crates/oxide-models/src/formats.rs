@@ -396,8 +396,7 @@ impl GgufFile {
                 if offset + 12 > bytes.len() {
                     return Err(EngineError::InvalidArtifactHeader);
                 }
-                let item_type =
-                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                let item_type = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
                 offset += 4;
                 let count =
                     u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
@@ -456,7 +455,6 @@ impl GgufFile {
         }
     }
 }
-
 
 /// NVIDIA NVFP4 (E2M1 4-bit float) Tensor Block with 2x memory reduction for Blackwell MoE.
 /// Each byte encodes two 4-bit floats with a per-block FP8 scale factor.

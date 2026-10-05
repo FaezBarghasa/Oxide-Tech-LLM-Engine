@@ -103,7 +103,8 @@ impl RopeScalingEngine {
                     long_factor,
                     original_max_position,
                 } => {
-                    let factor = if config.max_position_embeddings > original_max_position as usize {
+                    let factor = if config.max_position_embeddings > original_max_position as usize
+                    {
                         long_factor
                     } else {
                         short_factor

@@ -258,11 +258,7 @@ impl AcademicSamplerEngine {
     }
 
     /// Mirostat v1 Active Sampling Algorithm.
-    fn sample_mirostat_v1(
-        &self,
-        candidates: &mut [(u32, f32)],
-        state: &mut SamplerState,
-    ) -> u32 {
+    fn sample_mirostat_v1(&self, candidates: &mut [(u32, f32)], state: &mut SamplerState) -> u32 {
         let tau = self.config.mirostat_tau;
         let eta = self.config.mirostat_eta;
 
@@ -276,11 +272,7 @@ impl AcademicSamplerEngine {
     }
 
     /// Mirostat v2 Active Sampling Algorithm (Fast Target Entropy Truncation).
-    fn sample_mirostat_v2(
-        &self,
-        candidates: &mut [(u32, f32)],
-        state: &mut SamplerState,
-    ) -> u32 {
+    fn sample_mirostat_v2(&self, candidates: &mut [(u32, f32)], state: &mut SamplerState) -> u32 {
         let tau = self.config.mirostat_tau;
         let eta = self.config.mirostat_eta;
         let max_surprise = state.mirostat_mu;
@@ -405,11 +397,7 @@ impl GbnfGrammarEngine {
     }
 
     /// Masks logits based on active grammar constraints.
-    pub fn apply_grammar_mask(
-        &self,
-        logits: &mut [f32],
-        vocab_tokens: &[String],
-    ) -> Result<()> {
+    pub fn apply_grammar_mask(&self, logits: &mut [f32], vocab_tokens: &[String]) -> Result<()> {
         if let Some(rule) = self.rules.get(&self.start_rule) {
             for (token_id, text) in vocab_tokens.iter().enumerate() {
                 if let Some(first_char) = text.chars().next() {

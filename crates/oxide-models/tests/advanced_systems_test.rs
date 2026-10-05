@@ -136,7 +136,9 @@ fn test_decision_making_models_jev_laya_clef() {
     // 3. CLEF causal reasoning
     let vars = vec!["InterestRate".to_string(), "Inflation".to_string()];
     let evidence = vec![0.05, 0.02];
-    let clef_res = decider.infer_causal_clef(&vars, &evidence, "InterestRate").unwrap();
+    let clef_res = decider
+        .infer_causal_clef(&vars, &evidence, "InterestRate")
+        .unwrap();
     assert_eq!(clef_res.causal_graph_nodes.len(), 2);
     assert!(clef_res.interventions[0].contains("InterestRate"));
 }

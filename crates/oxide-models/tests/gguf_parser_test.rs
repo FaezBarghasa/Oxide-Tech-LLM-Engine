@@ -46,14 +46,8 @@ fn test_gguf_synthetic_binary_parsing() {
     assert_eq!(header.tensor_count, 1);
     assert_eq!(header.metadata_kv_count, 2);
 
-    assert_eq!(
-        parsed.get_string("general.architecture"),
-        Some("llama")
-    );
-    assert_eq!(
-        parsed.get_u32("llama.context_length"),
-        Some(8192)
-    );
+    assert_eq!(parsed.get_string("general.architecture"), Some("llama"));
+    assert_eq!(parsed.get_u32("llama.context_length"), Some(8192));
 
     assert_eq!(parsed.tensors.len(), 1);
     let t = parsed.tensors.get("blk.0.attn_q.weight").unwrap();

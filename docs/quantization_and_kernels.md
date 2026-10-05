@@ -1,12 +1,28 @@
-# Quantization & Microarchitectural Kernels
+# Quantization, Integer Arithmetic & Microarchitectural Kernels
 
 ## Overview
 
-Quantization in `Oxide-Tech-LLM-Engine` is engineered for bare-metal integer instruction saturation, minimal memory footprint, and exact mathematical fidelity. Oxide supports non-standard and emerging quantization formats including **Ternary 1.58-bit (`PTQ1_0`, `PQ2_0`)**, **Monarch block-diagonal factors (`CQ2`)**, and **NVIDIA Blackwell NVFP4**.
+Quantization in `Oxide-Tech-LLM-Engine` (`crates/oxide-quant/`) is engineered for bare-metal SIMD/Tensor Core saturation, minimal memory footprint, and exact mathematical fidelity across 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer formats, ternary 1.58-bit, NVIDIA Blackwell NVFP4, and Flash Attention algorithms.
 
 ---
 
-## 1. Fast Walsh-Hadamard Transform (FWHT) Preconditioning
+## 1. Complete Integer Quantization Suite (2-bit to 8-bit)
+
+Oxide provides native, zero-allocation GGML-compatible integer quantization formats with direct SIMD dot-product acceleration.
+
+| Format | Block Size | Effective Bits | Memory Layout | Target Hardware Acceleration |
+|---|---|---|---|---|
+| **Q2_K** | 256 weights | 2.5625 bpw | Scales (16B) + Packed Qs (64B) + Scale `d` + Min `dmin` | AVX-512 `vpmaddubsw`, CUDA DP4A, Metal SIMD |
+| **Q3_K** | 256 weights | 3.4375 bpw | Low 2-bit Qs (64B) + High 1-bit Qs (32B) + Scales (12B) + Scale `d` | AVX2 / AVX-512 bit manipulation, NEON |
+| **Q4_0** | 32 weights | 4.5 bpw | Scale `d` (f16) + 16 bytes (two 4-bit nibbles/byte) | AVX2 `vpand`, CUDA Tensor Cores, Apple AMX |
+| **Q4_1** | 32 weights | 5.0 bpw | Scale `d` (f16) + Min `m` (f16) + 16 bytes packed | CPU Affine integer dot products |
+| **Q5_0** | 32 weights | 5.5 bpw | Scale `d` (f16) + High bits `qh` (4B) + Low bits `qs` (16B) | AVX-512, CUDA Warp Shuffle |
+| **Q6_K** | 256 weights | 6.5625 bpw | Low 4-bit `ql` (128B) + High 2-bit `qh` (64B) + Scales (16B) + Scale `d` | Fast integer matrix multiplications |
+| **Q8_0** | 32 weights | 8.5 bpw | Scale `d` (f16) + 32 signed int8 values | Int8 `vpdpbusd` on Intel/AMD, Dot on ARM |
+
+---
+
+## 2. Fast Walsh-Hadamard Transform (FWHT) Preconditioning
 
 ### Mathematical Invariant
 To eliminate activation outliers without modifying ternary weights $\{-1, 0, +1\}$, activations are transformed into the Hadamard basis using an orthogonal Walsh-Hadamard matrix $H_N$:
@@ -37,9 +53,8 @@ __device__ __forceinline__ void fwht_butterfly_128(float* smem_lane) {
 
 ---
 
-## 2. Branchless Ternary Arithmetic (`PTQ1_0` and `PQ2_0`)
+## 3. Branchless Ternary Arithmetic (`PTQ1_0` and `PQ2_0`)
 
-### Bit Layout
 Ternary weights $\{-1, 0, +1\}$ are encoded in 2-bit packed values:
 - $00_2 \implies 0$
 - $01_2 \implies +1$
@@ -55,40 +70,9 @@ pub struct TernaryBlock128 {
 }
 ```
 
-### Branchless Unpack & Inner Product
-The inner product eliminates warp divergence using bit-shifting arithmetic:
-
-```rust
-#[inline(always)]
-pub fn unpack_and_dot_group(block: &TernaryBlock128, activations: &[f32; 128]) -> f32 {
-    let scale = f16_to_f32(block.scale);
-    let mut sum: f32 = 0.0;
-
-    for byte_idx in 0..32 {
-        let b = block.packed_weights[byte_idx];
-        for bit_offset in 0..4 {
-            let code = (b >> (bit_offset * 2)) & 0b11;
-            let act_idx = byte_idx * 4 + bit_offset;
-            let act = activations[act_idx];
-
-            let sign = match code {
-                0b01 => 1.0,
-                0b10 => -1.0,
-                _ => 0.0,
-            };
-            sum += act * sign;
-        }
-    }
-
-    sum * scale
-}
-```
-
-On CUDA hardware, this unpack loop maps to `__dp4a` instructions; on AVX-512 CPU hardware, it lowers to `vpdpbusd`.
-
 ---
 
-## 3. NVIDIA Blackwell NVFP4 Quantization
+## 4. NVIDIA Blackwell NVFP4 Quantization
 
 The **NVFP4 (E2M1)** format represents floating-point values using 1 sign bit, 2 exponent bits, and 1 mantissa bit.
 
@@ -99,12 +83,9 @@ In `crates/oxide-quant/src/nvfp4.rs`:
 
 ---
 
-## 4. Mathematical Tolerance & Verification Assertions
+## 5. Flash Attention Engine (In-SMem Tiled Online Softmax)
 
-Every quantized kernel must satisfy strict mathematical tolerance thresholds against golden FP32/BF16 reference tensors before integration:
-
-$$\max_i |L_{\text{rust}, i} - L_{\text{ref}, i}| \le \epsilon$$
-$$\text{CosineSimilarity}(\vec{u}, \vec{v}) = \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\|_2 \|\vec{v}\|_2} \ge 1 - \delta$$
-
-- **FP16/BF16 Layers**: $\epsilon \le 1.5 \times 10^{-3}$, $\delta \le 1.0 \times 10^{-5}$
-- **Ternary PTQ1_0 / CQ2 Layers**: $\epsilon \le 5.0 \times 10^{-2}$, $\delta \le 1.0 \times 10^{-3}$
+`crates/oxide-models/src/flash_attn.rs` implements Flash Attention with in-SMem tiled online softmax algorithm:
+- **Tiling**: Splits query sequence into blocks of size $B_r$ (e.g., 64) and key/value sequence into blocks of size $B_c$ (e.g., 64).
+- **Online Softmax Accumulation**: Computes running maximum $m_i$ and running partition function $l_i = \sum \exp(s_{ij} - m_i)$, dynamically rescaling accumulated output tile by $\exp(m_{\text{prev}} - m_{\text{new}})$ without ever writing intermediate $N \times N$ attention matrices to global memory.
+- **Memory Complexity**: $O(1)$ intermediate SRAM memory overhead, strictly preventing GPU VRAM exhaustion on $128\text{k}+$ context lengths.

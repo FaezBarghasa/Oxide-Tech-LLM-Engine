@@ -53,7 +53,10 @@ pub struct TensorSplitDistributionEngine {
 impl TensorSplitDistributionEngine {
     #[must_use]
     pub fn new(devices: Vec<AcceleratorKind>, split_mode: TensorSplitMode) -> Self {
-        Self { devices, split_mode }
+        Self {
+            devices,
+            split_mode,
+        }
     }
 
     /// Automatically partitions a weight tensor across heterogeneous accelerators according to relative capability weights.
@@ -88,7 +91,8 @@ impl TensorSplitDistributionEngine {
             let count = if is_last {
                 total_elements.saturating_sub(current_offset)
             } else {
-                ((total_elements as f32 * frac).round() as usize).min(total_elements.saturating_sub(current_offset))
+                ((total_elements as f32 * frac).round() as usize)
+                    .min(total_elements.saturating_sub(current_offset))
             };
 
             let bw = match accel {

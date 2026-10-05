@@ -47,4 +47,3 @@ pub use traits::{
 };
 pub use typestate::{Allocated, Decoding, Prefilling, SequenceRequest, Terminal, Unallocated};
 pub use worker::{ExecutionWorker, StepCommand, StepCompletion};
-

@@ -4,8 +4,8 @@
     clippy::undocumented_unsafe_blocks
 )]
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// LoRA Adapter Configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
