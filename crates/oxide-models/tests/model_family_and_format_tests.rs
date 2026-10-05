@@ -3,9 +3,32 @@ use oxide_models::moe::{MoELayer, MoERouterConfig};
 use oxide_models::registry::{
     ModelArchitectureType, ModelFamily, ModelModality, ModelSpecification, QuantizationClass,
 };
+use oxide_models::llama3::{Llama3Config, Llama3KvCacheLayer, Llama3Model};
 use oxide_models::specialized::{
     AgenticDeciderEngine, EmbeddingEngine, RoboticsVlaEngine, TimeSeriesEngine,
 };
+
+#[test]
+fn test_llama3_model_forward_execution() {
+    let config = Llama3Config::tiny_test_config();
+    let model = Llama3Model::new(config);
+    let mut kv_cache = vec![
+        Llama3KvCacheLayer::new(
+            config.max_seq_len,
+            config.num_kv_heads * config.head_dim,
+        );
+        config.num_layers
+    ];
+
+    let logits = model.forward_step(42, 0, &mut kv_cache).expect("Forward step 0");
+    assert_eq!(logits.len(), config.vocab_size);
+    assert!(logits.iter().any(|&l| l.is_finite()));
+
+    // Forward step 1 (with cached past KV tokens)
+    let logits_2 = model.forward_step(100, 1, &mut kv_cache).expect("Forward step 1");
+    assert_eq!(logits_2.len(), config.vocab_size);
+    assert_eq!(kv_cache[0].current_len, 2);
+}
 
 #[test]
 fn test_model_registry_catalog_and_lookup() {
