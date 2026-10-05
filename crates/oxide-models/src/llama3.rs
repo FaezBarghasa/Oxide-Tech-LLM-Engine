@@ -79,9 +79,7 @@ impl Llama3Config {
         let hidden_dim = gguf
             .get_u64(&format!("{arch}.embedding_length"))
             .unwrap_or(4096) as usize;
-        let num_layers = gguf
-            .get_u64(&format!("{arch}.block_count"))
-            .unwrap_or(32) as usize;
+        let num_layers = gguf.get_u64(&format!("{arch}.block_count")).unwrap_or(32) as usize;
         let num_heads = gguf
             .get_u64(&format!("{arch}.attention.head_count"))
             .unwrap_or(32) as usize;

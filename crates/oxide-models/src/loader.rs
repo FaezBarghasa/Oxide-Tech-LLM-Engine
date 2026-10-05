@@ -38,9 +38,7 @@ impl ModelMetadata {
         let hidden_size = gguf
             .get_u64(&format!("{arch}.embedding_length"))
             .unwrap_or(4096) as u32;
-        let num_layers = gguf
-            .get_u64(&format!("{arch}.block_count"))
-            .unwrap_or(32) as u32;
+        let num_layers = gguf.get_u64(&format!("{arch}.block_count")).unwrap_or(32) as u32;
         let num_heads = gguf
             .get_u64(&format!("{arch}.attention.head_count"))
             .unwrap_or(32) as u32;

@@ -303,7 +303,6 @@ impl ServerState {
             let mut guard = mgr.lock().await;
             guard
                 .get_or_load(model_name)
-                .await
                 .unwrap_or_else(|_| self.pipeline.clone())
         } else {
             self.pipeline.clone()
@@ -366,7 +365,7 @@ async fn model_load_handler(
 ) -> Result<Json<ModelLoadResponse>, (axum::http::StatusCode, String)> {
     if let Some(mgr) = &state.model_manager {
         let mut guard = mgr.lock().await;
-        match guard.get_or_load(&payload.model).await {
+        match guard.get_or_load(&payload.model) {
             Ok(_) => {
                 if let Some(alias) = &payload.alias {
                     guard.alias_model(alias, &payload.model);
@@ -375,7 +374,8 @@ async fn model_load_handler(
                 Ok(Json(ModelLoadResponse {
                     success: true,
                     model: payload.model,
-                    message: "Model successfully hot-swapped into memory and set as default".to_string(),
+                    message: "Model successfully hot-swapped into memory and set as default"
+                        .to_string(),
                 }))
             }
             Err(e) => Err((

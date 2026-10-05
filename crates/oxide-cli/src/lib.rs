@@ -15,7 +15,9 @@
     clippy::return_self_not_must_use,
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
 )]
 
 use clap::{Parser, ValueEnum};
@@ -313,12 +315,18 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 chat.weights.as_deref(),
             )?;
 
-            println!("Oxide-Tech-LLM-Engine | Model: {} | Backend: {}", chat.model, backend_str);
+            println!(
+                "Oxide-Tech-LLM-Engine | Model: {} | Backend: {}",
+                chat.model, backend_str
+            );
             if let Some(prompt) = chat.prompt {
                 println!("Prompt: {prompt}");
                 let cmd = StepCommand::new(1, 1, 0, true);
                 let step_res = pipeline.step(&cmd)?;
-                println!("Assistant (Token {} generated via zero-allocation DAG): Response ready.", step_res.sampled_token);
+                println!(
+                    "Assistant (Token {} generated via zero-allocation DAG): Response ready.",
+                    step_res.sampled_token
+                );
             } else {
                 println!("Interactive REPL. Type 'exit' or 'quit' to terminate.");
                 let stdin = std::io::stdin();
@@ -331,7 +339,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         break;
                     }
                     let trimmed = line.trim();
-                    if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
+                    if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit")
+                    {
                         break;
                     }
                     if trimmed.is_empty() {
@@ -339,7 +348,10 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                     let cmd = StepCommand::new(1, 1, 0, true);
                     let step_res = pipeline.step(&cmd)?;
-                    println!("Assistant (Token {}): Response ready.", step_res.sampled_token);
+                    println!(
+                        "Assistant (Token {}): Response ready.",
+                        step_res.sampled_token
+                    );
                 }
             }
             Ok(())
@@ -357,10 +369,16 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 1,
                 None,
             )?;
-            println!("Generating image for prompt '{}' with {} steps...", img.prompt, img.steps);
+            println!(
+                "Generating image for prompt '{}' with {} steps...",
+                img.prompt, img.steps
+            );
             let cmd = StepCommand::new(1, 1, 0, true);
             let step_res = pipeline.step(&cmd)?;
-            println!("Diffusion completed. Output status token: {}", step_res.sampled_token);
+            println!(
+                "Diffusion completed. Output status token: {}",
+                step_res.sampled_token
+            );
             Ok(())
         }
         Some(Commands::Server(srv)) => {
@@ -379,7 +397,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 srv.kv_device_blocks,
                 srv.kv_host_blocks,
                 srv.kv_storage_blocks,
-            ).await
+            )
+            .await
         }
         None => {
             run_server_with_options(
@@ -396,7 +415,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 cli.kv_device_blocks,
                 cli.kv_host_blocks,
                 cli.kv_storage_blocks,
-            ).await
+            )
+            .await
         }
     }
 }
@@ -445,21 +465,11 @@ async fn run_server_with_options(
 
     let backend_str = backend.as_str();
 
-    let pipeline = SpecializedPipeline::from_model_or_path(
-        model,
-        backend_str,
-        gpu,
-        max_slots,
-        weights,
-    )?;
+    let pipeline =
+        SpecializedPipeline::from_model_or_path(model, backend_str, gpu, max_slots, weights)?;
 
-    let pipeline_for_mgr = SpecializedPipeline::from_model_or_path(
-        model,
-        backend_str,
-        gpu,
-        max_slots,
-        weights,
-    )?;
+    let pipeline_for_mgr =
+        SpecializedPipeline::from_model_or_path(model, backend_str, gpu, max_slots, weights)?;
 
     let models_dir_buf = models_dir.map(std::path::PathBuf::from);
     let model_alias = alias.map_or_else(|| model.to_string(), std::string::ToString::to_string);

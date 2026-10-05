@@ -39,7 +39,9 @@ pub mod tensor_split;
 pub use arena::GraphArena;
 pub use engine::OxideEngine;
 pub use executor::ComputeGraphExecutor;
-pub use graph::{ComputeGraph, GraphNode, NodeParams, OpCode, build_graph, build_transformer_graph};
+pub use graph::{
+    ComputeGraph, GraphNode, NodeParams, OpCode, build_graph, build_transformer_graph,
+};
 pub use hybrid::{DeviceRole, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition};
 pub use model_manager::DynamicModelManager;
 pub use pipeline::SpecializedPipeline;

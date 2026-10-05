@@ -208,4 +208,3 @@ fn test_cli_subcommands_chat_server_img() {
         _ => panic!("Expected Img command"),
     }
 }
-

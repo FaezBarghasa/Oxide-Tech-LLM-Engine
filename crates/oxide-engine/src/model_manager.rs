@@ -54,23 +54,37 @@ impl DynamicModelManager {
             return Ok(Arc::clone(pipe));
         }
 
-        // Check if model file exists in models_dir
-        let candidate_path = if let Some(dir) = &self.models_dir {
-            let p1 = dir.join(target);
-            let p2 = dir.join(format!("{target}.gguf"));
-            let p3 = dir.join(format!("{target}.safetensors"));
-            if p1.exists() {
-                Some(p1.to_string_lossy().to_string())
-            } else if p2.exists() {
-                Some(p2.to_string_lossy().to_string())
-            } else if p3.exists() {
-                Some(p3.to_string_lossy().to_string())
-            } else {
-                None
-            }
+        let mut search_dirs = Vec::new();
+        if let Some(dir) = &self.models_dir {
+            search_dirs.push(dir.clone());
+        }
+        search_dirs.push(PathBuf::from("./models"));
+        search_dirs.push(PathBuf::from("."));
+
+        let mut candidate_path = None;
+        let direct_path = std::path::Path::new(target);
+        if direct_path.exists() {
+            candidate_path = Some(target.to_string());
         } else {
-            None
-        };
+            for dir in search_dirs {
+                if !dir.exists() {
+                    continue;
+                }
+                let p1 = dir.join(target);
+                let p2 = dir.join(format!("{target}.gguf"));
+                let p3 = dir.join(format!("{target}.safetensors"));
+                if p1.exists() {
+                    candidate_path = Some(p1.to_string_lossy().to_string());
+                    break;
+                } else if p2.exists() {
+                    candidate_path = Some(p2.to_string_lossy().to_string());
+                    break;
+                } else if p3.exists() {
+                    candidate_path = Some(p3.to_string_lossy().to_string());
+                    break;
+                }
+            }
+        }
 
         let resolved_target = candidate_path.as_deref().unwrap_or(target);
         let pipeline = SpecializedPipeline::from_model_or_path(
@@ -114,7 +128,14 @@ impl DynamicModelManager {
     #[must_use]
     pub fn list_available(&self) -> Vec<String> {
         let mut list = self.list_loaded();
+        let mut check_dirs = Vec::new();
         if let Some(dir) = &self.models_dir {
+            check_dirs.push(dir.clone());
+        }
+        check_dirs.push(PathBuf::from("./models"));
+        check_dirs.push(PathBuf::from("."));
+
+        for dir in check_dirs {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -127,6 +148,12 @@ impl DynamicModelManager {
                         }
                     }
                 }
+            }
+        }
+        for spec in oxide_models::ModelSpecification::catalog() {
+            let id = spec.identifier.to_string();
+            if !list.contains(&id) {
+                list.push(id);
             }
         }
         list

@@ -22,11 +22,7 @@ impl ComputeGraphExecutor {
     }
 
     /// Preloads or maps tensor weights so the execution loop has zero disk I/O.
-    pub fn cache_weights(
-        &mut self,
-        graph: &ComputeGraph,
-        mmap_model: Option<&MmapModel>,
-    ) {
+    pub fn cache_weights(&mut self, graph: &ComputeGraph, mmap_model: Option<&MmapModel>) {
         for node in &graph.nodes {
             if let Some(ref w_name) = node.weight_name {
                 if !self.cached_weights.contains_key(w_name) {
@@ -52,11 +48,7 @@ impl ComputeGraphExecutor {
 
     /// Executes the forward step of the entire ComputeGraph.
     /// Strictly guarantees ZERO heap allocations.
-    pub fn execute_step(
-        &mut self,
-        graph: &ComputeGraph,
-        initial_input: &[f32],
-    ) -> Result<&[f32]> {
+    pub fn execute_step(&mut self, graph: &ComputeGraph, initial_input: &[f32]) -> Result<&[f32]> {
         self.arena.reset();
 
         // 1. Initial input activation
@@ -146,7 +138,8 @@ impl ComputeGraphExecutor {
                 }
                 OpCode::Add => {
                     for i in 0..node.dst_size {
-                        storage[dst_offset + i] = storage[src0_offset + i] + storage[src1_offset + i];
+                        storage[dst_offset + i] =
+                            storage[src0_offset + i] + storage[src1_offset + i];
                     }
                 }
                 OpCode::SwiGlu => {

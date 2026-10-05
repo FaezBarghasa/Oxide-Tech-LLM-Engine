@@ -104,10 +104,7 @@ impl ComputeGraph {
             if i + 1 < self.nodes.len() {
                 let n1 = &self.nodes[i];
                 let n2 = &self.nodes[i + 1];
-                if n1.op == OpCode::RmsNorm
-                    && n2.op == OpCode::MulMat
-                    && n1.dst == n2.src0
-                {
+                if n1.op == OpCode::RmsNorm && n2.op == OpCode::MulMat && n1.dst == n2.src0 {
                     let mut params = n2.params.clone();
                     params.eps = n1.params.eps;
                     fused_nodes.push(GraphNode {
@@ -259,7 +256,14 @@ pub fn build_transformer_graph(meta: &ModelMetadata, _batch_size: usize) -> Comp
         );
 
         // 6. Residual 1 (hidden + o_proj)
-        let res_1 = graph.add_node(OpCode::Add, current_hidden, o_proj, h, None, NodeParams::default());
+        let res_1 = graph.add_node(
+            OpCode::Add,
+            current_hidden,
+            o_proj,
+            h,
+            None,
+            NodeParams::default(),
+        );
 
         // 7. FFN RMSNorm
         let ffn_norm_params = NodeParams {
@@ -305,7 +309,14 @@ pub fn build_transformer_graph(meta: &ModelMetadata, _batch_size: usize) -> Comp
         );
 
         // 9. SwiGLU activation
-        let swiglu = graph.add_node(OpCode::SwiGlu, gate, up, inter_dim, None, NodeParams::default());
+        let swiglu = graph.add_node(
+            OpCode::SwiGlu,
+            gate,
+            up,
+            inter_dim,
+            None,
+            NodeParams::default(),
+        );
 
         // 10. Down Projection
         let down_params = NodeParams {

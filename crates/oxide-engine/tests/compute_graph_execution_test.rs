@@ -72,10 +72,7 @@ fn test_compute_graph_runtime_fusion() {
     // The two nodes must fuse into a single FusedRmsMulMat node
     assert_eq!(graph.nodes.len(), 1);
     assert_eq!(graph.nodes[0].op, OpCode::FusedRmsMulMat);
-    assert_eq!(
-        graph.nodes[0].weight_name.as_deref(),
-        Some("test.weight")
-    );
+    assert_eq!(graph.nodes[0].weight_name.as_deref(), Some("test.weight"));
 }
 
 #[test]

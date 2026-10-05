@@ -134,10 +134,9 @@ async fn test_dynamic_model_loading_and_hot_swapping() {
         None,
     )));
 
-    let dummy_pipe = Arc::new(Mutex::new(SpecializedPipeline::Needle3Cpu(OxideEngine::new(
-        CpuBackend::new(0, 16),
-        CactusNeedleConfig::<8>::default(),
-    ))));
+    let dummy_pipe = Arc::new(Mutex::new(SpecializedPipeline::Needle3Cpu(
+        OxideEngine::new(CpuBackend::new(0, 16), CactusNeedleConfig::<8>::default()),
+    )));
 
     let dfa_grammar = Arc::new(DfaSchemaGrammar::new_simple_json_validator());
     let slot_manager = Arc::new(Mutex::new(ContinuousBatchingSlotManager::new(16)));
@@ -158,7 +157,7 @@ async fn test_dynamic_model_loading_and_hot_swapping() {
     // 2. Hot-load a new model into memory
     {
         let mut mgr = model_manager.lock().await;
-        let loaded = mgr.get_or_load("bonsai2").await.expect("Dynamic load");
+        let loaded = mgr.get_or_load("bonsai2").expect("Dynamic load");
         assert!(Arc::strong_count(&loaded) >= 1);
 
         // Alias the model
