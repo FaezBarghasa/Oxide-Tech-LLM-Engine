@@ -40,7 +40,7 @@ impl DynamicModelManager {
     }
 
     /// Retrieve an existing loaded pipeline, or dynamically load it on-demand.
-    pub async fn get_or_load(
+    pub fn get_or_load(
         &mut self,
         model_name_or_path: &str,
     ) -> Result<Arc<Mutex<SpecializedPipeline>>> {

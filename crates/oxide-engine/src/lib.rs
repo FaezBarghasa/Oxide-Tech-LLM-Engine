@@ -18,7 +18,11 @@
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
     clippy::manual_div_ceil,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    clippy::too_many_lines,
+    clippy::unused_async,
+    clippy::collapsible_if,
+    clippy::match_same_arms
 )]
 
 pub mod arena;

@@ -88,11 +88,7 @@ impl Llama3Config {
         let num_kv_heads = gguf
             .get_u64(&format!("{arch}.attention.head_count_kv"))
             .unwrap_or(num_heads as u64) as usize;
-        let head_dim = if num_heads > 0 {
-            hidden_dim / num_heads
-        } else {
-            128
-        };
+        let head_dim = hidden_dim.checked_div(num_heads).unwrap_or(128);
         let intermediate_dim = gguf
             .get_u64(&format!("{arch}.feed_forward_length"))
             .unwrap_or((hidden_dim * 4) as u64) as usize;

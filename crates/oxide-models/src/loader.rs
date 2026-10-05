@@ -47,11 +47,7 @@ impl ModelMetadata {
         let num_kv_heads = gguf
             .get_u64(&format!("{arch}.attention.head_count_kv"))
             .unwrap_or(u64::from(num_heads)) as u32;
-        let head_dim = if num_heads > 0 {
-            hidden_size / num_heads
-        } else {
-            128
-        };
+        let head_dim = hidden_size.checked_div(num_heads).unwrap_or(128);
         let intermediate_size = gguf
             .get_u64(&format!("{arch}.feed_forward_length"))
             .unwrap_or(u64::from(hidden_size * 4)) as u32;
@@ -70,10 +66,8 @@ impl ModelMetadata {
 
         for (name, info) in &gguf.tensors {
             let shape: Vec<usize> = info.dimensions.iter().map(|&d| d as usize).collect();
-            if name == "token_embd.weight" {
-                if let Some(&first_dim) = shape.first() {
-                    vocab_size = first_dim as u32;
-                }
+            if name == "token_embd.weight" && !shape.is_empty() {
+                vocab_size = shape[0] as u32;
             }
             let element_count: usize = shape.iter().product();
             let size_bytes = match info.quant_type {

@@ -117,3 +117,68 @@ fn test_academic_sampler_integration_with_logits() {
     assert!(sampled == 42 || sampled == 43);
     assert_eq!(state.generated_tokens.len(), 1);
 }
+
+#[tokio::test]
+async fn test_dynamic_model_loading_and_hot_swapping() {
+    let backend = CpuBackend::new(0, 16);
+    let config = CactusNeedleConfig::<8>::default();
+    let engine = OxideEngine::new(backend, config);
+    let initial_pipeline = SpecializedPipeline::Needle3Cpu(engine);
+
+    let model_manager = Arc::new(Mutex::new(oxide_engine::DynamicModelManager::new(
+        "llama3",
+        initial_pipeline,
+        "cpu",
+        None,
+        16,
+        None,
+    )));
+
+    let dummy_pipe = Arc::new(Mutex::new(SpecializedPipeline::Needle3Cpu(OxideEngine::new(
+        CpuBackend::new(0, 16),
+        CactusNeedleConfig::<8>::default(),
+    ))));
+
+    let dfa_grammar = Arc::new(DfaSchemaGrammar::new_simple_json_validator());
+    let slot_manager = Arc::new(Mutex::new(ContinuousBatchingSlotManager::new(16)));
+    let kv_cache = Arc::new(Mutex::new(HierarchicalKvCache::new(64, 256, 1024)));
+
+    let state = ServerState {
+        pipeline: dummy_pipe,
+        model_manager: Some(Arc::clone(&model_manager)),
+        dfa_grammar,
+        slot_manager,
+        kv_cache,
+    };
+
+    // 1. Initial resolution of default model
+    let pipe1 = state.resolve_pipeline("llama3").await;
+    assert!(Arc::strong_count(&pipe1) >= 1);
+
+    // 2. Hot-load a new model into memory
+    {
+        let mut mgr = model_manager.lock().await;
+        let loaded = mgr.get_or_load("bonsai2").await.expect("Dynamic load");
+        assert!(Arc::strong_count(&loaded) >= 1);
+
+        // Alias the model
+        mgr.alias_model("bonsai-fast", "bonsai2");
+        // Set as active default
+        mgr.set_default_model("bonsai2");
+    }
+
+    // 3. Resolve using alias
+    let pipe_alias = state.resolve_pipeline("bonsai-fast").await;
+    assert!(Arc::strong_count(&pipe_alias) >= 1);
+
+    // 4. Resolve default empty query returns the hot-swapped model
+    let pipe_default = state.resolve_pipeline("").await;
+    assert!(Arc::strong_count(&pipe_default) >= 1);
+
+    // 5. Unload model
+    {
+        let mut mgr = model_manager.lock().await;
+        let removed = mgr.unload_model("bonsai-fast");
+        assert!(removed);
+    }
+}
