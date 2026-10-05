@@ -195,10 +195,23 @@ impl ModelSpecification {
     #[must_use]
     pub fn lookup(query: &str) -> Option<Self> {
         let q = query.to_lowercase();
+        let q_clean = q.replace(['-', '_', '/', ' '], "");
         let models = Self::catalog();
 
         for m in models {
-            if q.contains(m.identifier) || q.contains(&m.name.to_lowercase()) {
+            let m_name_lower = m.name.to_lowercase();
+            let m_name_clean = m_name_lower.replace(['-', '_', '/', ' ', '(', ')'], "");
+            let m_id_clean = m.identifier.replace(['-', '_', '/', ' '], "");
+
+            if q.contains(m.identifier)
+                || m.identifier.contains(&q)
+                || m_name_lower.contains(&q)
+                || q.contains(&m_name_lower)
+                || q_clean.contains(&m_id_clean)
+                || q_clean.contains(&m_name_clean)
+                || m_id_clean.contains(&q_clean)
+                || m_name_clean.contains(&q_clean)
+            {
                 return Some(m);
             }
         }
@@ -785,7 +798,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 4. Microsoft Audio, Music & Creative AI
             // ----------------------------------------------------
@@ -852,7 +864,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::EnterpriseRackServer,
             },
-
             // ----------------------------------------------------
             // 5. Microsoft Data & Analytics
             // ----------------------------------------------------
@@ -919,7 +930,6 @@ impl ModelSpecification {
                 supports_nvfp4: false,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 6. Microsoft Robotics & Autonomous Systems
             // ----------------------------------------------------
@@ -965,7 +975,27 @@ impl ModelSpecification {
                 supports_nvfp4: false,
                 optimal_form_factor: HardwareFormFactor::EdgeEmbedded,
             },
-
+            Self {
+                name: "Physical AI Toolchain (microsoft/physical-ai-toolchain)",
+                identifier: "physical-ai-toolchain",
+                family: ModelFamily::PhysicalAiToolchain,
+                modality: ModelModality::RoboticsActionVla,
+                architecture: ModelArchitectureType::BimanualVlaTransformer,
+                default_quantization: QuantizationClass::Fp16Precision,
+                total_parameters_billion: 4.0,
+                active_parameters_billion: 4.0,
+                hidden_dim: 3072,
+                intermediate_dim: 8192,
+                num_layers: 28,
+                num_heads: 24,
+                num_kv_heads: 24,
+                head_dim: 128,
+                vocab_size: 32000,
+                max_context_tokens: 4096,
+                rope_theta: 10000.0,
+                supports_nvfp4: true,
+                optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
+            },
             // ----------------------------------------------------
             // 7. Microsoft Health & Life Sciences
             // ----------------------------------------------------
@@ -1032,7 +1062,6 @@ impl ModelSpecification {
                 supports_nvfp4: true,
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
-
             // ----------------------------------------------------
             // 8. Microsoft Environmental & Earth Sciences
             // ----------------------------------------------------
@@ -1079,10 +1108,31 @@ impl ModelSpecification {
                 optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
             },
             Self {
+                name: "Planetary Explorer (microsoft/Planetary-Explorer)",
+                identifier: "planetary-explorer",
+                family: ModelFamily::PlanetaryExplorer,
+                modality: ModelModality::DataAnalyticsVisualizer,
+                architecture: ModelArchitectureType::DenseTransformer,
+                default_quantization: QuantizationClass::Fp16Precision,
+                total_parameters_billion: 2.5,
+                active_parameters_billion: 2.5,
+                hidden_dim: 2048,
+                intermediate_dim: 5632,
+                num_layers: 24,
+                num_heads: 16,
+                num_kv_heads: 16,
+                head_dim: 128,
+                vocab_size: 16384,
+                max_context_tokens: 4096,
+                rope_theta: 10000.0,
+                supports_nvfp4: false,
+                optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
+            },
+            Self {
                 name: "OrbitalBrain (microsoft/OrbitalBrain)",
                 identifier: "orbitalbrain",
                 family: ModelFamily::OrbitalBrainSpace,
-                modality: ModelModality::SatelliteDisasterAssessment,
+                modality: ModelModality::AtmosphericEarthSystem,
                 architecture: ModelArchitectureType::SarSatelliteDetector,
                 default_quantization: QuantizationClass::Int8Uniform,
                 total_parameters_billion: 0.8,
@@ -1099,7 +1149,30 @@ impl ModelSpecification {
                 supports_nvfp4: false,
                 optimal_form_factor: HardwareFormFactor::EdgeEmbedded,
             },
-
+            // ----------------------------------------------------
+            // 9. Microsoft Accessibility, Humanitarian, Legal & Gaming
+            // ----------------------------------------------------
+            Self {
+                name: "A11y LLM Eval (microsoft/a11y-llm-eval)",
+                identifier: "a11y-llm-eval",
+                family: ModelFamily::A11yLlmEval,
+                modality: ModelModality::CodeReasoning,
+                architecture: ModelArchitectureType::DenseTransformer,
+                default_quantization: QuantizationClass::Fp16Precision,
+                total_parameters_billion: 3.0,
+                active_parameters_billion: 3.0,
+                hidden_dim: 2560,
+                intermediate_dim: 6912,
+                num_layers: 32,
+                num_heads: 32,
+                num_kv_heads: 32,
+                head_dim: 80,
+                vocab_size: 32000,
+                max_context_tokens: 8192,
+                rope_theta: 10000.0,
+                supports_nvfp4: true,
+                optimal_form_factor: HardwareFormFactor::DesktopWorkstation,
+            },
             // ----------------------------------------------------
             // 9. Microsoft Accessibility, Humanitarian, Legal & Gaming
             // ----------------------------------------------------

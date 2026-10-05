@@ -486,6 +486,7 @@ impl AtmosphericAuroraEngine {
 }
 
 /// Gamepad Controller Button and Joystick Action State (microsoft/wham).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GamepadControllerState {
     pub left_stick_x: f32, // -1.0 to +1.0
@@ -516,10 +517,7 @@ impl GameplayWhamEngine {
     }
 
     /// Predicts player gamepad actions and visual next-state latents from gameplay frame features.
-    pub fn step_gameplay_action(
-        &self,
-        frame_features: &[f32],
-    ) -> Result<GamepadControllerState> {
+    pub fn step_gameplay_action(&self, frame_features: &[f32]) -> Result<GamepadControllerState> {
         if frame_features.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }
@@ -536,7 +534,7 @@ impl GameplayWhamEngine {
             button_b: false,
             button_x: false,
             button_y: false,
-            trigger_right: (sx.abs() + sy.abs()) * 0.5,
+            trigger_right: f32::midpoint(sx.abs(), sy.abs()),
         })
     }
 }
@@ -593,4 +591,3 @@ impl SatelliteEarthEngine {
         Ok(detections)
     }
 }
-

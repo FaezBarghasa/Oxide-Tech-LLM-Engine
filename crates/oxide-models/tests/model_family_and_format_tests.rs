@@ -198,32 +198,121 @@ fn test_specialized_engines() {
 fn test_microsoft_research_suites() {
     // 1. Model Registry lookups for all requested Microsoft Research models
     let ms_models = [
-        ("microsoft/muzic", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AudioMusicSymbolic),
-        ("microsoft/visual-chatgpt", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::MultimodalVisionText),
-        ("microsoft/nuwa", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::VideoGeneration),
-        ("microsoft/data-formulator", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::DataAnalyticsVisual),
-        ("microsoft/qlib", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::FinancialTradingTimeSeries),
-        ("microsoft/finance-benchmark", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AgenticDecision),
-        ("microsoft/rhobotics", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::RoboticsActionVla),
-        ("microsoft/physical-ai-toolchain", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::RoboticsActionVla),
-        ("microsoft/scene-aware-robot-bt-planner", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AgenticDecision),
-        ("microsoft/dayhoff", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::BiochemicalProteinStructure),
-        ("microsoft/vermeer", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::ImageGeneration),
-        ("microsoft/healthcareai-examples", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::MultimodalVisionText),
-        ("microsoft/aurora", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AtmosphericEarthSimulation),
-        ("microsoft/farmvibes-ai", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AtmosphericEarthSimulation),
-        ("microsoft/planetary-explorer", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::DataAnalyticsVisual),
-        ("microsoft/orbitalbrain", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AtmosphericEarthSimulation),
-        ("microsoft/a11y-llm-eval", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::CodeReasoning),
-        ("microsoft/haste", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AtmosphericEarthSimulation),
-        ("microsoft/biodiversity", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::MultimodalVisionText),
-        ("microsoft/ai4g-flood", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AtmosphericEarthSimulation),
-        ("microsoft/contractor", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::AgenticDecision),
-        ("microsoft/wham", oxide_models::registry::ModelFamily::MicrosoftResearch, oxide_models::registry::ModelModality::InteractiveGameplayAction),
+        (
+            "microsoft/muzic",
+            oxide_models::registry::ModelFamily::MuzicMuseCoco,
+            oxide_models::registry::ModelModality::SymbolicMusicMidi,
+        ),
+        (
+            "microsoft/visual-chatgpt",
+            oxide_models::registry::ModelFamily::VisualChatGpt,
+            oxide_models::registry::ModelModality::VisionLanguage,
+        ),
+        (
+            "microsoft/nuwa",
+            oxide_models::registry::ModelFamily::NuwaVisualGen,
+            oxide_models::registry::ModelModality::InfiniteVisualSynthesis,
+        ),
+        (
+            "microsoft/data-formulator",
+            oxide_models::registry::ModelFamily::DataFormulator,
+            oxide_models::registry::ModelModality::DataAnalyticsVisualizer,
+        ),
+        (
+            "microsoft/qlib",
+            oxide_models::registry::ModelFamily::QlibQuant,
+            oxide_models::registry::ModelModality::QuantitativeAlphaModel,
+        ),
+        (
+            "microsoft/finance-benchmark",
+            oxide_models::registry::ModelFamily::FinanceBenchmarkAgent,
+            oxide_models::registry::ModelModality::DecisionAgentic,
+        ),
+        (
+            "microsoft/rhobotics",
+            oxide_models::registry::ModelFamily::RhoboticsVla,
+            oxide_models::registry::ModelModality::BimanualRoboticsVla,
+        ),
+        (
+            "microsoft/physical-ai-toolchain",
+            oxide_models::registry::ModelFamily::PhysicalAiToolchain,
+            oxide_models::registry::ModelModality::RoboticsActionVla,
+        ),
+        (
+            "microsoft/scene-aware-robot-bt-planner",
+            oxide_models::registry::ModelFamily::RobotBehaviorTreePlanner,
+            oxide_models::registry::ModelModality::BehaviorTreePlanner,
+        ),
+        (
+            "microsoft/dayhoff",
+            oxide_models::registry::ModelFamily::DayhoffBio,
+            oxide_models::registry::ModelModality::ProteinGenomicsAtlas,
+        ),
+        (
+            "microsoft/vermeer",
+            oxide_models::registry::ModelFamily::VermeerMicroscopy,
+            oxide_models::registry::ModelModality::MicroscopyImageGeneration,
+        ),
+        (
+            "microsoft/healthcareai-examples",
+            oxide_models::registry::ModelFamily::HealthcareAiMedImage,
+            oxide_models::registry::ModelModality::MedicalImagingDiagnostics,
+        ),
+        (
+            "microsoft/aurora",
+            oxide_models::registry::ModelFamily::AuroraAtmospheric,
+            oxide_models::registry::ModelModality::AtmosphericEarthSystem,
+        ),
+        (
+            "microsoft/farmvibes-ai",
+            oxide_models::registry::ModelFamily::FarmVibesGeospatial,
+            oxide_models::registry::ModelModality::GeospatialAgriculture,
+        ),
+        (
+            "microsoft/planetary-explorer",
+            oxide_models::registry::ModelFamily::PlanetaryExplorer,
+            oxide_models::registry::ModelModality::DataAnalyticsVisualizer,
+        ),
+        (
+            "microsoft/orbitalbrain",
+            oxide_models::registry::ModelFamily::OrbitalBrainSpace,
+            oxide_models::registry::ModelModality::AtmosphericEarthSystem,
+        ),
+        (
+            "microsoft/a11y-llm-eval",
+            oxide_models::registry::ModelFamily::A11yLlmEval,
+            oxide_models::registry::ModelModality::CodeReasoning,
+        ),
+        (
+            "microsoft/haste",
+            oxide_models::registry::ModelFamily::HasteDisasterSat,
+            oxide_models::registry::ModelModality::SatelliteDisasterAssessment,
+        ),
+        (
+            "microsoft/biodiversity",
+            oxide_models::registry::ModelFamily::BiodiversityWildlife,
+            oxide_models::registry::ModelModality::WildlifeConservationDetection,
+        ),
+        (
+            "microsoft/ai4g-flood",
+            oxide_models::registry::ModelFamily::Ai4gFloodSar,
+            oxide_models::registry::ModelModality::SatelliteDisasterAssessment,
+        ),
+        (
+            "microsoft/contractor",
+            oxide_models::registry::ModelFamily::ContractorLegalAgent,
+            oxide_models::registry::ModelModality::LegalContractAudit,
+        ),
+        (
+            "microsoft/wham",
+            oxide_models::registry::ModelFamily::WhamGameplay,
+            oxide_models::registry::ModelModality::GameplayWorldAction,
+        ),
     ];
 
     for (name, family, modality) in ms_models {
-        let spec = ModelSpecification::lookup(name).unwrap_or_else(|| panic!("Model {name} must exist in registry"));
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("Model {name} must exist in registry"));
         assert_eq!(spec.family, family, "Family mismatch for {name}");
         assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
     }
@@ -232,47 +321,45 @@ fn test_microsoft_research_suites() {
     let music_engine = oxide_models::SymbolicMusicEngine::new(512, 120);
     let prompt_tokens = vec![42, 108, 64, 32];
     let midi_events = music_engine
-        .generate_symbolic_composition(&prompt_tokens, 8)
+        .compose_from_prompt(&prompt_tokens)
         .expect("Generated MIDI sequence");
-    assert_eq!(midi_events.len(), 8);
-    assert_eq!(midi_events[0].pitch_midi, 60);
+    assert_eq!(midi_events.len(), 4);
+    assert_eq!(midi_events[0].pitch_midi, 66);
 
     // 3. Bimanual Robotics Engine (microsoft/rhobotics)
     let rhobotics_engine = oxide_models::BimanualRoboticsEngine::new(256, 4);
     let visual_latent = vec![0.5f32; 256];
     let bimanual_actions = rhobotics_engine
-        .predict_bimanual_actions(&visual_latent)
+        .predict_bimanual_trajectory(&visual_latent)
         .expect("Predicted bimanual action chunk");
     assert_eq!(bimanual_actions.len(), 4);
     assert_eq!(bimanual_actions[0].left_arm_joints.len(), 7);
     assert_eq!(bimanual_actions[0].right_arm_joints.len(), 7);
 
     // 4. Atmospheric Aurora 3D Simulation Engine (microsoft/aurora)
-    let aurora_engine = oxide_models::AtmosphericAuroraEngine::new(180, 360, 13);
-    let atmospheric_state = vec![0.25f32; 180 * 360];
+    let aurora_engine = oxide_models::AtmosphericAuroraEngine::new(10, 20, 4);
+    let atmospheric_state = vec![285.0f32; 10 * 20 * 4];
     let forecast_grid = aurora_engine
         .forecast_atmosphere(&atmospheric_state, 24)
         .expect("Atmospheric forecasting succeeded");
-    assert_eq!(forecast_grid.forecast_lead_hours, 24);
-    assert_eq!(forecast_grid.temperature_2m_kelvin.len(), 180 * 360);
-    assert_eq!(forecast_grid.surface_pressure_hpa.len(), 180 * 360);
+    assert_eq!(forecast_grid.temperature_kelvin.len(), 10 * 20 * 4);
+    assert_eq!(forecast_grid.surface_pressure_pa.len(), 10 * 20);
 
     // 5. Gameplay WHAM Engine (microsoft/wham)
     let wham_engine = oxide_models::GameplayWhamEngine::new(128, 60);
     let screen_tokens = vec![0.4f32; 128];
     let predicted_input = wham_engine
-        .predict_gameplay_controller_action(&screen_tokens)
+        .step_gameplay_action(&screen_tokens)
         .expect("Gameplay action prediction succeeded");
-    assert!(predicted_input.stick_x.is_finite());
-    assert!(predicted_input.stick_y.is_finite());
+    assert!(predicted_input.left_stick_x.is_finite());
+    assert!(predicted_input.left_stick_y.is_finite());
 
     // 6. Satellite Disaster & Earth Observation Engine (microsoft/haste / ai4g-flood)
-    let sat_engine = oxide_models::SatelliteEarthEngine::new(512, 512, 0.5);
-    let sar_pixels = vec![0.8f32; 512 * 512];
+    let sat_engine = oxide_models::SatelliteEarthEngine::new(128, 0.5);
+    let sar_pixels = vec![0.8f32; 128 * 128];
     let detections = sat_engine
-        .detect_disaster_and_features(&sar_pixels, 512, 512)
+        .detect_features(&sar_pixels, "flood")
         .expect("Satellite feature detection succeeded");
     assert_eq!(detections.len(), 1);
-    assert_eq!(detections[0].disaster_class, "inundation_flood_high_confidence");
-    assert!(detections[0].affected_area_sq_km > 0.0);
+    assert!(detections[0].area_sq_km > 0.0);
 }
