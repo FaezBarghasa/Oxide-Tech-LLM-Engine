@@ -9,18 +9,32 @@
 ## 1. CLI Serving Options (`oxide-engine` / `oxide`)
 
 ```bash
-oxide-engine [OPTIONS]
+# Standard serving mode
+oxide-engine server [OPTIONS]
+# or direct flags
+oxide-engine --serve 127.0.0.1:8080 -m llama-3-8b.gguf -ngl 33
 ```
 
-### Key CLI Flags
-- `--model <MODEL>`: Target model identifier (`bonsai2`, `needle3`, `llama3`, `deepseek-r1`, `diffusion`, `audio-tts`, `audio-asr`, `kronos`, `jev`, `laya`, `clef`). Default: `bonsai2`.
-- `--backend <BACKEND>`: Hardware backend (`cuda`, `rocm`, `tpu`, `intel`, `metal`, `snapdragon`, `rknn`, `hailo`, `cpu`). Default: `cuda`.
-- `--gpu <PROFILE>`: Target hardware profile string (e.g., `"RTX 4090"`, `"H100"`, `"Arc B580"`, `"Apple M4 Max"`, `"Orange Pi 6 Plus"`, `"RPi5 with AI HAT+ 2"`).
-- `--serve <ADDR>`: Socket address to bind the HTTP/2 server. Default: `127.0.0.1:8080`.
-- `--max-slots <N>`: Maximum concurrent continuous batch decoding slots. Default: `64`.
-- `--kv-device-blocks <N>`: Tier 1 Device VRAM KV cache capacity in blocks ($B=32$). Default: `1024`.
-- `--kv-host-blocks <N>`: Tier 2 Host Pinned RAM KV cache capacity in blocks. Default: `8192`.
-- `--kv-storage-blocks <N>`: Tier 3 External NVMe Storage KV cache capacity in blocks. Default: `32768`.
+### Key CLI Flags & Subcommands
+- **Subcommands**:
+  - `server`: Launch the HTTP/2 OpenAI-compatible API server.
+  - `chat`: Launch the interactive terminal chat session.
+  - `img`: Execute multi-modal vision-language or diffusion tasks.
+- **Model & Offloading**:
+  - `-m, --model <MODEL_OR_PATH>`: Target model identifier or direct file path to `.gguf` / `.safetensors`. Default: `bonsai2`.
+  - `-ngl, --n-gpu-layers <N>`: Number of transformer layers to offload to GPU accelerator VRAM.
+  - `--models-dir <DIR>`: Directory path to scan for dynamic model loading. Default: `./models`.
+  - `-p, --prompt <PROMPT>`: Single-shot prompt for direct generation.
+  - `-i, --interactive`: Enter interactive conversational REPL with in-session model hot-swapping.
+- **Hardware & Backend**:
+  - `--backend <BACKEND>`: Hardware backend (`cuda`, `rocm`, `tpu`, `intel`, `metal`, `snapdragon`, `rknn`, `hailo`, `cpu`). Default: `cuda`.
+  - `--gpu <PROFILE>`: Target hardware profile string (e.g., `"RTX 4090"`, `"H100"`, `"Arc B580"`, `"Apple M4 Max"`, `"Orange Pi 6 Plus"`, `"RPi5 with AI HAT+ 2"`).
+- **Server & Serving Capacity**:
+  - `--serve <ADDR>`: Socket address to bind the HTTP/2 server. Default: `127.0.0.1:8080`.
+  - `--max-slots <N>`: Maximum concurrent continuous batch decoding slots. Default: `64`.
+  - `--kv-device-blocks <N>`: Tier 1 Device VRAM KV cache capacity in blocks ($B=32$). Default: `1024`.
+  - `--kv-host-blocks <N>`: Tier 2 Host Pinned RAM KV cache capacity in blocks. Default: `8192`.
+  - `--kv-storage-blocks <N>`: Tier 3 External NVMe Storage KV cache capacity in blocks. Default: `32768`.
 
 ---
 
@@ -200,7 +214,33 @@ High-throughput text embedding generation endpoint returning normalized unit vec
 
 ---
 
-### E. Health & Telemetry (`GET /health`)
+### E. Dynamic Model Hot-Swapping (`POST /v1/models/load`)
+
+Load or hot-swap any model dynamically at runtime without restarting the server binary.
+
+#### Request Body
+```json
+{
+  "model": "qwen2-7b.gguf",
+  "models_dir": "./models"
+}
+```
+
+#### Response Body
+```json
+{
+  "status": "ok",
+  "loaded_model": "qwen2-7b.gguf",
+  "architecture": "qwen2",
+  "parameters": 7000000000
+}
+```
+
+> **On-Demand Auto-Loading**: When invoking `POST /v1/chat/completions` or `POST /v1/completions`, the server automatically discovers and loads the requested `model` from disk (direct file path, configured `--models-dir`, `./models/`, current working directory, or model catalog) if not already active.
+
+---
+
+### F. Health & Telemetry (`GET /health`)
 
 ```bash
 curl http://127.0.0.1:8080/health
@@ -219,3 +259,24 @@ Oxide-Tech-LLM-Engine OK
 - **Dynamic Slot Allocation**: Requests are admitted immediately into available inference slots without waiting for prior sequences in the batch to complete generation.
 - **Iteration-Level Scheduling**: Prefill chunks and decode steps are interleaved at the single-token step boundary.
 - **KV Block Tracking**: Slots allocate and release 32-token KV blocks dynamically from the unified memory arena.
+
+---
+
+## 4. Interactive Terminal REPL & Hot-Swapping
+
+When launched in interactive mode via `oxide chat` or `oxide -i`:
+
+```bash
+oxide -m llama-3-8b.gguf -i -ngl 33
+```
+
+The user can hot-swap models directly inside the active REPL session without restarting the process:
+
+| Command | Action | Example |
+| :--- | :--- | :--- |
+| `/model <path_or_name>` | Instantly hot-swaps the active inference model | `/model deepseek-r1.gguf` |
+| `/models` or `/list` | Lists all discovered models across search paths | `/models` |
+| `/info` | Displays architecture parameters and quant of loaded model | `/info` |
+| `/help` | Shows interactive command reference | `/help` |
+| `/exit` or `/quit` | Terminates the interactive session | `/exit` |
+

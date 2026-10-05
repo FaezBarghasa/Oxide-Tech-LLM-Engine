@@ -145,3 +145,49 @@ Every architectural stratum, kernel implementation, and subsystem across all dev
 ### Horizon X: Physical Hardware Co-Design: Optical, In-Memory & Neuromorphic Substrates
 - Compile-time hardware capability proving via `HardwareSupports<Backend, Model>`.
 - CXL.mem attached persistent memory descriptors and neuromorphic event-driven spiking execution.
+
+---
+
+## Dynamic ggml / llama.cpp Execution Architecture
+
+To support any model dynamically without requiring the user to recompile the binary for different architectures or weights, `Oxide-Tech-LLM-Engine` adheres to the tripartite ggml / `llama.cpp` runtime paradigm:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. The Pre-compiled Binary (`oxide-engine` / `oxide`)                       │
+│    - Exhaustive kernel library: MatMul, FlashAttention, RoPE, RMSNorm       │
+│    - Quantization kernels: BlockQ2_K..BlockQ8_0, NvFP4, PTQ 1.58-bit        │
+│    - Zero-allocation Bump Allocator (`GraphArena`) with O(1) reset          │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼ Ingests at runtime via mmap
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. The Universal Model File (GGUF / SafeTensors)                            │
+│    - Metadata: architecture ("llama", "qwen2", "deepseek2", etc.)           │
+│    - Hyperparameters: context_length, embedding_dim, block_count, heads     │
+│    - Zero-copy weight tensors with -ngl GPU offloading (`WeightAllocator`)  │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼ Dynamic DAG synthesis
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. The Execution Runtime                                                    │
+│    - Synthesizes dynamic Compute Graph (`GraphNode`, `OpCode`)              │
+│    - Applies graph-level kernel fusions (e.g. `RmsNorm` + `MulMat`)         │
+│    - Lowers to `ComputeGraphExecutor` on pre-allocated scratch memory       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. Streaming Universal Model Loader (`crates/oxide-models/src/loader.rs`)
+- **Metadata Extraction**: Reads architecture keys, context windows, head counts, and vocabularies on the fly.
+- **Zero-Copy Memory-Mapping**: Weights are accessed via `memmap2` with zero redundant heap copies.
+- **Selective GPU Offloading**: `WeightAllocator` partitions layers between host RAM and GPU VRAM according to the user-specified `-ngl` / `--n-gpu-layers` parameter.
+
+### 2. Dynamic Compute Graph (DAG) & Kernel Fusion (`crates/oxide-engine/src/graph.rs`)
+- **`OpCode` Representation**: Compact `#[repr(u8)]` operation codes (`MulMat`, `RmsNorm`, `RoPE`, `Softmax`, `Add`, `FusedRmsMulMat`, etc.).
+- **Graph Optimization Passes**: Consecutive dependent nodes (such as normalization immediately followed by projection matrix multiplication) are fused into specialized single-pass kernels (`FusedRmsMulMat`), reducing memory roundtrips and memory bus pressure.
+
+### 3. Zero-Allocation `GraphArena` Bump Allocator (`crates/oxide-engine/src/arena.rs`)
+- **Scratch Space Pre-allocation**: Activation tensors and intermediate layer buffers are carved out of a contiguous linear memory arena.
+- **$O(1)$ Turnaround**: At the completion of each forward step, the arena offset resets in $O(1)$ time with zero calls to system memory allocators (`malloc`/`free`).
+- **Bitwise Precision Guarantee**: Executed nodes pass strict cosine-similarity and absolute error bounds.
+

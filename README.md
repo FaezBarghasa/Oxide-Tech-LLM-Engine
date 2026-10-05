@@ -12,6 +12,7 @@
 ## Table of Contents
 
 - [Architectural Charter & Immutable Invariants](#architectural-charter--immutable-invariants)
+- [Dynamic ggml / llama.cpp Execution Architecture](#dynamic-ggml--llamacpp-execution-architecture)
 - [Academic Sampling Algorithms Suite](#academic-sampling-algorithms-suite)
 - [Universal Integer Quantization & GGUF Support](#universal-integer-quantization--gguf-support)
 - [Heterogeneous Multi-Device Tensor Splitting & NUMA](#heterogeneous-multi-device-tensor-splitting--numa)

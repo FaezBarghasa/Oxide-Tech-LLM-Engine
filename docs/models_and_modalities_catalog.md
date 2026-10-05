@@ -74,3 +74,20 @@
 
 ### J. Kronos Financial Trading Engine (`KronosTradingEngine`)
 - Ingests multi-horizon OHLCV bars, order book imbalance, and VWAP delta to evaluate buy/sell/neutral trading signals and expected returns in basis points.
+
+---
+
+## 3. Universal Model Loader & Zero-Recompilation Guarantee
+
+Unlike monolithic frameworks that require compiling separate binaries or rebuilding modules for distinct model architectures, `Oxide-Tech-LLM-Engine` provides **universal runtime model loading**:
+
+- **Any Architecture On-Demand**: Supports `llama`, `qwen2`, `deepseek2`, `mistral`, `gemma`, `phi3`, and custom transformer DAGs dynamically at runtime.
+- **Zero-Copy Memory-Mapped Ingestion**: Ingests GGUF (v1, v2, v3) and SafeTensors files directly into mapped memory (`memmap2`) without copying large weight buffers into process heap memory.
+- **Hierarchical Path Resolution**: Resolves model specifiers in the following order:
+  1. Exact file path (e.g., `/mnt/storage/models/qwen2.5-72b-instruct.Q4_K_M.gguf`)
+  2. `--models-dir <DIR>` (user-configured models directory)
+  3. Default `./models/` directory relative to current working directory
+  4. Current working directory `.`
+  5. Built-in engine model catalog definitions
+- **In-Session REPL Model Hot-Swapping**: Switch models during an active conversational session using the `/model <name_or_path>` command without losing process initialization or restarting hardware drivers.
+
