@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-10-05
+
+### Added
+
+#### Complete Universal Quantization Matrix (`crates/oxide-quant/`)
+- **GGUF / llama.cpp Full Precision Suite**:
+  - Legacy & Standard Integer: `Q1_0`, `Q2_0`, `Q4_0`, `Q4_1`, `Q4_2`, `Q4_3`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`.
+  - K-Quants: `Q2_K`, `Q2_K_S`, `Q3_K`, `Q3_K_S`, `Q3_K_M`, `Q3_K_L`, `Q4_K`, `Q4_K_S`, `Q4_K_M`, `Q5_K`, `Q5_K_S`, `Q5_K_M`, `Q6_K`, `Q8_K`.
+  - I-Quants (Importance Matrix Codebooks): `IQ1_S`, `IQ1_M`, `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ2_M`, `IQ3_XXS`, `IQ3_XS`, `IQ3_S`, `IQ3_M`, `IQ4_XS`, `IQ4_NL`.
+  - Ternary Quantization: `TQ1_0`, `TQ2_0`, `Ptq1_0Ternary`, `BitNet1_58`.
+- **GPTQ (Generative Pre-trained Transformer Quantization)**:
+  - Multi-bit weight quantization: 2-bit, 3-bit, 4-bit (`GptqW4A16`), and 8-bit column-packed layouts with group scales, zero-points, and activation-order (desc_act) permutation.
+- **AWQ (Activation-aware Weight Quantization)**:
+  - Precision modes: `W4A16` (INT4 weights, FP16 activations), `W4A8` (INT4 weights, FP8 activations), `W8A16` (INT8 weights, FP16 activations), and native `BF16` with interleaved bank-conflict-free warp layouts `[0, 4, 1, 5, 2, 6, 3, 7]`.
+- **EXL2 (ExLlamaV2 Fractional-Bit Formats)**:
+  - Fractional-bit quantization engine (`crates/oxide-quant/src/exl2.rs`): `2.0bpw`, `3.0bpw`, `3.5bpw`, `4.0bpw`, `4.25bpw`, `5.0bpw`, `6.0bpw`, `6.5bpw`, and `8.0bpw`.
+- **bitsandbytes Suite**:
+  - `LLM.int8()` vector-wise outlier decomposition (`BnbInt8`).
+  - `NF4` (NormalFloat4) information-theoretically optimal quantile quantization (`BlockNf4_64`, `NF4_TABLE`).
+  - `FP4` (Float4 E2M1) for uniformly distributed weights (`BlockFp4Bnb_64`, `FP4_TABLE`).
+  - `FP8 E4M3` format compatibility.
+- **Floating-Point Precision Formats**:
+  - IEEE & AI floats: `FP64`, `FP32`, NVIDIA `TF32`, `BF16`, `FP16`, `FP8 E4M3` (dynamic range 448.0), `FP8 E5M2` (extended dynamic range up to 57344.0), and `FP4 E2M1`.
+- **OCP Microscaling (MX) & Hardware Acceleration**:
+  - `MXFP8`, `MXFP4`, `MXFP6`, `MXINT8`, and `MXFP4_MOE` using power-of-two `E8M0` scales per 32 elements.
+  - Blackwell `NVFP4` dual-scaling layout (`BlockNvFp4_16`).
+  - `Marlin` Tensor Core GEMV layouts and `ModelOpt` SmoothQuant calibration.
+  - `compressed-tensors` (Neural Magic / vLLM / HuggingFace) and `torchao` sub-byte integers & FP6/FP5.
+
+#### Advanced Attention & GEMM/MoE Kernels
+- **FlashInfer Engine (`crates/oxide-models/src/attention_kernels.rs`)**: Paged KV cache attention with ragged batching and variable sequence lengths.
+- **FlashMLA Engine**: DeepSeek-V2 / DeepSeek-V3 absorbed latent projection Multi-Head Latent Attention.
+- **MoE & Grouped GEMM (`crates/oxide-engine/src/moe_gemm.rs`)**: CuTeLayout multi-dimensional stride descriptors, fused top-K gating, and expert routing.
+
+#### Speculative Decoding & Advanced Decoding Algorithms
+- **Multi-Algorithm Speculative Decoding (`crates/oxide-engine/src/speculative.rs`)**:
+  - N-gram prompt lookup, Suffix matching, EAGLE tree drafting, and DFlash diffusion speculation blocks.
+- **High-Throughput Decoding Engines (`crates/oxide-engine/src/decoding.rs`)**:
+  - Beam search with length normalization penalty ($\alpha = 0.6$).
+  - Parallel sampling (Best-of-N) with independent trajectory generation.
+
+#### Distributed Inference & Serving Protocols
+- **Distributed 5D Parallelism Mesh (`crates/oxide-engine/src/distributed.rs`)**: Tensor (TP), Pipeline (PP), Data (DP), Expert (EP), and Context (CP / Ring Attention) parallelism coordinate routing.
+- **Dynamic Multi-LoRA Manager (`crates/oxide-engine/src/multi_lora.rs`)**: Dynamic adapter hot-routing for dense projections and sparse MoE experts.
+- **Serving Protocols (`crates/oxide-server/`)**:
+  - Anthropic Messages API parity (`POST /v1/messages`) with SSE streaming events (`message_start`, `content_block_start`, `content_block_delta`, `message_delta`, `message_stop`).
+  - High-throughput streaming gRPC protocol contracts (`crates/oxide-server/src/grpc.rs`).
+  - Structured output generation engine (`crates/oxide-server/src/grammar_engine.rs`) for JSON Schemas, regex, and EBNF grammars.
+  - DeepSeek-R1 / QwQ `<think>` reasoning extraction and tool calling parser (`crates/oxide-server/src/reasoning_tools.rs`).
+- **Hugging Face Model Architectures (`crates/oxide-models/src/hf_architectures.rs`)**:
+  - Decoder-only (Llama, Qwen, Gemma), MoE (Mixtral, DeepSeek-V3), Hybrid SSM (Mamba, Qwen3.5), Multi-modal (LLaVA, Qwen-VL, Pixtral), Embedding/Retrieval (E5, GTE, ColBERT MaxSim), and Reward/PRM classifiers.
+
 ## [0.2.0] - 2026-10-05
 
 ### Added

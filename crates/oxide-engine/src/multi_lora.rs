@@ -37,23 +37,23 @@ impl LoraAdapterWeights {
 
         // Step 1: intermediate = input * A^T -> shape [r]
         let mut intermediate = vec![0.0f32; self.rank];
-        for r_idx in 0..self.rank {
+        for (r_idx, item) in intermediate.iter_mut().enumerate() {
             let mut sum = 0.0f32;
             let a_row = &self.lora_a[r_idx * self.in_dim..(r_idx + 1) * self.in_dim];
-            for i in 0..self.in_dim {
-                sum += input[i] * a_row[i];
+            for (i, &inp) in input.iter().enumerate() {
+                sum += inp * a_row[i];
             }
-            intermediate[r_idx] = sum;
+            *item = sum;
         }
 
         // Step 2: output += intermediate * B^T * scaling -> shape [out_dim]
-        for out_idx in 0..self.out_dim {
+        for (out_idx, out_elem) in output.iter_mut().enumerate() {
             let mut sum = 0.0f32;
             let b_row = &self.lora_b[out_idx * self.rank..(out_idx + 1) * self.rank];
-            for r_idx in 0..self.rank {
-                sum += intermediate[r_idx] * b_row[r_idx];
+            for (r_idx, &inter) in intermediate.iter().enumerate() {
+                sum += inter * b_row[r_idx];
             }
-            output[out_idx] += sum * self.scaling;
+            *out_elem += sum * self.scaling;
         }
     }
 }

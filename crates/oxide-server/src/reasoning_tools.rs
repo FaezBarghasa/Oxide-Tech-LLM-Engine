@@ -72,18 +72,18 @@ impl ToolCallParser {
 
         // Check for Markdown code block containing JSON tool call: ```json\n{"name": "...", "arguments": ...}\n```
         let trimmed = text.trim();
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Some(name) = val.get("name").and_then(|v| v.as_str()) {
-                let args = val.get("arguments").map_or_else(
-                    || "{}".to_string(),
-                    |v| if v.is_string() { v.as_str().unwrap().to_string() } else { v.to_string() },
-                );
-                calls.push(ToolCall {
-                    id: "call_01".to_string(),
-                    name: name.to_string(),
-                    arguments_json: args,
-                });
-            }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+            && let Some(name) = val.get("name").and_then(|v| v.as_str())
+        {
+            let args = val.get("arguments").map_or_else(
+                || "{}".to_string(),
+                |v| if v.is_string() { v.as_str().unwrap().to_string() } else { v.to_string() },
+            );
+            calls.push(ToolCall {
+                id: "call_01".to_string(),
+                name: name.to_string(),
+                arguments_json: args,
+            });
         }
 
         calls
