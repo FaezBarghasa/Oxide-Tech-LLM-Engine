@@ -9,10 +9,6 @@ license.workspace = true
 name = "oxide-engine"
 path = "src/main.rs"
 
-[[bin]]
-name = "oxide"
-path = "src/bin/oxide.rs"
-
 [lib]
 path = "src/lib.rs"
 

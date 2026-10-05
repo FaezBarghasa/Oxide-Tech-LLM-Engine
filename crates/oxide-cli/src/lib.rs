@@ -304,7 +304,12 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .init();
 
-    let cli = Cli::parse_normalized(std::env::args_os())?;
+    let cli = match Cli::parse_normalized(std::env::args_os()) {
+        Ok(c) => c,
+        Err(e) => {
+            e.exit();
+        }
+    };
 
     match cli.command {
         Some(Commands::Chat(chat)) => run_chat_session(
@@ -564,27 +569,26 @@ async fn run_server_with_options(
     let pipeline =
         SpecializedPipeline::from_model_or_path(model, backend_str, gpu, max_slots, weights)?;
 
-    let pipeline_for_mgr =
-        SpecializedPipeline::from_model_or_path(model, backend_str, gpu, max_slots, weights)?;
-
     let models_dir_buf = models_dir.map(std::path::PathBuf::from);
     let model_alias = alias.map_or_else(|| model.to_string(), std::string::ToString::to_string);
 
-    let model_manager = Arc::new(Mutex::new(oxide_engine::DynamicModelManager::new(
+    let model_manager_inst = oxide_engine::DynamicModelManager::new(
         model_alias,
-        pipeline_for_mgr,
+        pipeline,
         backend_str,
         gpu.map(std::string::ToString::to_string),
         max_slots,
         models_dir_buf,
-    )));
+    );
+    let default_pipeline = model_manager_inst.get_default_pipeline();
+    let model_manager = Arc::new(Mutex::new(model_manager_inst));
 
     let dfa_grammar = Arc::new(DfaSchemaGrammar::new_simple_json_validator());
     let slot_manager = Arc::new(Mutex::new(
         oxide_engine::ContinuousBatchingSlotManager::new(max_slots),
     ));
     let state = ServerState {
-        pipeline: Arc::new(Mutex::new(pipeline)),
+        pipeline: default_pipeline,
         model_manager: Some(model_manager),
         dfa_grammar,
         slot_manager,

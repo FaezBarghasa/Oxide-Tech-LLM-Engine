@@ -107,6 +107,14 @@ impl DynamicModelManager {
     }
 
     #[must_use]
+    pub fn get_default_pipeline(&self) -> Arc<Mutex<SpecializedPipeline>> {
+        self.models
+            .get(&self.default_model)
+            .cloned()
+            .expect("Default model pipeline must exist")
+    }
+
+    #[must_use]
     pub fn list_loaded(&self) -> Vec<String> {
         self.models.keys().cloned().collect()
     }
