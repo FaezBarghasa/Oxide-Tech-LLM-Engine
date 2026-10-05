@@ -965,3 +965,176 @@ fn test_eda_cad_materials_science_and_qa_suites() {
     assert_eq!(qe_report.tests_failed, 0);
     assert!(!qe_report.healed_locators.is_empty());
 }
+
+#[test]
+fn test_extended_eda_cad_materials_cae_and_qa_suites() {
+    // 1. Model Registry catalog lookups for the 17 newly integrated models
+    let extended_models = [
+        (
+            "electronics-agent-kit",
+            oxide_models::registry::ModelFamily::ElectronicsAgentKit,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "kic-ai",
+            oxide_models::registry::ModelFamily::KicAiPlugin,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "cadlab",
+            oxide_models::registry::ModelFamily::CadLabRustEda,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "pcbschemagen",
+            oxide_models::registry::ModelFamily::PcbSchemaGenConstraint,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "trace-pcb",
+            oxide_models::registry::ModelFamily::TraceAiPcb,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "musubicad",
+            oxide_models::registry::ModelFamily::MusubiCadRust,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+        (
+            "cad-coder",
+            oxide_models::registry::ModelFamily::CadCoderVlm,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+        (
+            "mentaagent",
+            oxide_models::registry::ModelFamily::MentaAgentBi,
+            oxide_models::registry::ModelModality::DataWorkflowAutomation,
+        ),
+        (
+            "academic-writing-skills",
+            oxide_models::registry::ModelFamily::AcademicWritingSkillsAgent,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+        (
+            "researchkit",
+            oxide_models::registry::ModelFamily::ResearchKitOverleaf,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+        (
+            "atomagents",
+            oxide_models::registry::ModelFamily::AtomAgentsMit,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "alchemist-alloys",
+            oxide_models::registry::ModelFamily::AlchemistAlloyDiscovery,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "ammap",
+            oxide_models::registry::ModelFamily::AmMapCompositional,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "specforge-ai",
+            oxide_models::registry::ModelFamily::SpecForgeAiPolyglot,
+            oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
+        ),
+        (
+            "agentic-qe",
+            oxide_models::registry::ModelFamily::AgenticQePlatform,
+            oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
+        ),
+        (
+            "mechrag",
+            oxide_models::registry::ModelFamily::MechRagMllm,
+            oxide_models::registry::ModelModality::MechanicalCaeEngineeringDesign,
+        ),
+        (
+            "agentic-eng-design",
+            oxide_models::registry::ModelFamily::AgenticEngDesignFramework,
+            oxide_models::registry::ModelModality::SystemsEngineeringDesign,
+        ),
+    ];
+
+    for (name, family, modality) in extended_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("Extended model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 2. MusubiCAD Deterministic Design Graph Engine
+    let musubi_engine = oxide_models::MusubiCadGraphEngine::new(true);
+    let patch = musubi_engine
+        .propose_patch(
+            0x12345678,
+            &[("extrude", &[50.0, 30.0, 10.0]), ("fillet", &[2.0])],
+        )
+        .expect("MusubiCAD patch generated");
+    assert_eq!(patch.proposed_nodes.len(), 2);
+    assert!(patch.verified_manifold);
+    assert_eq!(patch.review_status, "PendingHumanApproval");
+
+    // 3. CAD-Coder VLM CadQuery Engine
+    let cad_coder = oxide_models::CadCoderVlmEngine::new(0.01);
+    let code_artifact = cad_coder
+        .generate_cadquery_code("MotorMountBracket", [60.0, 40.0, 12.0])
+        .expect("CadQuery code generated");
+    assert!(code_artifact.python_cadquery_script.contains("cadquery as cq"));
+    assert_eq!(code_artifact.identified_features.len(), 3);
+
+    // 4. AtomAgents MIT Physics & LAMMPS Engine
+    let atom_engine = oxide_models::AtomAgentsPhysicsEngine::new("eam/alloy");
+    let (lammps_task, micro_state) = atom_engine
+        .setup_md_simulation("Ni-Co-Cr-Fe", 1200.0)
+        .expect("MD simulation setup succeeded");
+    assert_eq!(lammps_task.total_steps, 50_000);
+    assert!(lammps_task.lammps_input_script.contains("units metal"));
+    assert!(micro_state.phase_fraction_fcc > 0.5);
+
+    // 5. AMMap Compositional Space Mapping Engine
+    let ammap_engine = oxide_models::AmMapCompositionEngine::new(40.0);
+    let comp_graph = ammap_engine
+        .map_composition_space("Inconel-718-Opt")
+        .expect("Composition space mapped");
+    assert_eq!(comp_graph.phase_regions.len(), 2);
+    assert!(comp_graph.crack_susceptibility_index < 0.2);
+
+    // 6. MechRAG Multimodal CAE Engineering Engine
+    let mechrag_engine = oxide_models::MechRagEngineeringEngine::new(250.0);
+    let stress_result = mechrag_engine
+        .evaluate_stress_field("TurbineBladeRoot", 18_000.0)
+        .expect("CAE stress evaluation succeeded");
+    assert!(stress_result.max_von_mises_stress_mpa > 0.0);
+    assert!(stress_result.safety_factor > 1.0);
+    assert!(!stress_result.recommended_design_modifications.is_empty());
+
+    // 7. Agentic Engineering Design Engine
+    let eng_design = oxide_models::AgenticEngDesignEngine::new(true);
+    let decomp = eng_design
+        .decompose_system("Electric Vertical Takeoff and Landing (eVTOL) Powertrain")
+        .expect("System decomposition succeeded");
+    assert_eq!(decomp.top_level_functions.len(), 2);
+    assert!(decomp.generated_simulator_modelica_or_python.contains("model SystemSimulation"));
+
+    // 8. SpecForge AI Smart Contract & Polyglot Mutation Engine
+    let specforge = oxide_models::SpecForgeMutationEngine::new(85.0);
+    let mut_report = specforge
+        .run_mutation_analysis("LiquidityVault")
+        .expect("Mutation analysis executed");
+    assert_eq!(mut_report.total_mutations_generated, 40);
+    assert!(mut_report.mutation_score_percent >= 90.0);
+
+    // 9. Academic Writing Skills & ResearchKit Overleaf Engine
+    let academic = oxide_models::AcademicResearchWritingEngine::new("English");
+    let paper = academic
+        .compose_paper(
+            "Hardware-Bound Static Arenas for Deterministic Zero-Copy Inference",
+            "This paper introduces zero-allocation lifetime-bounded memory arenas...",
+        )
+        .expect("Paper composed");
+    assert!(paper.latex_main_tex.contains("\\documentclass{article}"));
+    assert_eq!(paper.citations.len(), 1);
+}
+
