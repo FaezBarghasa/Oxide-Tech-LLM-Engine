@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Layout descriptor inspired by NVIDIA CuTeDSL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CuTeLayout<const DIMS: usize> {
     pub shape: [usize; DIMS],
     pub stride: [usize; DIMS],

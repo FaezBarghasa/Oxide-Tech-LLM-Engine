@@ -62,14 +62,14 @@ pub struct AnthropicMessagesResponse {
 
 /// Handler for `POST /v1/messages`.
 pub async fn messages_handler(
-    State(state): State<Arc<ServerState>>,
+    State(state): State<ServerState>,
     Json(payload): Json<AnthropicMessagesRequest>,
 ) -> impl IntoResponse {
     let stream_mode = payload.stream.unwrap_or(false);
 
     // Resolve model if needed
     let model_name = payload.model.clone();
-    let _ = state.model_manager.resolve_model(&model_name, None);
+    let _ = state.resolve_pipeline(&model_name).await;
 
     if stream_mode {
         let stream = async_stream::stream! {

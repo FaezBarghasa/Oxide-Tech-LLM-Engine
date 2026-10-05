@@ -22,7 +22,11 @@
     clippy::too_many_lines
 )]
 
+pub mod anthropic;
 pub mod dfa;
+pub mod grammar_engine;
+pub mod grpc;
+pub mod reasoning_tools;
 
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -30,6 +34,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use dfa::DfaSchemaGrammar;
+use oxide_alloc::HierarchicalKvCache;
 use oxide_core::worker::StepCommand;
 use oxide_engine::{ContinuousBatchingSlotManager, SlotRequest, SpecializedPipeline};
 use oxide_models::{ChatMessage, ChatTemplateFormat, ChatTemplateParser, ModelSpecification};
@@ -318,6 +323,7 @@ pub fn create_router(state: ServerState) -> Router {
         .route("/v1/chat/completions", post(chat_completions_handler))
         .route("/v1/completions", post(completions_handler))
         .route("/v1/embeddings", post(embeddings_handler))
+        .route("/v1/messages", post(anthropic::messages_handler))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
