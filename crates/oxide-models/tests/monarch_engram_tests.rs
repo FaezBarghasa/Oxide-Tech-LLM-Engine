@@ -12,7 +12,8 @@ fn test_monarch_mlp_forward() {
     let input = vec![1.0f32; 64];
     let mut output = vec![0.0f32; 64];
 
-    mlp.forward(&input, &mut output).expect("Monarch forward pass failed");
+    mlp.forward(&input, &mut output)
+        .expect("Monarch forward pass failed");
     assert!(output.iter().all(|&v| v.is_finite()));
 }
 
@@ -25,7 +26,9 @@ fn test_engram_gather_table() {
     assert!(slot < 1024);
 
     let mut gathered = vec![0.0f32; 64];
-    engram.gather(&tokens, &mut gathered).expect("Engram gather failed");
+    engram
+        .gather(&tokens, &mut gathered)
+        .expect("Engram gather failed");
     assert_eq!(gathered.len(), 64);
 }
 

@@ -21,8 +21,8 @@
 pub mod dfa;
 
 use axum::extract::State;
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use dfa::DfaSchemaGrammar;
@@ -95,7 +95,7 @@ async fn chat_completions_handler(
             let chunk = ChatCompletionChunk {
                 id: "cmpl-oxide-01".to_string(),
                 object: "chat.completion.chunk".to_string(),
-                created: 1728000000,
+                created: 1_728_000_000,
                 model: payload.model.clone(),
                 token: token_str,
                 finish_reason: if i == max_tokens - 1 || completion.is_terminal {
@@ -117,7 +117,10 @@ async fn chat_completions_handler(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-pub async fn start_server(addr: SocketAddr, state: ServerState) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn start_server(
+    addr: SocketAddr,
+    state: ServerState,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let router = create_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Oxide-Tech-LLM-Engine serving on http://{}", addr);

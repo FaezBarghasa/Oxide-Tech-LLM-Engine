@@ -42,7 +42,11 @@ impl<B: HardwareBackend, M: ModelConfig, Q: QuantScheme> OxideEngine<B, M, Q> {
         let sampled_token = self.backend.read_sampled_token_host(cmd.slot_idx);
         let is_terminal = sampled_token == 0 || sampled_token == 2; // EOS check
 
-        Ok(StepCompletion::new(cmd.sequence_id, sampled_token, is_terminal))
+        Ok(StepCompletion::new(
+            cmd.sequence_id,
+            sampled_token,
+            is_terminal,
+        ))
     }
 
     #[must_use]

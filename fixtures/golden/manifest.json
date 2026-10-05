@@ -1,0 +1,13 @@
+{
+  "models": [
+    "Ternary-Bonsai-2-27B",
+    "Cactus-Needle-3",
+    "Meta-Llama-3.1-8B"
+  ],
+  "tolerance": {
+    "fp16_chebyshev_epsilon": 0.0015,
+    "fp16_cosine_delta": 1e-05,
+    "quant_chebyshev_epsilon": 0.05,
+    "quant_cosine_delta": 0.001
+  }
+}

@@ -2,10 +2,7 @@ use oxide_quant::ptq1_0::TernaryBlock128;
 
 /// Computes ternary GEMV dot product over a slice of blocks using portable branchless SIMD math.
 #[must_use]
-pub fn ternary_gemv_cpu(
-    activations: &[f32],
-    blocks: &[TernaryBlock128],
-) -> f32 {
+pub fn ternary_gemv_cpu(activations: &[f32], blocks: &[TernaryBlock128]) -> f32 {
     let mut total_accum: f32 = 0.0;
 
     for (block_idx, block) in blocks.iter().enumerate() {

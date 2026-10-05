@@ -4,7 +4,9 @@ pub type Result<T, E = EngineError> = std::result::Result<T, E>;
 
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum EngineError {
-    #[error("Out of static memory in arena: requested {requested_bytes} bytes, capacity {capacity_bytes} bytes")]
+    #[error(
+        "Out of static memory in arena: requested {requested_bytes} bytes, capacity {capacity_bytes} bytes"
+    )]
     OutOfMemory {
         requested_bytes: usize,
         capacity_bytes: usize,

@@ -1,6 +1,6 @@
 use crate::engine::OxideEngine;
-use oxide_backend_cuda::CudaBackend;
 use oxide_backend_cpu::CpuBackend;
+use oxide_backend_cuda::CudaBackend;
 use oxide_core::error::Result;
 use oxide_core::worker::{StepCommand, StepCompletion};
 use oxide_models::bonsai2::TernaryBonsai2Config;
@@ -27,8 +27,8 @@ impl SpecializedPipeline {
         match self {
             Self::Bonsai2Cuda(engine) => engine.step_monomorphized(cmd),
             Self::Needle3Cuda(engine) => engine.step_monomorphized(cmd),
-            Self::Needle3Cpu(engine)  => engine.step_monomorphized(cmd),
-            Self::Llama3Cuda(engine)  => engine.step_monomorphized(cmd),
+            Self::Needle3Cpu(engine) => engine.step_monomorphized(cmd),
+            Self::Llama3Cuda(engine) => engine.step_monomorphized(cmd),
         }
     }
 }

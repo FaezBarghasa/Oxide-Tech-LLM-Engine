@@ -8,7 +8,9 @@ fn test_dfa_json_validator() {
     let valid_bytes = b"{\"key\":123}";
     let mut state = 0;
     for &b in valid_bytes {
-        state = dfa.transition(state, b).expect("Valid byte transition failed");
+        state = dfa
+            .transition(state, b)
+            .expect("Valid byte transition failed");
     }
     assert!(dfa.accepting_states[state as usize]);
 

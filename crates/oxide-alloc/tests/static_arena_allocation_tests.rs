@@ -7,7 +7,9 @@ fn test_host_pinned_arena_allocation() {
     assert_eq!(arena.capacity(), 1024 * 1024);
     assert_eq!(arena.allocated_bytes(), 0);
 
-    let slice1 = arena.alloc_slice::<u32>(1024).expect("Slice 1 allocation failed");
+    let slice1 = arena
+        .alloc_slice::<u32>(1024)
+        .expect("Slice 1 allocation failed");
     assert_eq!(slice1.len(), 1024);
     slice1[0] = 42;
     slice1[1023] = 999;
@@ -26,9 +28,8 @@ fn test_device_memory_arena_slot_binding() {
     let mut fake_vram = vec![0u8; 1024 * 1024];
     let dev_ptr = unsafe { DevicePtr::from_raw(fake_vram.as_mut_ptr()) };
 
-    let mut dev_arena = unsafe {
-        DeviceMemoryArena::from_raw_device_ptr(dev_ptr, 1024 * 1024, 16)
-    }.expect("DeviceMemoryArena creation failed");
+    let mut dev_arena = unsafe { DeviceMemoryArena::from_raw_device_ptr(dev_ptr, 1024 * 1024, 16) }
+        .expect("DeviceMemoryArena creation failed");
 
     assert_eq!(dev_arena.num_slots(), 16);
     assert_eq!(dev_arena.slot_size_bytes(), 64 * 1024);

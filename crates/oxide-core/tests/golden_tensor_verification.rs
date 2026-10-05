@@ -52,6 +52,12 @@ fn test_golden_tensor_similarity_metrics() {
     let l_inf = chebyshev_distance(&ref_vec, &rust_vec);
     let cos_sim = cosine_similarity(&ref_vec, &rust_vec);
 
-    assert!(l_inf < 1.5e-3, "Chebyshev distance exceeds FP16 tolerance: {l_inf}");
-    assert!(cos_sim >= 0.9999, "Cosine similarity below threshold: {cos_sim}");
+    assert!(
+        l_inf < 1.5e-3,
+        "Chebyshev distance exceeds FP16 tolerance: {l_inf}"
+    );
+    assert!(
+        cos_sim >= 0.9999,
+        "Cosine similarity below threshold: {cos_sim}"
+    );
 }

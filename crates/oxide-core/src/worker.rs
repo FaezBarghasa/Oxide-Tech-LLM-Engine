@@ -2,8 +2,8 @@ use crate::error::Result;
 use crate::traits::HardwareBackend;
 use crossbeam_utils::sync::Parker;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// 64-byte aligned hardware step execution command.
@@ -19,7 +19,12 @@ pub struct StepCommand {
 
 impl StepCommand {
     #[must_use]
-    pub const fn new(sequence_id: u64, input_token: u32, slot_idx: u16, is_prefill_chunk: bool) -> Self {
+    pub const fn new(
+        sequence_id: u64,
+        input_token: u32,
+        slot_idx: u16,
+        is_prefill_chunk: bool,
+    ) -> Self {
         Self {
             sequence_id,
             input_token,

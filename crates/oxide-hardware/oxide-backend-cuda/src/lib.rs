@@ -18,9 +18,13 @@
     clippy::cast_sign_loss
 )]
 
+pub mod arch;
 pub mod nccl;
 
+pub use arch::KernelExecutionPlan;
+
 use oxide_core::error::Result;
+use oxide_core::hardware::GpuDeviceProfile;
 use oxide_core::traits::HardwareBackend;
 use oxide_core::worker::StepCommand;
 use std::fmt;
@@ -34,12 +38,22 @@ pub struct CudaBackend {
     device_id: usize,
     current_event_id: u64,
     host_token_buffer: Vec<u32>,
+    profile: GpuDeviceProfile,
+    execution_plan: KernelExecutionPlan,
 }
 
 impl fmt::Debug for CudaBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CudaBackend")
             .field("device_id", &self.device_id)
+            .field("gpu_name", &self.profile.name)
+            .field("architecture", &self.profile.architecture)
+            .field("compute_capability", &self.profile.compute_capability)
+            .field(
+                "vram_gb",
+                &(self.profile.vram_capacity_bytes / (1024 * 1024 * 1024)),
+            )
+            .field("execution_plan", &self.execution_plan)
             .field("event_counter", &self.current_event_id)
             .field("host_token_buffer_len", &self.host_token_buffer.len())
             .finish()
@@ -47,13 +61,42 @@ impl fmt::Debug for CudaBackend {
 }
 
 impl CudaBackend {
+    /// Creates a CUDA backend for a specified device and known GPU name (or auto-probed).
     #[must_use]
-    pub fn new(device_id: usize, max_slots: usize) -> Self {
+    pub fn new_with_profile(
+        device_id: usize,
+        max_slots: usize,
+        custom_gpu_name: Option<&str>,
+    ) -> Self {
+        let name = custom_gpu_name.unwrap_or("NVIDIA GeForce RTX 4090");
+        let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_else(|| {
+            // Default baseline: Ada Lovelace
+            GpuDeviceProfile::from_known_device_name("rtx 4090").unwrap()
+        });
+        let execution_plan = KernelExecutionPlan::for_profile(&profile);
+
         Self {
             device_id,
             current_event_id: 0,
             host_token_buffer: vec![0; max_slots],
+            profile,
+            execution_plan,
         }
+    }
+
+    #[must_use]
+    pub fn new(device_id: usize, max_slots: usize) -> Self {
+        Self::new_with_profile(device_id, max_slots, None)
+    }
+
+    #[must_use]
+    pub const fn profile(&self) -> &GpuDeviceProfile {
+        &self.profile
+    }
+
+    #[must_use]
+    pub const fn execution_plan(&self) -> &KernelExecutionPlan {
+        &self.execution_plan
     }
 
     #[must_use]

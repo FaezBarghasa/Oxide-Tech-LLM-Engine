@@ -1,5 +1,5 @@
 use oxide_core::error::{EngineError, Result};
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::fmt;
 
 /// Page-locked (pinned), 64-byte/4KB aligned host memory arena for zero-copy DMA to GPU.
@@ -30,9 +30,11 @@ impl HostPinnedArena {
     /// Creates a new pinned host memory arena of `capacity_bytes`, aligned to 4096 bytes.
     pub fn new(capacity_bytes: usize) -> Result<Self> {
         let align = 4096;
-        let layout = Layout::from_size_align(capacity_bytes, align).map_err(|_| EngineError::OutOfMemory {
-            requested_bytes: capacity_bytes,
-            capacity_bytes,
+        let layout = Layout::from_size_align(capacity_bytes, align).map_err(|_| {
+            EngineError::OutOfMemory {
+                requested_bytes: capacity_bytes,
+                capacity_bytes,
+            }
         })?;
 
         // SAFETY: Allocating zeroed memory with valid, non-zero size layout.

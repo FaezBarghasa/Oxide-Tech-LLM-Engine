@@ -19,39 +19,39 @@ impl DfaSchemaGrammar {
         let mut accepting_states = vec![false; num_states];
 
         // State 0: expects '{' -> goes to State 1
-        transitions[b'{' as usize] = 1;
+        transitions[usize::from(b'{')] = 1;
 
         // State 1: inside object after '{' or ',', expects '"' -> State 2, or '}' -> State 7
-        transitions[1 * 256 + (b'"' as usize)] = 2;
-        transitions[1 * 256 + (b'}' as usize)] = 7;
+        transitions[256 + usize::from(b'"')] = 2;
+        transitions[256 + usize::from(b'}')] = 7;
 
         // State 2: inside string key, any byte except '"' stays in State 2; '"' -> State 3
         for b in 0..256 {
             transitions[2 * 256 + b] = 2;
         }
-        transitions[2 * 256 + (b'"' as usize)] = 3;
+        transitions[2 * 256 + usize::from(b'"')] = 3;
 
         // State 3: after key quote, expects ':' -> State 4
-        transitions[3 * 256 + (b':' as usize)] = 4;
+        transitions[3 * 256 + usize::from(b':')] = 4;
 
         // State 4: expects value: digit -> State 5, '"' -> State 6
         for b in b'0'..=b'9' {
-            transitions[4 * 256 + (b as usize)] = 5;
+            transitions[4 * 256 + usize::from(b)] = 5;
         }
-        transitions[4 * 256 + (b'"' as usize)] = 6;
+        transitions[4 * 256 + usize::from(b'"')] = 6;
 
         // State 5: inside number value, digits stay in State 5; ',' -> State 1; '}' -> State 7
         for b in b'0'..=b'9' {
-            transitions[5 * 256 + (b as usize)] = 5;
+            transitions[5 * 256 + usize::from(b)] = 5;
         }
-        transitions[5 * 256 + (b',' as usize)] = 1;
-        transitions[5 * 256 + (b'}' as usize)] = 7;
+        transitions[5 * 256 + usize::from(b',')] = 1;
+        transitions[5 * 256 + usize::from(b'}')] = 7;
 
         // State 6: inside string value, any byte except '"' stays in State 6; '"' -> State 5/accept-ready
         for b in 0..256 {
             transitions[6 * 256 + b] = 6;
         }
-        transitions[6 * 256 + (b'"' as usize)] = 5;
+        transitions[6 * 256 + usize::from(b'"')] = 5;
 
         // State 7: Terminal accepting state
         accepting_states[7] = true;
@@ -72,7 +72,7 @@ impl DfaSchemaGrammar {
             });
         }
 
-        let next_state = self.transitions[current_state as usize * 256 + byte as usize];
+        let next_state = self.transitions[current_state as usize * 256 + usize::from(byte)];
         if next_state == DFA_ERROR_STATE {
             return Err(EngineError::SchemaMismatch {
                 state: current_state,
@@ -90,12 +90,11 @@ impl DfaSchemaGrammar {
             let mut valid = true;
 
             for &b in bytes {
-                match self.transition(s, b) {
-                    Ok(next_s) => s = next_s,
-                    Err(_) => {
-                        valid = false;
-                        break;
-                    }
+                if let Ok(next_s) = self.transition(s, b) {
+                    s = next_s;
+                } else {
+                    valid = false;
+                    break;
                 }
             }
 

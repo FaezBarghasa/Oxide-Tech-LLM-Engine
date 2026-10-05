@@ -20,12 +20,18 @@ fn test_lock_free_cow_block_fork_release() {
     let block = SharedPhysicalBlock::new(42);
 
     // Initial refcount = 1
-    assert_eq!(block.ref_count.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(
+        block.ref_count.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
 
     // Fork twice for parallel branches
     block.fork();
     block.fork();
-    assert_eq!(block.ref_count.load(std::sync::atomic::Ordering::Relaxed), 3);
+    assert_eq!(
+        block.ref_count.load(std::sync::atomic::Ordering::Relaxed),
+        3
+    );
 
     // Release branch 1
     block.release(&free_queue);
