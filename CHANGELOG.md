@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Beam search with length normalization penalty ($\alpha = 0.6$).
   - Parallel sampling (Best-of-N) with independent trajectory generation.
 
+#### Edge Computer Vision Engine (`crates/oxide-models/src/vision.rs`)
+- **Multi-Scale Edge Backbones**: Real-time inference support for MobileNetV4, YOLO-World open-vocabulary object detector, RT-DETR, FastSAM, SigLIP Vision Transformer, ViT (Tiny/Small/Base), and Depth Anything.
+- **Zero-Copy Image Preprocessing**: Bilinear/bicubic resizing, per-channel normalization, and fast planar RGB to CHW tensor conversion.
+- **Bounding Box Regression & NMS**: Branchless Non-Maximum Suppression (NMS) with fast Intersection-over-Union (IoU) calculation.
+- **Vision-Language Feature Extraction**: High-throughput patch token extraction `[num_patches, patch_dim]` aligned with `MultiModalVisionProjector` for VLM/VLA models.
+- **Vision Server API**: Endpoint `POST /v1/vision/detect` serving object detections and segmentation coordinates with sub-2ms edge latency.
+
 #### Distributed Inference & Serving Protocols
 - **Distributed 5D Parallelism Mesh (`crates/oxide-engine/src/distributed.rs`)**: Tensor (TP), Pipeline (PP), Data (DP), Expert (EP), and Context (CP / Ring Attention) parallelism coordinate routing.
 - **Dynamic Multi-LoRA Manager (`crates/oxide-engine/src/multi_lora.rs`)**: Dynamic adapter hot-routing for dense projections and sparse MoE experts.

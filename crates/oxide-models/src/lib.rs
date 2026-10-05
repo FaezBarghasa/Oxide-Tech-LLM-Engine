@@ -52,9 +52,13 @@ pub mod projector;
 pub mod registry;
 pub mod rope;
 pub mod specialized;
+pub mod vision;
 
 pub use attention_kernels::{
     AttentionKernelBackend, FlashInferConfig, FlashInferEngine, FlashMlaEngine,
+};
+pub use vision::{
+    DetectedObject, EdgeVisionEngine, SegmentationMask, VisionModelType, VisionPreprocessConfig,
 };
 pub use hf_architectures::{
     ColBertLateInteraction, DeepSeekV3MoeConfig, MambaSsmBlock, MultiModalVisionProjector,

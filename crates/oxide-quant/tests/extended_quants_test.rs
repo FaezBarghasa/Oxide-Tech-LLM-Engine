@@ -12,8 +12,8 @@ use oxide_quant::*;
 #[test]
 fn test_gguf_legacy_and_ternary_quants() {
     let mut values32 = [0.0f32; 32];
-    for i in 0..32 {
-        values32[i] = (i as f32 - 16.0) * 0.25;
+    for (i, val) in values32.iter_mut().enumerate() {
+        *val = (i as f32 - 16.0) * 0.25;
     }
 
     // Q1_0
@@ -42,8 +42,8 @@ fn test_gguf_legacy_and_ternary_quants() {
 
     // Q8_K (256 elements)
     let mut values256 = [0.0f32; 256];
-    for i in 0..256 {
-        values256[i] = (i as f32 - 128.0) * 0.1;
+    for (i, val) in values256.iter_mut().enumerate() {
+        *val = (i as f32 - 128.0) * 0.1;
     }
     let b_q8_k = BlockQ8_K::quantize(&values256);
     let mut deq_q8_k = [0.0f32; 256];
@@ -68,8 +68,8 @@ fn test_exl2_fractional_bpw_matrix() {
 #[test]
 fn test_bitsandbytes_fp4_and_nf4() {
     let mut input64 = [0.0f32; 64];
-    for i in 0..64 {
-        input64[i] = (i as f32 - 32.0) * 0.05;
+    for (i, val) in input64.iter_mut().enumerate() {
+        *val = (i as f32 - 32.0) * 0.05;
     }
 
     // NF4
