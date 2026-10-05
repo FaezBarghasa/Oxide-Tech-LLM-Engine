@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Dynamic ggml / llama.cpp Execution Architecture & Universal Model Selection
+- **Tripartite Architecture**: Pre-compiled kernel library + streaming universal GGUF/SafeTensors mmap loader + dynamic compute graph DAG with kernel fusions (`FusedRmsMulMat`).
+- **Zero-Recompilation Guarantee**: Single binary runtime supporting dynamic loading of any model architecture (`llama`, `qwen2`, `deepseek2`, `mistral`, `gemma`, `phi3`) without recompiling.
+- **Zero-Allocation `GraphArena` Bump Allocator (`crates/oxide-engine/src/arena.rs`)**: $O(1)$ turnaround memory allocation with zero heap fragmentation during forward passes.
+- **Dynamic Model Manager (`crates/oxide-engine/src/model_manager.rs`)**: Automatic hierarchical model discovery across exact paths, `--models-dir`, `./models/`, current working directory, and engine catalog.
+- **`llama.cpp` CLI Parity (`crates/oxide-cli/src/lib.rs`)**:
+  - Subcommands: `chat`, `server`, `img`.
+  - Flags: `-m / --model`, `-p / --prompt`, `-i / --interactive`, `-ngl / --n-gpu-layers`, `--models-dir`, `--serve`.
+  - Single-hyphen `-ngl` normalized automatically for script and ecosystem parity.
+- **Interactive REPL Model Hot-Swapping**: In-session commands `/model <path_or_name>`, `/models`, `/list`, and `/info` to switch models without restarting the process.
+- **OpenAI Dynamic Model Hot-Swapping (`crates/oxide-server/src/lib.rs`)**:
+  - Endpoint `POST /v1/models/load` to dynamically load or switch models on the fly.
+  - Automatic on-demand model resolution in `POST /v1/chat/completions` and `POST /v1/completions`.
+
 #### Comprehensive Academic Sampling Algorithms Suite (`crates/oxide-core/src/sampler.rs`)
 - **Mirostat (v1 & v2)**: Active dynamic entropy regulation maintaining target perplexity $\tau$ via online surprise updates and dynamic temperature scaling.
 - **DRY (Don't Repeat Yourself) Sampling**: Exponential multi-token prefix matching repetition penalty scanning recent generation history backwards to break repetitive cycles.

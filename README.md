@@ -39,6 +39,16 @@ The runtime is engineered around five strict, non-negotiable systems invariants:
 
 ---
 
+## Dynamic ggml / llama.cpp Execution Architecture
+
+To support loading any model dynamically at runtime without requiring binary recompilation, `Oxide-Tech-LLM-Engine` implements a tripartite runtime architecture:
+
+1. **The Pre-compiled Binary**: Encapsulates a comprehensive suite of hardware-optimized kernels (GEMM/GEMV, Flash Attention, RoPE, RMSNorm, and all standard GGUF quantizations `Q2_K` through `Q8_0`).
+2. **The Universal Model File**: Mmap-streamed GGUF or SafeTensors containers providing architecture hyperparameters and weight tensors, with dynamic GPU layer offloading (`-ngl` / `--n-gpu-layers`).
+3. **The Compute Graph & Arena**: Synthesizes a runtime DAG of operation nodes (`OpCode`), performs kernel fusion passes (e.g. `FusedRmsMulMat`), and executes over a pre-allocated zero-allocation bump allocator (`GraphArena`) with $O(1)$ reset.
+
+---
+
 ## Academic Sampling Algorithms Suite
 
 `crates/oxide-core/src/sampler.rs` implements virtually every academic sampling algorithm:
@@ -109,6 +119,7 @@ The runtime is engineered around five strict, non-negotiable systems invariants:
 - `POST /v1/chat/completions`: Streaming SSE and non-streaming responses with ChatML, Llama-3, DeepSeek, and Mistral chat templates.
 - `POST /v1/completions`: Raw text generation.
 - `POST /v1/embeddings`: High-throughput normalized vector embeddings.
+- `POST /v1/models/load`: Hot-swaps or dynamically loads models on demand at runtime.
 - `ContinuousBatchingSlotManager`: Iteration-level scheduling and dynamic slot admission.
 
 ---
@@ -173,12 +184,28 @@ The runtime is engineered around five strict, non-negotiable systems invariants:
 
 ## CLI Quickstart & Server API
 
-```bash
-# Serve with continuous batching on NVIDIA CUDA
-oxide --model deepseek-r1 --backend cuda --gpu "RTX 4090" --serve 127.0.0.1:8080
+The engine functions identically to `llama.cpp` — a single universal binary with dynamic model selection and zero recompilation:
 
-# Serve with hybrid CPU+GPU offload
-oxide --model llama3 --backend cpu --gpu "RTX 4090" --kv-device-blocks 1024 --kv-host-blocks 8192
+```bash
+# 1. Single-shot prompt generation
+oxide -m ./models/llama-3-8b.gguf -p "Explain zero-copy memory mapping in Rust" -ngl 33
+
+# 2. Interactive conversational REPL with hot-swapping
+oxide -m ./models/qwen2.5-7b.gguf -i -ngl 28
+
+# Inside REPL:
+#   /model deepseek-r1.gguf  -> dynamically hot-swaps model in place
+#   /models                  -> lists discovered models
+#   /info                    -> displays active model architecture and parameters
+#   /exit                    -> terminates session
+
+# 3. OpenAI-compatible HTTP/2 API server with continuous batching
+oxide server --serve 127.0.0.1:8080 -m ./models/deepseek-r1.gguf --backend cuda --gpu "RTX 4090"
+# or via top-level flags:
+oxide --serve 127.0.0.1:8080 -m llama-3-8b.gguf -ngl 33
+
+# 4. Multi-modal image generation / vision
+oxide img --model diffusion --prompt "A cybernetic rustacean on Mars"
 ```
 
 ---
