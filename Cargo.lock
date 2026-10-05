@@ -829,6 +829,7 @@ dependencies = [
  "bytemuck",
  "oxide-core",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 
