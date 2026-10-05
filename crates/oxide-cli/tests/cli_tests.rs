@@ -5,9 +5,11 @@ use oxide_cli::{BackendArg, Cli, ModelArg};
 fn test_cli_default_parsing() {
     let args = ["oxide-engine"];
     let cli = Cli::try_parse_from(args).unwrap();
-    assert_eq!(cli.model, ModelArg::Bonsai2);
+    assert_eq!(cli.model, "llama3");
     assert_eq!(cli.backend, BackendArg::Cuda);
     assert_eq!(cli.max_slots, 64);
+    assert_eq!(cli.ctx_size, 4096);
+    assert_eq!(cli.n_gpu_layers, 0);
     assert_eq!(cli.serve.to_string(), "127.0.0.1:8080");
     assert_eq!(cli.kv_device_blocks, 1024);
     assert_eq!(cli.kv_host_blocks, 8192);
@@ -19,8 +21,16 @@ fn test_cli_default_parsing() {
 fn test_cli_custom_options_parsing() {
     let args = [
         "oxide-engine",
-        "--model",
-        "llama3",
+        "-m",
+        "./models/qwen2.5-7b.gguf",
+        "--alias",
+        "qwen-custom",
+        "--models-dir",
+        "./models",
+        "-c",
+        "8192",
+        "--n-gpu-layers",
+        "33",
         "--backend",
         "cpu",
         "--serve",
@@ -33,7 +43,11 @@ fn test_cli_custom_options_parsing() {
         "models/llama3.safetensors",
     ];
     let cli = Cli::try_parse_from(args).unwrap();
-    assert_eq!(cli.model, ModelArg::Llama3);
+    assert_eq!(cli.model, "./models/qwen2.5-7b.gguf");
+    assert_eq!(cli.alias.as_deref(), Some("qwen-custom"));
+    assert_eq!(cli.models_dir.as_deref(), Some("./models"));
+    assert_eq!(cli.ctx_size, 8192);
+    assert_eq!(cli.n_gpu_layers, 33);
     assert_eq!(cli.backend, BackendArg::Cpu);
     assert_eq!(cli.serve.to_string(), "0.0.0.0:9090");
     assert_eq!(cli.max_slots, 128);
@@ -42,20 +56,25 @@ fn test_cli_custom_options_parsing() {
 }
 
 #[test]
-fn test_cli_all_model_enums() {
-    let models = [
-        ("bonsai2", ModelArg::Bonsai2),
-        ("needle3", ModelArg::Needle3),
-        ("llama3", ModelArg::Llama3),
-        ("diffusion", ModelArg::Diffusion),
-        ("audio-tts", ModelArg::AudioTts),
-        ("audio-asr", ModelArg::AudioAsr),
-        ("kronos", ModelArg::Kronos),
+fn test_cli_dynamic_model_queries() {
+    let queries = [
+        "qwen2.5-7b",
+        "deepseek-r1-distill-qwen-8b",
+        "mistral-7b-instruct",
+        "gemma-2-9b",
+        "bonsai2",
+        "needle3",
+        "diffusion",
+        "audio-tts",
+        "audio-asr",
+        "kronos",
+        "./models/custom.gguf",
+        "weights.safetensors",
     ];
-    for (name, expected) in models {
-        let args = ["oxide-engine", "--model", name];
+    for q in queries {
+        let args = ["oxide-engine", "-m", q];
         let cli = Cli::try_parse_from(args).unwrap();
-        assert_eq!(cli.model, expected);
+        assert_eq!(cli.model, q);
     }
 }
 
@@ -76,6 +95,7 @@ fn test_cli_all_backend_enums() {
         let args = ["oxide-engine", "--backend", name];
         let cli = Cli::try_parse_from(args).unwrap();
         assert_eq!(cli.backend, expected);
+        assert_eq!(cli.backend.as_str(), expected.as_str());
     }
 }
 
@@ -95,15 +115,13 @@ fn test_cli_safetensors_weights_loading() {
 
     let args = [
         "oxide-engine",
-        "--model",
-        "llama3",
+        "-m",
+        tmp_path.to_str().unwrap(),
         "--backend",
         "cpu",
-        "--weights",
-        tmp_path.to_str().unwrap(),
     ];
     let cli = Cli::try_parse_from(args).unwrap();
-    assert_eq!(cli.weights.as_deref(), Some(tmp_path.to_str().unwrap()));
+    assert_eq!(cli.model, tmp_path.to_str().unwrap());
 
     let _ = std::fs::remove_file(&tmp_path);
 }

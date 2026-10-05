@@ -278,9 +278,24 @@ fn token_to_text(token: u32) -> String {
 #[derive(Clone, Debug)]
 pub struct ServerState {
     pub pipeline: Arc<Mutex<SpecializedPipeline>>,
+    pub model_manager: Option<Arc<Mutex<oxide_engine::DynamicModelManager>>>,
     pub dfa_grammar: Arc<DfaSchemaGrammar>,
     pub slot_manager: Arc<Mutex<ContinuousBatchingSlotManager>>,
     pub kv_cache: Arc<Mutex<HierarchicalKvCache>>,
+}
+
+impl ServerState {
+    pub async fn resolve_pipeline(&self, model_name: &str) -> Arc<Mutex<SpecializedPipeline>> {
+        if let Some(mgr) = &self.model_manager {
+            let mut guard = mgr.lock().await;
+            guard
+                .get_or_load(model_name)
+                .await
+                .unwrap_or_else(|_| self.pipeline.clone())
+        } else {
+            self.pipeline.clone()
+        }
+    }
 }
 
 pub fn create_router(state: ServerState) -> Router {
@@ -299,12 +314,26 @@ async fn health_handler() -> &'static str {
     "Oxide-Tech-LLM-Engine OK"
 }
 
-async fn models_handler() -> Json<ModelsListResponse> {
+async fn models_handler(State(state): State<ServerState>) -> Json<ModelsListResponse> {
+    let mut model_ids = Vec::new();
+    if let Some(mgr) = &state.model_manager {
+        let guard = mgr.lock().await;
+        for m in guard.list_available() {
+            model_ids.push(m);
+        }
+    }
     let catalog = ModelSpecification::catalog();
-    let data = catalog
-        .iter()
-        .map(|spec| ModelCard {
-            id: spec.identifier.to_string(),
+    for spec in catalog {
+        let id_str = spec.identifier.to_string();
+        if !model_ids.contains(&id_str) {
+            model_ids.push(id_str);
+        }
+    }
+
+    let data = model_ids
+        .into_iter()
+        .map(|id| ModelCard {
+            id,
             object: "model".to_string(),
             created: 1_728_000_000,
             owned_by: "oxide-engine".to_string(),
@@ -374,6 +403,7 @@ async fn chat_completions_handler(
         ..SamplingConfig::default()
     };
     let sampler = AcademicSamplerEngine::new(sampling_config);
+    let target_pipeline = state.resolve_pipeline(&payload.model).await;
 
     if stream_mode {
         let stream = async_stream::stream! {
@@ -384,7 +414,7 @@ async fn chat_completions_handler(
             for i in 0..max_tokens {
                 let cmd = StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
                 let completion = {
-                    let mut pipeline = state.pipeline.lock().await;
+                    let mut pipeline = target_pipeline.lock().await;
                     pipeline.step(&cmd).unwrap()
                 };
 
@@ -434,7 +464,7 @@ async fn chat_completions_handler(
         for i in 0..max_tokens {
             let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
             let completion = {
-                let mut pipeline = state.pipeline.lock().await;
+                let mut pipeline = target_pipeline.lock().await;
                 pipeline.step(&cmd).unwrap()
             };
 
@@ -519,6 +549,7 @@ async fn completions_handler(
         ..SamplingConfig::default()
     };
     let sampler = AcademicSamplerEngine::new(sampling_config);
+    let target_pipeline = state.resolve_pipeline(&payload.model).await;
 
     let mut generated_text = String::new();
     let mut cur_token: u32 = 42;
@@ -528,7 +559,7 @@ async fn completions_handler(
     for i in 0..max_tokens {
         let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
         let completion = {
-            let mut pipeline = state.pipeline.lock().await;
+            let mut pipeline = target_pipeline.lock().await;
             pipeline.step(&cmd).unwrap()
         };
 

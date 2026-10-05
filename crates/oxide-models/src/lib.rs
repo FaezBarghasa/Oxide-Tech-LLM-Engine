@@ -40,6 +40,7 @@ pub mod engram;
 pub mod flash_attn;
 pub mod formats;
 pub mod llama3;
+pub mod loader;
 pub mod lora;
 pub mod manifest;
 pub mod moe;
@@ -65,6 +66,7 @@ pub use formats::{
     SafeTensorInfo, SafeTensorsHeader,
 };
 pub use llama3::{Llama3Config, Llama3KvCacheLayer, Llama3LayerWeights, Llama3Model};
+pub use loader::{DevicePlacement, MmapModel, ModelMetadata, TensorInfo, WeightAllocator};
 pub use manifest::OxideModelHeader;
 pub use moe::{ExpertRoutingDecision, MoELayer, MoERouterConfig};
 pub use monarch::MonarchMlp;

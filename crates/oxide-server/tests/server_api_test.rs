@@ -85,6 +85,7 @@ async fn test_server_state_initialization_with_kv_cache() {
 
     let state = ServerState {
         pipeline,
+        model_manager: None,
         dfa_grammar,
         slot_manager,
         kv_cache: Arc::clone(&kv_cache),

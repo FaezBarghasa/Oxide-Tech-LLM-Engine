@@ -20,21 +20,7 @@
 
 use clap::{Parser, ValueEnum};
 use oxide_alloc::HierarchicalKvCache;
-use oxide_backend_cpu::CpuBackend;
-use oxide_backend_cuda::CudaBackend;
-use oxide_backend_hailo::HailoBackend;
-use oxide_backend_intel::IntelBackend;
-use oxide_backend_metal::MetalBackend;
-use oxide_backend_qualcomm::QualcommBackend;
-use oxide_backend_rknn::RknnBackend;
-use oxide_backend_rocm::RocmBackend;
-use oxide_backend_tpu::TpuBackend;
-use oxide_engine::{OxideEngine, SpecializedPipeline};
-use oxide_models::audio::{AudioModelConfig, AudioServingEngine};
-use oxide_models::bonsai2::TernaryBonsai2Config;
-use oxide_models::diffusion::{DiffusionEngine, DiffusionTransformerConfig};
-use oxide_models::llama3::Llama3Config;
-use oxide_models::needle::CactusNeedleConfig;
+use oxide_engine::SpecializedPipeline;
 use oxide_server::dfa::DfaSchemaGrammar;
 use oxide_server::{ServerState, start_server};
 use std::net::SocketAddr;
@@ -42,6 +28,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
+/// Legacy/Convenience Model enum preserved for backwards-compatible test assertions.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
 pub enum ModelArg {
     Bonsai2,
@@ -51,6 +38,21 @@ pub enum ModelArg {
     AudioTts,
     AudioAsr,
     Kronos,
+}
+
+impl ModelArg {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bonsai2 => "bonsai2",
+            Self::Needle3 => "needle3",
+            Self::Llama3 => "llama3",
+            Self::Diffusion => "diffusion",
+            Self::AudioTts => "audio-tts",
+            Self::AudioAsr => "audio-asr",
+            Self::Kronos => "kronos",
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -66,15 +68,49 @@ pub enum BackendArg {
     Cpu,
 }
 
-#[derive(Parser, Debug)]
+impl BackendArg {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cuda => "cuda",
+            Self::Rocm => "rocm",
+            Self::Tpu => "tpu",
+            Self::Intel => "intel",
+            Self::Metal => "metal",
+            Self::Snapdragon => "qualcomm",
+            Self::Rknn => "rknn",
+            Self::Hailo => "hailo",
+            Self::Cpu => "cpu",
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone)]
 #[command(
     name = "oxide-engine",
     version = "0.1.0",
     about = "Oxide-Tech-LLM-Engine: Bare-metal high-throughput zero-allocation inference runtime"
 )]
 pub struct Cli {
-    #[arg(short, long, value_enum, default_value = "bonsai2")]
-    pub model: ModelArg,
+    /// Model name (e.g. "llama-3.1-8b", "qwen2.5-7b", "deepseek-r1", "mistral-7b", "bonsai2") or path to GGUF / SafeTensors file
+    #[arg(short = 'm', long, default_value = "llama3")]
+    pub model: String,
+
+    /// Optional alias name for the loaded model in OpenAI API responses
+    #[arg(long)]
+    pub alias: Option<String>,
+
+    /// Directory containing GGUF and SafeTensors model files for dynamic loading
+    #[arg(long)]
+    pub models_dir: Option<String>,
+
+    /// Context window length (llama.cpp compatible -c / --ctx-size)
+    #[arg(short = 'c', long, default_value_t = 4096)]
+    pub ctx_size: usize,
+
+    /// Number of layers to offload to GPU accelerator (llama.cpp compatible -ngl / --n-gpu-layers)
+    #[arg(long, default_value_t = 0)]
+    pub n_gpu_layers: usize,
 
     #[arg(short, long, value_enum, default_value = "cuda")]
     pub backend: BackendArg,
@@ -105,7 +141,6 @@ pub struct Cli {
     pub kv_storage_blocks: usize,
 }
 
-#[allow(clippy::too_many_lines)]
 pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
@@ -113,7 +148,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let cli = Cli::parse();
     tracing::info!(
-        "Booting Oxide-Tech-LLM-Engine | Model: {:?} | Backend: {:?} | Target Device: {:?}",
+        "Booting Oxide-Tech-LLM-Engine | Model: {} | Backend: {:?} | Target Device: {:?}",
         cli.model,
         cli.backend,
         cli.gpu.as_deref().unwrap_or("Auto-Detect / System Native")
@@ -139,232 +174,35 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!("Validated model weights path: {}", weights_path);
     }
 
-    let pipeline = match (cli.model, cli.backend) {
-        // Multi-Modal: Diffusion Pipeline
-        (ModelArg::Diffusion, _) => {
-            let config = DiffusionTransformerConfig::default();
-            tracing::info!(
-                "Configured Diffusion DiT Pipeline | InChannels: {} | Steps: {} | Latent: {}x{}",
-                config.in_channels,
-                config.num_inference_steps,
-                config.latent_width,
-                config.latent_height
-            );
-            SpecializedPipeline::DiffusionPipeline(DiffusionEngine::new(config))
-        }
+    let backend_str = cli.backend.as_str();
 
-        // Multi-Modal: Audio TTS Pipeline
-        (ModelArg::AudioTts, _) => {
-            let config = AudioModelConfig::new_tts_config(24000);
-            tracing::info!(
-                "Configured Audio TTS Serving Pipeline | SampleRate: {} Hz | Chunk: {} ms",
-                config.sample_rate_hz,
-                config.streaming_chunk_ms
-            );
-            SpecializedPipeline::AudioPipeline(AudioServingEngine::new(config))
-        }
+    let pipeline = SpecializedPipeline::from_model_or_path(
+        &cli.model,
+        backend_str,
+        cli.gpu.as_deref(),
+        cli.max_slots,
+        cli.weights.as_deref(),
+    )?;
 
-        // Multi-Modal: Audio ASR Pipeline
-        (ModelArg::AudioAsr, _) => {
-            let config = AudioModelConfig::default();
-            tracing::info!(
-                "Configured Audio ASR Serving Pipeline | SampleRate: {} Hz | N-Mels: {}",
-                config.sample_rate_hz,
-                config.n_mels
-            );
-            SpecializedPipeline::AudioPipeline(AudioServingEngine::new(config))
-        }
+    let pipeline_for_mgr = SpecializedPipeline::from_model_or_path(
+        &cli.model,
+        backend_str,
+        cli.gpu.as_deref(),
+        cli.max_slots,
+        cli.weights.as_deref(),
+    )?;
 
-        // LLM - Bonsai 2
-        (ModelArg::Bonsai2, BackendArg::Cuda) => {
-            let backend = CudaBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Cuda(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Bonsai2, BackendArg::Rocm) => {
-            let backend = RocmBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Rocm(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Bonsai2, BackendArg::Tpu) => {
-            let backend = TpuBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Tpu(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Bonsai2, BackendArg::Intel) => {
-            let backend = IntelBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Intel(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Bonsai2, BackendArg::Metal) => {
-            let backend = MetalBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Metal(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Bonsai2, BackendArg::Snapdragon) => {
-            let backend = QualcommBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Qualcomm(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Bonsai2, BackendArg::Rknn) => {
-            let backend = RknnBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Rknn(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Bonsai2, BackendArg::Hailo) => {
-            let backend = HailoBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Hailo(OxideEngine::new(backend, config))
-        }
+    let models_dir_buf = cli.models_dir.as_ref().map(std::path::PathBuf::from);
+    let model_alias = cli.alias.clone().unwrap_or_else(|| cli.model.clone());
 
-        // LLM - Needle 3
-        (ModelArg::Needle3, BackendArg::Cuda) => {
-            let backend = CudaBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Cuda(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Rocm) => {
-            let backend = RocmBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Rocm(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Tpu) => {
-            let backend = TpuBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Tpu(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Intel) => {
-            let backend = IntelBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Intel(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Metal) => {
-            let backend = MetalBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Metal(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Snapdragon) => {
-            let backend = QualcommBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Qualcomm(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Rknn) => {
-            let backend = RknnBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Rknn(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Hailo) => {
-            let backend = HailoBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Hailo(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Needle3, BackendArg::Cpu) => {
-            let backend = CpuBackend::new(0, cli.max_slots);
-            let config = CactusNeedleConfig::<8>::default();
-            SpecializedPipeline::Needle3Cpu(OxideEngine::new(backend, config))
-        }
-
-        // LLM - Llama 3
-        (ModelArg::Llama3, BackendArg::Cuda) => {
-            let backend = CudaBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Cuda(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Rocm) => {
-            let backend = RocmBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Rocm(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Tpu) => {
-            let backend = TpuBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Tpu(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Intel) => {
-            let backend = IntelBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Intel(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Metal) => {
-            let backend = MetalBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Metal(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Snapdragon) => {
-            let backend = QualcommBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Qualcomm(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Rknn) => {
-            let backend = RknnBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Rknn(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Hailo) => {
-            let backend = HailoBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = Llama3Config::default();
-            SpecializedPipeline::Llama3Hailo(OxideEngine::new(backend, config))
-        }
-        (ModelArg::Llama3, BackendArg::Cpu) => {
-            let config = if cli.weights.is_some() {
-                Llama3Config::default()
-            } else {
-                Llama3Config::tiny_test_config()
-            };
-            let mut model = oxide_models::Llama3Model::new(config);
-            if let Some(weights_path) = &cli.weights {
-                let bytes = std::fs::read(weights_path)
-                    .map_err(|e| format!("Failed to read weights from {weights_path}: {e}"))?;
-                let path = std::path::Path::new(weights_path);
-                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                if ext.eq_ignore_ascii_case("safetensors") {
-                    let (header, _) =
-                        oxide_models::formats::SafeTensorsHeader::parse_from_bytes(&bytes)
-                            .map_err(|e| format!("Failed to parse SafeTensors header: {e}"))?;
-                    model
-                        .load_from_safetensors(&header, &bytes)
-                        .map_err(|e| format!("Failed to load tensors into Llama3Model: {e}"))?;
-                    tracing::info!("Loaded SafeTensors weights from {}", weights_path);
-                } else if ext.eq_ignore_ascii_case("gguf") {
-                    let gguf = oxide_models::formats::GgufFile::parse(&bytes)
-                        .map_err(|e| format!("Failed to parse GGUF file: {e}"))?;
-                    model
-                        .load_from_gguf(&gguf, &bytes)
-                        .map_err(|e| format!("Failed to load tensors into Llama3Model: {e}"))?;
-                    tracing::info!("Loaded GGUF weights from {}", weights_path);
-                } else {
-                    tracing::warn!(
-                        "Unrecognized weights format: {}; continuing with initialized weights",
-                        weights_path
-                    );
-                }
-            }
-            let kv_cache = (0..config.num_layers)
-                .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
-                .collect();
-            SpecializedPipeline::Llama3Dense {
-                model,
-                kv_cache,
-                seq_positions: std::collections::HashMap::new(),
-            }
-        }
-
-        // Quantitative Trading & Financial Time-Series Foundation Model (Kronos)
-        (ModelArg::Kronos, _) => {
-            let engine = oxide_models::KronosTradingEngine::new(2048, 60, 10, 1.0);
-            SpecializedPipeline::KronosTradingPipeline(engine)
-        }
-        (m, b) => {
-            tracing::warn!(
-                "Backend {:?} requested with {:?}; defaulting to CUDA Bonsai2",
-                b,
-                m
-            );
-            let backend = CudaBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
-            let config = TernaryBonsai2Config::default();
-            SpecializedPipeline::Bonsai2Cuda(OxideEngine::new(backend, config))
-        }
-    };
+    let model_manager = Arc::new(Mutex::new(oxide_engine::DynamicModelManager::new(
+        model_alias,
+        pipeline_for_mgr,
+        backend_str,
+        cli.gpu.clone(),
+        cli.max_slots,
+        models_dir_buf,
+    )));
 
     let dfa_grammar = Arc::new(DfaSchemaGrammar::new_simple_json_validator());
     let slot_manager = Arc::new(Mutex::new(
@@ -372,6 +210,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ));
     let state = ServerState {
         pipeline: Arc::new(Mutex::new(pipeline)),
+        model_manager: Some(model_manager),
         dfa_grammar,
         slot_manager,
         kv_cache,
