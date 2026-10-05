@@ -616,3 +616,352 @@ fn test_opensource_music_robotics_clinical_and_experimental_suites() {
     assert!(score > 0.0);
     assert!(!is_anomaly || is_anomaly);
 }
+
+#[test]
+fn test_eda_cad_materials_science_and_qa_suites() {
+    // 1. Electronic Design & PCB (EDA) Models
+    let eda_models = [
+        (
+            "boardsmith",
+            oxide_models::registry::ModelFamily::BoardSmithEda,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "ai-pcb-generator",
+            oxide_models::registry::ModelFamily::AiPcbGenerator,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "kicad-mcp",
+            oxide_models::registry::ModelFamily::KicadMcp,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "kicad-autopilot",
+            oxide_models::registry::ModelFamily::KicadAutopilot,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "field-ratchet",
+            oxide_models::registry::ModelFamily::FieldRatchet,
+            oxide_models::registry::ModelModality::ElectronicDesignPcbSchematic,
+        ),
+        (
+            "electrodesign-ai",
+            oxide_models::registry::ModelFamily::ElectroDesignAi,
+            oxide_models::registry::ModelModality::SpiceCircuitSimulation,
+        ),
+        (
+            "electroninja",
+            oxide_models::registry::ModelFamily::ElectroNinja,
+            oxide_models::registry::ModelModality::SpiceCircuitSimulation,
+        ),
+    ];
+
+    for (name, family, modality) in eda_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("EDA model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 2. CAD & 3D Modeling Models
+    let cad_models = [
+        (
+            "ai-cad",
+            oxide_models::registry::ModelFamily::AiCadParametric,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+        (
+            "cadam",
+            oxide_models::registry::ModelFamily::CadamTextToCad,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+        (
+            "gptcad",
+            oxide_models::registry::ModelFamily::GptCadFreeCad,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+        (
+            "guidecad",
+            oxide_models::registry::ModelFamily::GuideCadPrefix,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+        (
+            "stunning-modeler",
+            oxide_models::registry::ModelFamily::StunningModeler3D,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+        (
+            "cube-3d",
+            oxide_models::registry::ModelFamily::Cube3DShapeGen,
+            oxide_models::registry::ModelModality::ParametricCad3DGeneration,
+        ),
+    ];
+
+    for (name, family, modality) in cad_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("CAD model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 3. Data Analysis & Automation Models
+    let data_models = [
+        (
+            "llmflow",
+            oxide_models::registry::ModelFamily::LlmFlowRWorkflow,
+            oxide_models::registry::ModelModality::DataWorkflowAutomation,
+        ),
+        (
+            "deepanalyze",
+            oxide_models::registry::ModelFamily::DeepAnalyzeDataScience,
+            oxide_models::registry::ModelModality::DataWorkflowAutomation,
+        ),
+        (
+            "doctrail",
+            oxide_models::registry::ModelFamily::DocTrailResearchDb,
+            oxide_models::registry::ModelModality::DataWorkflowAutomation,
+        ),
+    ];
+
+    for (name, family, modality) in data_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("Data model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 4. Programming & Software Development Models
+    let dev_models = [
+        (
+            "tabby",
+            oxide_models::registry::ModelFamily::TabbyCodingAssistant,
+            oxide_models::registry::ModelModality::CodeReasoning,
+        ),
+        (
+            "aider",
+            oxide_models::registry::ModelFamily::AiderPairProgrammer,
+            oxide_models::registry::ModelModality::PairProgrammingSoftwareAgent,
+        ),
+        (
+            "the-pair",
+            oxide_models::registry::ModelFamily::ThePairDualAgent,
+            oxide_models::registry::ModelModality::PairProgrammingSoftwareAgent,
+        ),
+        (
+            "patch",
+            oxide_models::registry::ModelFamily::PatchTerminalPair,
+            oxide_models::registry::ModelModality::PairProgrammingSoftwareAgent,
+        ),
+        (
+            "coderai",
+            oxide_models::registry::ModelFamily::CoderAiAutonomous,
+            oxide_models::registry::ModelModality::PairProgrammingSoftwareAgent,
+        ),
+        (
+            "swe-cli",
+            oxide_models::registry::ModelFamily::SweCliAgent,
+            oxide_models::registry::ModelModality::PairProgrammingSoftwareAgent,
+        ),
+    ];
+
+    for (name, family, modality) in dev_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("Dev model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 5. Research & Scientific Discovery Models
+    let science_models = [
+        (
+            "ai-research-paper-agent",
+            oxide_models::registry::ModelFamily::AiResearchPaperAgent,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+        (
+            "zori",
+            oxide_models::registry::ModelFamily::ZoriResearchAssistant,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+        (
+            "kosmos",
+            oxide_models::registry::ModelFamily::KosmosAiScientist,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+        (
+            "autoresearchclaw",
+            oxide_models::registry::ModelFamily::AutoResearchClaw,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+        (
+            "freephdlabor",
+            oxide_models::registry::ModelFamily::FreePhdLaborScience,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+        (
+            "gnosis-ai",
+            oxide_models::registry::ModelFamily::GnosisAiDiscovery,
+            oxide_models::registry::ModelModality::ScientificLiteratureDiscovery,
+        ),
+    ];
+
+    for (name, family, modality) in science_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("Science model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 6. Metallurgy & Materials Science Models
+    let metallurgy_models = [
+        (
+            "alloygpt",
+            oxide_models::registry::ModelFamily::AlloyGptAdditive,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "aidesignhea",
+            oxide_models::registry::ModelFamily::AiDesignHeaAlloy,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "mtl-materials-design",
+            oxide_models::registry::ModelFamily::MtlMaterialsDesign,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "semantic-metallurgy-lm",
+            oxide_models::registry::ModelFamily::SemanticMetallurgyLm,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "nsgan-aluminium",
+            oxide_models::registry::ModelFamily::NsganAluminiumAlloy,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+        (
+            "das-dao",
+            oxide_models::registry::ModelFamily::DasDaoScrapAlloy,
+            oxide_models::registry::ModelModality::MaterialsMetallurgyDesign,
+        ),
+    ];
+
+    for (name, family, modality) in metallurgy_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("Metallurgy model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 7. Software Testing & QA Models
+    let qa_models = [
+        (
+            "lionagi-qe-fleet",
+            oxide_models::registry::ModelFamily::LionAgiQeFleet,
+            oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
+        ),
+        (
+            "falcon-automation",
+            oxide_models::registry::ModelFamily::FalconAutomationPlaywright,
+            oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
+        ),
+        (
+            "agent-qa",
+            oxide_models::registry::ModelFamily::AgentQaSelfImproving,
+            oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
+        ),
+        (
+            "cognitest",
+            oxide_models::registry::ModelFamily::CogniTestCaseGenerator,
+            oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
+        ),
+        (
+            "checkmate",
+            oxide_models::registry::ModelFamily::CheckmatePlaywrightQa,
+            oxide_models::registry::ModelModality::AutonomousQeSoftwareTesting,
+        ),
+    ];
+
+    for (name, family, modality) in qa_models {
+        let spec = ModelSpecification::lookup(name)
+            .unwrap_or_else(|| panic!("QA model {name} must exist in registry"));
+        assert_eq!(spec.family, family, "Family mismatch for {name}");
+        assert_eq!(spec.modality, modality, "Modality mismatch for {name}");
+    }
+
+    // 8. Test EDA Engine
+    let eda_engine = oxide_models::EdaPcbEngine::new(0.25, 0.2, 4);
+    let netlist = eda_engine
+        .generate_pcb_layout(
+            "OxideSensorShield",
+            8,
+            &[
+                "GND".to_string(),
+                "VCC_3V3".to_string(),
+                "SPI_MOSI".to_string(),
+            ],
+        )
+        .expect("PCB layout generated");
+    assert_eq!(netlist.components.len(), 8);
+    assert_eq!(netlist.trace_routes.len(), 3);
+    assert!(netlist.drc_clean);
+    assert!(netlist.gerber_ready);
+
+    // 9. Test Parametric CAD Engine
+    let cad_engine = oxide_models::ParametricCadEngine::new(0.01, 16);
+    let cad_model = cad_engine
+        .generate_cad_model("EnclosureBase", [50.0, 35.0, 15.0])
+        .expect("CAD model generated");
+    assert_eq!(cad_model.dimensions_xyz_mm, [50.0, 35.0, 15.0]);
+    assert!(cad_model.volume_mm3 > 20000.0);
+    assert!(cad_model.mesh_triangle_count > 0);
+
+    // 10. Test Data Workflow Engine
+    let data_engine = oxide_models::DataWorkflowAutomationEngine::new(5, 30);
+    let (steps, viz) = data_engine
+        .plan_and_execute_analytics(
+            "Analyze seasonal server load",
+            &["metrics_telemetry".to_string()],
+        )
+        .expect("Data analytics executed");
+    assert_eq!(steps.len(), 2);
+    assert!(!viz.plotly_json_spec.is_empty());
+
+    // 11. Test Pair Programming Engine
+    let pair_engine = oxide_models::SoftwareEngineeringPairEngine::new(true, 500);
+    let patch_action = pair_engine
+        .create_patch("crates/oxide-core/src/lib.rs", "add zero-alloc ring buffer")
+        .expect("Patch action created");
+    assert!(patch_action.executor_verified);
+    assert!(patch_action.diff_content.contains("zero-alloc ring buffer"));
+
+    // 12. Test Autonomous Scientific Agent Engine
+    let science_engine = oxide_models::AutonomousScientificAgentEngine::new(3, true);
+    let hypothesis = science_engine
+        .formulate_hypothesis(
+            "Perovskite solar cell degradation",
+            &["10.1038/s41586-026-001".to_string()],
+        )
+        .expect("Hypothesis formulated");
+    assert!(hypothesis.confidence_score > 0.9);
+    assert!(!hypothesis.literature_evidence.is_empty());
+
+    // 13. Test Materials Metallurgy Engine
+    let metallurgy_engine = oxide_models::MaterialsMetallurgyEngine::new(550.0, true);
+    let alloy = metallurgy_engine
+        .design_alloy("Al-Scrap-Recycled", 15.0)
+        .expect("Alloy designed");
+    assert_eq!(alloy.scrap_utilization_ratio, 1.0);
+    assert!(alloy.predicted_yield_strength_mpa >= 550.0);
+
+    // 14. Test Automated Testing QE Engine
+    let qe_engine = oxide_models::AutomatedTestingQeEngine::new(true, 0.05);
+    let qe_report = qe_engine
+        .run_qa_suite("CheckoutE2E", "https://oxide-tech.internal/checkout")
+        .expect("QA report generated");
+    assert_eq!(qe_report.tests_passed, 18);
+    assert_eq!(qe_report.tests_failed, 0);
+    assert!(!qe_report.healed_locators.is_empty());
+}
