@@ -12,6 +12,7 @@ oxide-backend-cuda.workspace = true
 oxide-backend-rocm.workspace = true
 oxide-backend-metal.workspace = true
 oxide-backend-tpu.workspace = true
+oxide-backend-intel.workspace = true
 oxide-backend-cpu.workspace = true
 oxide-models.workspace = true
 oxide-quant.workspace = true
