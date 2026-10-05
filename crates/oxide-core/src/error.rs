@@ -47,4 +47,7 @@ pub enum EngineError {
 
     #[error("Tensor shape or dimension mismatch")]
     ShapeMismatch,
+
+    #[error("Target hardware device or accelerator not found")]
+    DeviceNotFound,
 }

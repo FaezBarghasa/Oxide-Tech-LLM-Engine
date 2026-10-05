@@ -28,7 +28,7 @@ use axum::{Json, Router};
 use dfa::DfaSchemaGrammar;
 use oxide_core::worker::StepCommand;
 use oxide_engine::{ContinuousBatchingSlotManager, SlotRequest, SpecializedPipeline};
-use oxide_models::{ChatMessage, ChatRole, ChatTemplateFormat, ChatTemplateParser, ModelSpecification};
+use oxide_models::{ChatMessage, ChatTemplateFormat, ChatTemplateParser, ModelSpecification};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;

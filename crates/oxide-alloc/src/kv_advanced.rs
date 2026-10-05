@@ -137,11 +137,11 @@ impl QuantizedKvBlock {
                 let mut k_bytes = Vec::with_capacity(k.len() * 2);
                 let mut v_bytes = Vec::with_capacity(v.len() * 2);
                 for &val in k {
-                    let f16_bits = oxide_quant::int_quant::f16::from_f32(val).0;
+                    let f16_bits = f32_to_f16_bits(val);
                     k_bytes.extend_from_slice(&f16_bits.to_le_bytes());
                 }
                 for &val in v {
-                    let f16_bits = oxide_quant::int_quant::f16::from_f32(val).0;
+                    let f16_bits = f32_to_f16_bits(val);
                     v_bytes.extend_from_slice(&f16_bits.to_le_bytes());
                 }
                 Self {
@@ -211,18 +211,67 @@ impl QuantizedKvBlock {
                 for (i, chunk) in self.quantized_k_data.chunks_exact(2).enumerate() {
                     if i < k_out.len() {
                         let bits = u16::from_le_bytes(chunk.try_into().unwrap());
-                        k_out[i] = oxide_quant::int_quant::f16(bits).to_f32();
+                        k_out[i] = f16_bits_to_f32(bits);
                     }
                 }
                 for (i, chunk) in self.quantized_v_data.chunks_exact(2).enumerate() {
                     if i < v_out.len() {
                         let bits = u16::from_le_bytes(chunk.try_into().unwrap());
-                        v_out[i] = oxide_quant::int_quant::f16(bits).to_f32();
+                        v_out[i] = f16_bits_to_f32(bits);
                     }
                 }
             }
         }
     }
+}
+
+#[inline]
+fn f32_to_f16_bits(val: f32) -> u16 {
+    let bits = val.to_bits();
+    let sign = (bits >> 31) & 1;
+    let exp = (bits >> 23) & 0xFF;
+    let frac = bits & 0x7F_FFFF;
+
+    if exp == 0 {
+        return (sign as u16) << 15;
+    }
+    if exp == 0xFF {
+        return ((sign as u16) << 15) | 0x7C00 | if frac != 0 { 0x0200 } else { 0 };
+    }
+
+    let new_exp = exp as i32 - 127 + 15;
+    if new_exp >= 31 {
+        return ((sign as u16) << 15) | 0x7C00;
+    }
+    if new_exp <= 0 {
+        return (sign as u16) << 15;
+    }
+
+    let new_frac = (frac >> 13) as u16;
+    ((sign as u16) << 15) | ((new_exp as u16) << 10) | new_frac
+}
+
+#[inline]
+fn f16_bits_to_f32(bits: u16) -> f32 {
+    let sign = (bits >> 15) & 1;
+    let exp = (bits >> 10) & 0x1F;
+    let frac = bits & 0x03FF;
+
+    if exp == 0 {
+        return if sign == 1 { -0.0 } else { 0.0 };
+    }
+    if exp == 31 {
+        return if frac == 0 {
+            if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY }
+        } else {
+            f32::NAN
+        };
+    }
+
+    let new_exp = (exp as u32 + 127 - 15) << 23;
+    let new_frac = (frac as u32) << 13;
+    let new_sign = (sign as u32) << 31;
+    f32::from_bits(new_sign | new_exp | new_frac)
 }
 
 /// Context Shifting Engine (Sliding-window context truncation preserving prompt prefix).

@@ -800,6 +800,7 @@ dependencies = [
  "oxide-models",
  "oxide-quant",
  "rtrb",
+ "serde",
  "thiserror",
  "tracing",
 ]

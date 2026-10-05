@@ -978,7 +978,7 @@ impl ModelSpecification {
                 max_context_tokens: 16384,
                 rope_theta: 10000.0,
                 supports_nvfp4: true,
-                optimal_form_factor: HardwareFormFactor::EdgeIndustrialBox,
+                optimal_form_factor: HardwareFormFactor::EdgeEmbedded,
             },
             Self {
                 name: "TRELLIS (3D Asset Generation)",

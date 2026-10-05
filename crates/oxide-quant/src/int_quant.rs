@@ -2,7 +2,6 @@
 //! Implements standard GGML-compatible block layouts (Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1,
 //! Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K) with zero allocations and branchless math.
 
-use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // 4-bit Quantization: Q4_0 and Q4_1
@@ -10,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Q4_0: 32 weights per block. 1x FP16 scale + 16 bytes (32 nibbles).
 #[repr(C, align(16))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ4_0 {
     pub scale: f16,
     pub qs: [u8; 16],
@@ -66,7 +65,7 @@ impl BlockQ4_0 {
 
 /// Q4_1: 32 weights per block. 1x FP16 scale + 1x FP16 min + 16 bytes (32 nibbles).
 #[repr(C, align(16))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ4_1 {
     pub scale: f16,
     pub min: f16,
@@ -119,7 +118,7 @@ impl BlockQ4_1 {
 
 /// Q5_0: 32 weights per block. 1x FP16 scale + 4 bytes high bits + 16 bytes low bits = 22 bytes.
 #[repr(C, align(16))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ5_0 {
     pub scale: f16,
     pub qh: [u8; 4],   // High 5th bit for each of the 32 elements
@@ -187,7 +186,7 @@ impl BlockQ5_0 {
 
 /// Q8_0: 32 weights per block. 1x FP16 scale + 32 signed int8 values = 34 bytes.
 #[repr(C, align(16))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ8_0 {
     pub scale: f16,
     pub qs: [i8; 32],
@@ -238,12 +237,23 @@ impl BlockQ8_0 {
 
 /// Q2_K: 256 weights per super-block (2-bit weights, 16 scales per super-block).
 #[repr(C, align(32))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockQ2_K {
     pub scales: [u8; 16],
     pub qs: [u8; 64],    // 256 elements packed at 2 bits each = 64 bytes
     pub d: f16,          // Super-block scale
     pub dmin: f16,       // Super-block min
+}
+
+impl Default for BlockQ2_K {
+    fn default() -> Self {
+        Self {
+            scales: [0u8; 16],
+            qs: [0u8; 64],
+            d: f16(0),
+            dmin: f16(0),
+        }
+    }
 }
 
 impl BlockQ2_K {
@@ -293,12 +303,23 @@ impl BlockQ2_K {
 
 /// Q3_K: 256 weights per super-block (3-bit weights).
 #[repr(C, align(32))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockQ3_K {
     pub hmask: [u8; 32], // High bits for 256 values (1 bit each = 32 bytes)
     pub qs: [u8; 64],    // Low 2 bits for 256 values = 64 bytes
     pub scales: [u8; 12],
     pub d: f16,
+}
+
+impl Default for BlockQ3_K {
+    fn default() -> Self {
+        Self {
+            hmask: [0u8; 32],
+            qs: [0u8; 64],
+            scales: [0u8; 12],
+            d: f16(0),
+        }
+    }
 }
 
 impl BlockQ3_K {
@@ -350,12 +371,23 @@ impl BlockQ3_K {
 
 /// Q6_K: 256 weights per super-block (6-bit weights: 4-bit low + 2-bit high).
 #[repr(C, align(32))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockQ6_K {
     pub ql: [u8; 128],   // Lower 4 bits for 256 weights = 128 bytes
     pub qh: [u8; 64],    // Higher 2 bits for 256 weights = 64 bytes
     pub scales: [i8; 16],
     pub d: f16,
+}
+
+impl Default for BlockQ6_K {
+    fn default() -> Self {
+        Self {
+            ql: [0u8; 128],
+            qh: [0u8; 64],
+            scales: [0i8; 16],
+            d: f16(0),
+        }
+    }
 }
 
 impl BlockQ6_K {
@@ -423,7 +455,7 @@ impl BlockQ6_K {
 
 /// Minimal 16-bit float representation without external dependencies.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(non_camel_case_types)]
 pub struct f16(pub u16);
 
