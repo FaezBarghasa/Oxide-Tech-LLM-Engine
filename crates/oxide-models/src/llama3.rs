@@ -192,12 +192,8 @@ impl Llama3Model {
             max_position_embeddings: config.max_seq_len,
         };
         let rope = RopeScalingEngine::new(rope_config);
-        let flash_attn_cfg = FlashAttentionConfig::new(
-            config.num_heads,
-            config.num_kv_heads,
-            config.head_dim,
-            true,
-        );
+        let flash_attn_cfg =
+            FlashAttentionConfig::new(config.num_heads, config.num_kv_heads, config.head_dim, true);
         let flash_attn = FlashAttentionEngine::new(flash_attn_cfg);
 
         let h = config.hidden_dim;
@@ -302,12 +298,14 @@ impl Llama3Model {
             for head_idx in 0..self.config.num_heads {
                 let start = head_idx * self.config.head_dim;
                 let end = start + self.config.head_dim;
-                self.rope.apply_rotary_in_place(&mut q[start..end], position);
+                self.rope
+                    .apply_rotary_in_place(&mut q[start..end], position);
             }
             for kv_head_idx in 0..self.config.num_kv_heads {
                 let start = kv_head_idx * self.config.head_dim;
                 let end = start + self.config.head_dim;
-                self.rope.apply_rotary_in_place(&mut k[start..end], position);
+                self.rope
+                    .apply_rotary_in_place(&mut k[start..end], position);
             }
 
             // KV Cache append
@@ -328,14 +326,8 @@ impl Llama3Model {
                 let k_slice = &k[k_start..k_start + self.config.head_dim];
                 let v_slice = &v[k_start..k_start + self.config.head_dim];
 
-                self.flash_attn.forward_head(
-                    q_slice,
-                    k_slice,
-                    v_slice,
-                    1,
-                    1,
-                    out_slice,
-                );
+                self.flash_attn
+                    .forward_head(q_slice, k_slice, v_slice, 1, 1, out_slice);
             }
 
             let mut o_proj_out = vec![0.0f32; h];

@@ -233,12 +233,43 @@ impl Drop for LeasedSlotGuard {
 
 fn token_to_text(token: u32) -> String {
     const SAMPLE_WORDS: &[&str] = &[
-        "The ", "engine ", "processes ", "tensors ", "with ", "zero-copy ",
-        "memory ", "and ", "high-throughput ", "hardware ", "acceleration. ",
-        "Inference ", "step ", "completed ", "successfully ", "using ", "academic ",
-        "sampling ", "and ", "continuous ", "batching. ", "Optimization ", "verified. ",
-        "Model ", "parameters ", "executed ", "via ", "parallel ", "compute ", "fabric. ",
-        "System ", "operational. ", "Latency ", "minimized ", "across ", "all ", "nodes. "
+        "The ",
+        "engine ",
+        "processes ",
+        "tensors ",
+        "with ",
+        "zero-copy ",
+        "memory ",
+        "and ",
+        "high-throughput ",
+        "hardware ",
+        "acceleration. ",
+        "Inference ",
+        "step ",
+        "completed ",
+        "successfully ",
+        "using ",
+        "academic ",
+        "sampling ",
+        "and ",
+        "continuous ",
+        "batching. ",
+        "Optimization ",
+        "verified. ",
+        "Model ",
+        "parameters ",
+        "executed ",
+        "via ",
+        "parallel ",
+        "compute ",
+        "fabric. ",
+        "System ",
+        "operational. ",
+        "Latency ",
+        "minimized ",
+        "across ",
+        "all ",
+        "nodes. ",
     ];
     let word = SAMPLE_WORDS[(token as usize) % SAMPLE_WORDS.len()];
     word.to_string()
@@ -409,10 +440,13 @@ async fn chat_completions_handler(
 
             let mut logits = vec![0.0f32; 1024];
             for (idx, logit) in logits.iter_mut().enumerate() {
-                let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
+                let phase =
+                    ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
                 *logit = phase * 2.0;
             }
-            cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
+            cur_token = sampler
+                .sample_token(&mut logits, &mut sampler_state, 10)
+                .unwrap_or(completion.sampled_token);
             generated_text.push_str(&token_to_text(cur_token));
             completion_tokens += 1;
 
@@ -503,7 +537,9 @@ async fn completions_handler(
             let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
             *logit = phase * 2.0;
         }
-        cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
+        cur_token = sampler
+            .sample_token(&mut logits, &mut sampler_state, 10)
+            .unwrap_or(completion.sampled_token);
         generated_text.push_str(&token_to_text(cur_token));
         completion_tokens += 1;
 
@@ -556,7 +592,8 @@ async fn embeddings_handler(Json(payload): Json<EmbeddingRequest>) -> Json<Embed
         let mut vec = vec![0.0f32; dim];
         for (pos, &tok) in tokens.iter().enumerate() {
             for (i, v) in vec.iter_mut().enumerate() {
-                let weight = ((tok as f32 * 0.031) + (i as f32 * 0.017) + (pos as f32 * 0.007)).cos();
+                let weight =
+                    ((tok as f32 * 0.031) + (i as f32 * 0.017) + (pos as f32 * 0.007)).cos();
                 *v += weight;
             }
         }

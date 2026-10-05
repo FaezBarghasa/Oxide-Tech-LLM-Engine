@@ -75,3 +75,45 @@ fn test_continuous_batching_slot_manager() {
     manager.release_slot(slot_id);
     assert_eq!(manager.total_active_slots(), 0);
 }
+
+#[test]
+fn test_specialized_pipeline_llama3_dense_execution() {
+    use oxide_core::worker::StepCommand;
+    use oxide_engine::SpecializedPipeline;
+    use oxide_models::llama3::{Llama3Config, Llama3KvCacheLayer, Llama3Model};
+
+    let cfg = Llama3Config::tiny_test_config();
+    let model = Llama3Model::new(cfg);
+    let kv_cache = (0..cfg.num_layers)
+        .map(|_| Llama3KvCacheLayer::default())
+        .collect();
+
+    let mut pipeline = SpecializedPipeline::Llama3Dense {
+        model,
+        kv_cache,
+        seq_positions: std::collections::HashMap::new(),
+    };
+
+    let cmd = StepCommand::new(101, 42, 0, false);
+    let completion = pipeline.step(&cmd).unwrap();
+    assert_eq!(completion.sequence_id, 101);
+    assert!(completion.sampled_token < cfg.vocab_size as u32);
+}
+
+#[test]
+fn test_specialized_pipeline_llama3_cpu_monomorphized() {
+    use oxide_backend_cpu::CpuBackend;
+    use oxide_core::worker::StepCommand;
+    use oxide_engine::{OxideEngine, SpecializedPipeline};
+    use oxide_models::llama3::Llama3Config;
+
+    let backend = CpuBackend::new(0, 4);
+    let config = Llama3Config::tiny_test_config();
+    let engine = OxideEngine::new(backend, config);
+    let mut pipeline = SpecializedPipeline::Llama3Cpu(engine);
+
+    let cmd = StepCommand::new(102, 10, 0, false);
+    let completion = pipeline.step(&cmd).unwrap();
+    assert_eq!(completion.sequence_id, 102);
+    assert!(completion.sampled_token > 0);
+}

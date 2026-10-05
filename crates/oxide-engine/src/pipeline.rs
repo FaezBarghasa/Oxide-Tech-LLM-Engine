@@ -73,6 +73,12 @@ pub enum SpecializedPipeline {
     Llama3Qualcomm(OxideEngine<QualcommBackend, Llama3Config, NvFp4>),
     Llama3Rknn(OxideEngine<RknnBackend, Llama3Config, NvFp4>),
     Llama3Hailo(OxideEngine<HailoBackend, Llama3Config, NvFp4>),
+    Llama3Cpu(OxideEngine<CpuBackend, Llama3Config, NvFp4>),
+    Llama3Dense {
+        model: oxide_models::Llama3Model,
+        kv_cache: Vec<oxide_models::llama3::Llama3KvCacheLayer>,
+        seq_positions: std::collections::HashMap<u64, usize>,
+    },
 
     // Multi-Modal - Latent Diffusion, Audio Serving & Quantitative Trading
     DiffusionPipeline(DiffusionEngine),
@@ -115,6 +121,34 @@ impl SpecializedPipeline {
             Self::Llama3Qualcomm(engine) => engine.step_monomorphized(cmd),
             Self::Llama3Rknn(engine) => engine.step_monomorphized(cmd),
             Self::Llama3Hailo(engine) => engine.step_monomorphized(cmd),
+            Self::Llama3Cpu(engine) => engine.step_monomorphized(cmd),
+            Self::Llama3Dense {
+                model,
+                kv_cache,
+                seq_positions,
+            } => {
+                let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
+                let logits = model.forward_step(cmd.input_token, *pos, kv_cache)?;
+                *pos += 1;
+                let mut max_idx = 0;
+                let mut max_val = f32::NEG_INFINITY;
+                for (i, &l) in logits.iter().enumerate() {
+                    if l > max_val {
+                        max_val = l;
+                        max_idx = i;
+                    }
+                }
+                let next_token = max_idx as u32;
+                let is_terminal = next_token == 0
+                    || next_token == 2
+                    || next_token == 128_001
+                    || next_token == 128_009;
+                Ok(StepCompletion::new(
+                    cmd.sequence_id,
+                    next_token,
+                    is_terminal,
+                ))
+            }
 
             Self::DiffusionPipeline(engine) => {
                 let step_idx = (cmd.input_token as usize) % engine.config().num_inference_steps;

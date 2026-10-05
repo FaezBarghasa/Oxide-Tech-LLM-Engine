@@ -22,7 +22,9 @@ async fn test_slot_leasing_and_raii_reclamation() {
         top_p: 0.9,
         stream: false,
     };
-    let guard1 = LeasedSlotGuard::lease(&slot_manager, req1).await.expect("Slot 1 acquired");
+    let guard1 = LeasedSlotGuard::lease(&slot_manager, req1)
+        .await
+        .expect("Slot 1 acquired");
     assert_eq!(guard1.slot_id(), 0);
 
     // Request 2: Lease slot 1
@@ -34,7 +36,9 @@ async fn test_slot_leasing_and_raii_reclamation() {
         top_p: 0.9,
         stream: false,
     };
-    let guard2 = LeasedSlotGuard::lease(&slot_manager, req2).await.expect("Slot 2 acquired");
+    let guard2 = LeasedSlotGuard::lease(&slot_manager, req2)
+        .await
+        .expect("Slot 2 acquired");
     assert_eq!(guard2.slot_id(), 1);
 
     // Request 3: All slots busy, must return None (503)
@@ -46,13 +50,19 @@ async fn test_slot_leasing_and_raii_reclamation() {
         top_p: 0.9,
         stream: false,
     };
-    assert!(LeasedSlotGuard::lease(&slot_manager, req3.clone()).await.is_none());
+    assert!(
+        LeasedSlotGuard::lease(&slot_manager, req3.clone())
+            .await
+            .is_none()
+    );
 
     // Drop guard 1: RAII automatically reclaims slot 0
     drop(guard1);
 
     // Now slot 0 is available again for Request 3
-    let guard3 = LeasedSlotGuard::lease(&slot_manager, req3).await.expect("Slot 0 reacquired after drop");
+    let guard3 = LeasedSlotGuard::lease(&slot_manager, req3)
+        .await
+        .expect("Slot 0 reacquired after drop");
     assert_eq!(guard3.slot_id(), 0);
 
     drop(guard2);
@@ -100,7 +110,9 @@ fn test_academic_sampler_integration_with_logits() {
     logits[42] = 15.0; // dominant peak
     logits[43] = 12.0;
 
-    let sampled = sampler.sample_token(&mut logits, &mut state, 10).expect("Sampling successful");
+    let sampled = sampler
+        .sample_token(&mut logits, &mut state, 10)
+        .expect("Sampling successful");
     assert!(sampled == 42 || sampled == 43);
     assert_eq!(state.generated_tokens.len(), 1);
 }

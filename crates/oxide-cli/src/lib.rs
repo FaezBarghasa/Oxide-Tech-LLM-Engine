@@ -132,7 +132,11 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     if let Some(weights_path) = &cli.weights {
-        tracing::info!("Validating and preparing model weights from: {}", weights_path);
+        let path = std::path::Path::new(weights_path);
+        if !path.exists() {
+            return Err(format!("Model weights path does not exist: {weights_path}").into());
+        }
+        tracing::info!("Validated model weights path: {}", weights_path);
     }
 
     let pipeline = match (cli.model, cli.backend) {
@@ -300,6 +304,49 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let backend = HailoBackend::new_with_profile(0, cli.max_slots, cli.gpu.as_deref());
             let config = Llama3Config::default();
             SpecializedPipeline::Llama3Hailo(OxideEngine::new(backend, config))
+        }
+        (ModelArg::Llama3, BackendArg::Cpu) => {
+            let config = if cli.weights.is_some() {
+                Llama3Config::default()
+            } else {
+                Llama3Config::tiny_test_config()
+            };
+            let mut model = oxide_models::Llama3Model::new(config);
+            if let Some(weights_path) = &cli.weights {
+                let bytes = std::fs::read(weights_path)
+                    .map_err(|e| format!("Failed to read weights from {weights_path}: {e}"))?;
+                let path = std::path::Path::new(weights_path);
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                if ext.eq_ignore_ascii_case("safetensors") {
+                    let (header, _) =
+                        oxide_models::formats::SafeTensorsHeader::parse_from_bytes(&bytes)
+                            .map_err(|e| format!("Failed to parse SafeTensors header: {e}"))?;
+                    model
+                        .load_from_safetensors(&header, &bytes)
+                        .map_err(|e| format!("Failed to load tensors into Llama3Model: {e}"))?;
+                    tracing::info!("Loaded SafeTensors weights from {}", weights_path);
+                } else if ext.eq_ignore_ascii_case("gguf") {
+                    let gguf = oxide_models::formats::GgufFile::parse(&bytes)
+                        .map_err(|e| format!("Failed to parse GGUF file: {e}"))?;
+                    model
+                        .load_from_gguf(&gguf, &bytes)
+                        .map_err(|e| format!("Failed to load tensors into Llama3Model: {e}"))?;
+                    tracing::info!("Loaded GGUF weights from {}", weights_path);
+                } else {
+                    tracing::warn!(
+                        "Unrecognized weights format: {}; continuing with initialized weights",
+                        weights_path
+                    );
+                }
+            }
+            let kv_cache = (0..config.num_layers)
+                .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
+                .collect();
+            SpecializedPipeline::Llama3Dense {
+                model,
+                kv_cache,
+                seq_positions: std::collections::HashMap::new(),
+            }
         }
 
         // Quantitative Trading & Financial Time-Series Foundation Model (Kronos)
