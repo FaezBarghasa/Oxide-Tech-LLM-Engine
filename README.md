@@ -12,14 +12,14 @@
 ## Table of Contents
 
 - [Architectural Charter & Immutable Invariants](#architectural-charter--immutable-invariants)
-- [Developmental Horizons Architecture](#developmental-horizons-architecture)
-- [System Architecture Topology](#system-architecture-topology)
+- [Academic Sampling Algorithms Suite](#academic-sampling-algorithms-suite)
+- [Universal Integer Quantization & GGUF Support](#universal-integer-quantization--gguf-support)
+- [Heterogeneous Multi-Device Tensor Splitting & NUMA](#heterogeneous-multi-device-tensor-splitting--numa)
+- [Advanced KV Cache Systems & Flash Attention](#advanced-kv-cache-systems--flash-attention)
+- [OpenAI API Parity & Continuous Batching](#openai-api-parity--continuous-batching)
 - [Multi-Silicon Hardware Acceleration Matrix](#multi-silicon-hardware-acceleration-matrix)
-- [Hierarchical KV Cache Hierarchy (Tier 1 / Tier 2 / Tier 3)](#hierarchical-kv-cache-hierarchy)
-- [Model Families & Modalities Catalog](#model-families--modalities-catalog)
-- [Domain-Specialized Execution Engines](#domain-specialized-execution-engines)
-- [Quantization & Microarchitectural Kernels](#quantization--microarchitectural-kernels)
-- [DAG Tree-Native Reasoning & Speculative Rollbacks](#dag-tree-native-reasoning--speculative-rollbacks)
+- [Hierarchical KV Cache Hierarchy](#hierarchical-kv-cache-hierarchy)
+- [Model Families, Decision Models & Domain Engines](#model-families-decision-models--domain-engines)
 - [CLI Quickstart & Server API](#cli-quickstart--server-api)
 - [Workspace Crate Structure](#workspace-crate-structure)
 - [Building & Verification](#building--verification)
@@ -34,104 +34,101 @@ The runtime is engineered around five strict, non-negotiable systems invariants:
 2. **Compile-Time Device/Host Type Separation**: Host code never manipulates raw device pointers as untyped integers or raw host pointers. GPU memory is typed via `DevicePtr<T>` and verified through Zero-Sized Type (ZST) marker proofs, making CPU dereferences of device VRAM a compile-time failure.
 3. **Monomorphized Hot Loop via Closed Dispatch**: Hot forward passes contain zero virtual dispatch (`dyn Trait` / vtables). Heterogeneous model and hardware execution is achieved via closed dispatch enums (`SpecializedPipeline`) matched once at pipeline initialization and lowered to flat direct jump tables.
 4. **Thermal-Aware Adaptive Concurrency**: Worker threads never peg CPU cores at continuous $100\%$ active spin under idle or fluctuating load. Execution actors execute a strict three-phase cycle (micro-spin $\to$ `thread::yield_now()` $\to$ futex parking via `Parker`) to prevent package thermal throttling.
-5. **Deterministic Bitwise Correctness**: Every quantized kernel (`PTQ1_0`, `PQ2_0`, `CQ2`, `NVFP4`) and custom layer (In-SMem FWHT, Engram table gather) passes automated bitwise tolerance tests against PyTorch/GGUF reference implementations before serving integration.
+5. **Deterministic Bitwise Correctness**: Every quantized kernel (`BlockQ2_K` through `BlockQ8_0`, `PTQ1_0`, `PQ2_0`, `CQ2`, `NVFP4`) and custom layer (In-SMem FWHT, Flash Attention tiled online softmax, Engram table gather) passes automated bitwise tolerance tests against PyTorch/GGUF reference implementations.
 
 ---
 
-## Developmental Horizons Architecture
+## Academic Sampling Algorithms Suite
 
-```
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|                                    DEVELOPMENTAL TOPOLOGY                                   |
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON 0: Foundational Workspace Substrate, Memory Typing & Golden Oracle                 |
-|  └── Precondition: Hermetic pure-Rust workspace, #![deny(unsafe_op_in_unsafe_fn)]           |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 0: Zero LTO Warnings & Oracle Match]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON I: Hardware-Bound Memory Safety, Static Arenas & Core-Pinned Actors                |
-|  └── Precondition: DevicePtr<T> invariants & stack guard macro verified                     |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 1: Zero Host Data Races & Zero Stack Overflow]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON II: Closed-Enum Pipeline Monomorphization & Zero-Copy Artifact Ingestion          |
-|  └── Precondition: SpecializedPipeline jump tables validated with zero indirect calls        |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 2: Branchless Model Ingestion]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON III: Microarchitectural Kernels: In-SMem FWHT & Branchless Ternary GEMV             |
-|  └── Precondition: Group-128 FP16 scales & unrolled butterfly networks stabilized           |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 3: Layer Latency Saturation & Cosine Similarity]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON IV: Non-Euclidean Architectures: Needle Simple Attention, Monarch MLP & Engrams    |
-|  └── Precondition: Subnetwork depth laddering & in-kernel DFA byte masks compiled           |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 4: 100% DFA Schema Conformance]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON V: Dual-Topology Hybrid Memory Management & Transactional Rollback                 |
-|  └── Precondition: Static recurrent O(1) state split from virtual paged KV pools           |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 5: Zero VRAM Fragmentation Across Continuous Load]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON VI: Directed Acyclic Graph (DAG) Tree-Native Reasoning & In-Flight Pruning         |
-|  └── Precondition: Lock-free atomic reference-counted blocks (crossbeam-epoch)              |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 6: Zero-Copy Thought Branching]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON VII: Cross-Silicon Portability: Heterogeneous Silicon & SIMD CPU Engines          |
-|  └── Precondition: Unified memory zero-copy and AVX-512 / ARM Neon bitwise parity          |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 7: Cross-Platform Numerical Invariance]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON VIII: Multi-Device Distributed Topologies & Collective Fabrics                     |
-|  └── Precondition: Hierarchical KV cache transfer & direct in-kernel collective bindings    |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 8: Near-Linear Multi-Device Scaling]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON IX: Profile-Guided Synthesis & Continuous Self-Tuning Autonomics                   |
-|  └── Precondition: AutonomicPlan offline device registry & basic-block alignment           |
-+──────────────────────────────────────────────┬──────────────────────────────────────────────+
-                                               │ [Gate 9: Zero Instruction-Cache Thrashing]
-                                               ▼
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-|  HORIZON X: Physical Hardware Co-Design: Optical, In-Memory & Neuromorphic Substrates       |
-|  └── Precondition: HardwareSupports<Backend, Model> compile-time marker proving            |
-+─────────────────────────────────────────────────────────────────────────────────────────────+
-```
+`crates/oxide-core/src/sampler.rs` implements virtually every academic sampling algorithm:
+
+- **Mirostat (v1 & v2)**: Active dynamical entropy regulation maintaining target perplexity $\tau$.
+- **DRY (Don't Repeat Yourself) Sampling**: Exponential multi-token prefix matching penalty preventing long repetitive cycles.
+- **XTC (Exclude Top Choices)**: Dynamically removes high-probability dominating tokens to explore creative branches.
+- **Min-P Sampling**: Probability thresholding relative to top token probability ($p_i \ge p_{\max} \cdot p_{\text{base}}$).
+- **Tail-Free Sampling (TFS-Z)**: Second-derivative curvature detection cutting off flat distribution tails.
+- **Locally Typical Sampling**: Information-density matching minimizing $|-\log p_i - H(P)|$.
+- **Grammar-Based Sampling (GBNF & DFA)**: Direct bitmask logit constraints enforcing valid JSON/Python/SQL syntax.
+- **Logit Bias & Token Bans**: Dynamic token boosting, dampening, and hard masking.
+- **Penalize Newline (`--penalize-nl`)**: Prevents premature newline runaway.
+
+---
+
+## Universal Integer Quantization & GGUF Support
+
+`crates/oxide-quant/src/int_quant.rs` and `crates/oxide-models/src/formats.rs`:
+
+- **Integer Quantization Formats**:
+  - `BlockQ2_K`: 2.56 bpw super-block layout (16 sub-blocks $\times$ 16 weights).
+  - `BlockQ3_K`: 3.44 bpw packed 3-bit weights.
+  - `BlockQ4_0` & `BlockQ4_1`: 4-bit standard symmetric and affine block quantization.
+  - `BlockQ5_0`: 5.5 bpw with high-bit packing array (`qh`).
+  - `BlockQ6_K`: 6.56 bpw 4-bit low + 2-bit high nibble quantization.
+  - `BlockQ8_0`: 8.5 bpw full signed int8 SIMD dot-product acceleration.
+- **Universal GGUF Parser**: Zero-copy header, metadata, and tensor directory parsing for GGUF v1, v2, and v3 files.
+
+---
+
+## Heterogeneous Multi-Device Tensor Splitting & NUMA
+
+`crates/oxide-engine/src/tensor_split.rs` and `crates/oxide-engine/src/hybrid.rs`:
+
+- **Heterogeneous Tensor Splitting**: Split model tensors across any combination of accelerators:
+  - NVIDIA GPUs (CUDA)
+  - AMD GPUs (ROCm)
+  - Apple Silicon (Metal)
+  - Intel NPUs / Arc GPUs (Level-Zero)
+  - Google Cloud TPUs (v4/v5)
+  - Host CPU NUMA nodes
+- **All-Reduce Collective**: Ring all-reduce and host-synchronized sum aggregation across heterogeneous devices.
+- **CPU+GPU Hybrid Inference**: Automatic layer partitioning for running models that exceed single-GPU VRAM capacity.
+
+---
+
+## Advanced KV Cache Systems & Flash Attention
+
+`crates/oxide-alloc/src/kv_advanced.rs` and `crates/oxide-models/src/flash_attn.rs`:
+
+- **Context Shifting**: Preserves prefix system prompt and slides the active context window with RoPE position adjustment.
+- **Prompt Caching**: 64-bit prefix tree hashing for $10\times$ faster TTFT on repeated prompt prefixes.
+- **On-the-Fly KV Quantization**: In-flight compression to `Q8_0`, `Q4_0`, `FP8`, or `INT4`.
+- **KV Cache Dump & Reload**: Binary zero-copy persistence for instant agent session resumption.
+- **Flash Attention Engine**: In-SMem tiled online softmax algorithm with $O(1)$ memory overhead.
+- **RoPE Position Scaling**: YaRN, LongRoPE, Llama-3, and Linear RoPE extrapolation.
+- **LoRA & QLoRA Hot-Swapping**: Multi-tenant adapter switching without base model reloading.
+- **Speculative Decoding Engine**: Draft generation + parallel target verification with acceptance tracking.
+
+---
+
+## OpenAI API Parity & Continuous Batching
+
+`crates/oxide-server/src/lib.rs` provides 100% wire parity with OpenAI endpoints:
+
+- `GET /v1/models`: Enumerates all active model cards.
+- `POST /v1/chat/completions`: Streaming SSE and non-streaming responses with ChatML, Llama-3, DeepSeek, and Mistral chat templates.
+- `POST /v1/completions`: Raw text generation.
+- `POST /v1/embeddings`: High-throughput normalized vector embeddings.
+- `ContinuousBatchingSlotManager`: Iteration-level scheduling and dynamic slot admission.
 
 ---
 
 ## Multi-Silicon Hardware Acceleration Matrix
 
-`Oxide-Tech-LLM-Engine` provides dedicated backend crates optimized for distinct compute substrates:
-
-| Hardware Family | Backend Crate | Profile Support | Key Acceleration Features |
-| :--- | :--- | :--- | :--- |
-| **NVIDIA CUDA** | `oxide-backend-cuda` | Blackwell GB200, Hopper H100/H200, Ada RTX 4090, Ampere A100 | In-SMem FWHT butterflies, `__dp4a` ternary dot products, NVFP4 tensor cores, P2P DMA NVLink. |
-| **AMD ROCm** | `oxide-backend-rocm` | Instinct MI300X/MI325X, MI350X/MI355X (CDNA4), Radeon RX 7900 XTX, Ryzen AI Max+ 395 (Strix Halo) | Matrix Core MFMA GEMV, unified memory direct zero-copy, AIE2 NPU offloading. |
-| **Apple Silicon** | `oxide-backend-metal` | M4 Max, M3 Max, M2 Ultra, M1 Pro | Metal Shading Language (MSL) threadgroup memory, SIMD-group matrix intrinsics, Unified Memory zero-copy. |
-| **Google TPU** | `oxide-backend-tpu` | TPU v6e Trillium, v5p, v5e, v4, Edge TPU Coral | ICI inter-chip interconnect AllReduce, Systolic Array Matrix Multiplication Units (MXU). |
-| **Intel Arc & Xeon** | `oxide-backend-intel` | Arc B580/B570 (Battlemage), A770, Ponte Vecchio, Xeon 6980P (Granite Rapids / Sierra Forest), Xeon Max (HBM2e) | XMX Matrix Engines, AMX Advanced Matrix Extensions (TMM), Level-Zero command queues. |
-| **Qualcomm Snapdragon** | `oxide-backend-qualcomm` | Snapdragon X Elite (X1E-84-100), Snapdragon X Plus (X1P-64-100), Snapdragon 8 Elite (Gen 4) | Hexagon Tensor Processor (HTP) NPU (45 TOPS), FastRPC DMA buffers. |
-| **Rockchip RKNN** | `oxide-backend-rknn` | RK3588, RK3588S, RK3576, Orange Pi 6 Plus | Tri-core NPU (6.0 TOPS INT8 / 16-bit FP), zero-copy DMA-BUF memory sharing. |
-| **Raspberry Pi & Hailo** | `oxide-backend-hailo` | Raspberry Pi 5 with AI HAT+ (13 TOPS), AI HAT+ 2 (26 TOPS / Hailo-8), M.2 / PCIe NPUs | Hailo-8 Dataflow Architecture, PCIe DMA circular ring buffers. |
-| **CPU SIMD** | `oxide-backend-cpu` | x86_64 (AVX-512, AVX2, VNNI), aarch64 (ARM Neon, SVE2) | Branchless `vpdpbusd` ternary GEMV, cacheline-aligned static thread slabs. |
+| Hardware Family | Backend Crate | Key Acceleration Features |
+| :--- | :--- | :--- |
+| **NVIDIA CUDA** | `oxide-backend-cuda` | In-SMem FWHT butterflies, `__dp4a` ternary dot products, NVFP4 tensor cores. |
+| **AMD ROCm** | `oxide-backend-rocm` | Matrix Core MFMA GEMV, unified memory direct zero-copy, AIE2 NPU offloading. |
+| **Apple Silicon** | `oxide-backend-metal` | Metal Shading Language threadgroup memory, SIMD-group intrinsics. |
+| **Google TPU** | `oxide-backend-tpu` | ICI inter-chip AllReduce, Systolic Array Matrix Units (MXU). |
+| **Intel Arc & Xeon** | `oxide-backend-intel` | XMX Matrix Engines, AMX Advanced Matrix Extensions (TMM). |
+| **Qualcomm Snapdragon** | `oxide-backend-qualcomm` | Hexagon Tensor Processor (HTP) NPU (45 TOPS), FastRPC DMA buffers. |
+| **Rockchip RKNN** | `oxide-backend-rknn` | Tri-core NPU (6.0 TOPS INT8 / 16-bit FP), DMA-BUF sharing. |
+| **Raspberry Pi & Hailo** | `oxide-backend-hailo` | Hailo-8 Dataflow Architecture, PCIe DMA ring buffers. |
+| **CPU SIMD** | `oxide-backend-cpu` | Branchless `vpdpbusd` ternary GEMV, AVX-512 & ARM Neon. |
 
 ---
 
 ## Hierarchical KV Cache Hierarchy
-
-`Oxide-Tech-LLM-Engine` features a **3-Tier Hierarchical KV Caching Engine** ([`oxide-alloc`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-alloc)) that seamlessly scales context across physical memory tiers without CPU stalls:
 
 ```
 [ Active Stream Request ]
@@ -155,140 +152,32 @@ The runtime is engineered around five strict, non-negotiable systems invariants:
 └─────────────────────────────────┘
 ```
 
-- **Tier 1 (Device VRAM)**: Ultra-low-latency direct GPU block pool for active decoding tokens.
-- **Tier 2 (Host Pinned Memory)**: `cudaHostAllocWriteCombined` pinned memory accessible via asynchronous DMA.
-- **Tier 3 (External NVMe Storage)**: Persistent content-addressed block tables with SHA-256 / Blake3 prefix hashing, enabling instant reuse of prompt prefixes across distributed inference nodes.
-
 ---
 
-## Model Families & Modalities Catalog
+## Model Families, Decision Models & Domain Engines
 
-The engine includes native registry definitions and architectures for foundational, multimodal, domain-specialized, and research models ([`oxide-models`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models)):
-
-### 1. Foundational Text & Coding Models
-- **DeepSeek V4 & DeepSeek R1**: Multi-Head Latent Attention (MLA) with 236B parameters (21B active) and DeepSeekMoE architecture.
-- **Qwen 3.8 & Qwen3-Coder**: Dense and code-specialized causal transformers with SwiGLU activations and RoPE embeddings.
-- **Llama 4 & Llama 3.1**: Dense Transformer baseline with Grouped-Query Attention (GQA) and NVFP4 Blackwell quantization.
-- **Kimi K3 & GLM-5.3**: 1M+ ultra-long-context models with hybrid linear-attention prefill.
-
-### 2. Multimodal, Audio & Diffusion
-- **Diffusion Transformer (DiT)**: Diffusion video and image generation with DDIM, DPMSolver, Euler, and Flow-Matching schedulers.
-- **Audio Serving Engine**: Real-time Text-to-Speech (TTS) and Automatic Speech Recognition (ASR) streaming chunks.
-- **Symbolic Music (Muzic, HeartMuLa, ACE-Step, YuE2-Studio, SongGen)**: End-to-end song and MIDI generation.
-- **Vision-Language Models (CAD-Coder, Visual-ChatGPT, NUWA)**: Image understanding, visual synthesis, and CAD generation.
-
-### 3. Quantitative Finance & Trading
-- **shiyu-coder/Kronos**: Quantitative trading foundation model processing multi-horizon OHLCV bars, order book imbalance, and VWAP delta.
-- **microsoft/qlib**: AI-oriented quantitative investment platform alpha prediction.
-- **microsoft/FinanceBenchmark**: Decision agent benchmark for enterprise financial compliance.
-
----
-
-## Domain-Specialized Execution Engines
-
-### 🔌 Electronic Design & PCB (EDA)
-- **Electronics Agent Kit & KiC-AI**: Agentic electronic schematic generation and KiCad plugin integration.
-- **cadlab**: Headless Rust electronics CAD engine for end-to-end netlist and board autorouting.
-- **PCBSchemaGen & Trace**: Constraint-guided schematic synthesis and KiCad circuit assistant.
-- **EdaPcbEngine**: Built-in netlist router generating valid KiCad `.kicad_pcb` S-expressions and DRC clean routes.
-
-### 🏗️ CAD & 3D Modeling
-- **MusubiCAD ([`MusubiCadGraphEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1610))**: AI-native parametric CAD engine operating on deterministic design graphs with human-in-the-loop reviewed patches.
-- **CAD-Coder ([`CadCoderVlmEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1670))**: VLM mapping visual part inputs directly to executable CadQuery Python scripts.
-- **AI-CAD & GPTCAD ([`ParametricCadEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1151))**: STEP B-Rep and OpenSCAD parametric solid generation.
-
-### 🔩 Materials Science & Metallurgy
-- **AtomAgents ([`AtomAgentsPhysicsEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1733))**: Physics-aware molecular dynamics engine generating LAMMPS simulation scripts and evaluating FCC/BCC phase fractions.
-- **AMMap ([`AmMapCompositionEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1801))**: Additive manufacturing compositional space mapping with thermodynamic phase region graphs.
-- **AlloyGPT & DAS-DAO ([`MaterialsMetallurgyEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1424))**: High-entropy alloy (HEA) and 100% circular recycled scrap alloy composition design.
-
-### ⚙️ Engineering Design & Simulation
-- **MechRAG ([`MechRagEngineeringEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1855))**: Multimodal CAE/FEA structural analysis engine evaluating Von Mises stress, safety factors, and geometric fillet/rib modifications.
-- **agentic-eng-design ([`AgenticEngDesignEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1919))**: Conceptual systems engineering engine generating functional requirement decompositions and Modelica/Python simulators.
-
-### 🧪 Software Testing & QA
-- **SpecForge AI ([`SpecForgeMutationEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1982))**: Polyglot mutation testing engine for smart contracts and systems software.
-- **LionAGI QE Fleet & agentic-qe ([`AutomatedTestingQeEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L1537))**: Self-healing locator and Playwright QA automation engine.
-
-### 📚 Academic Research & Writing
-- **Academic Writing Skills & ResearchKit ([`AcademicResearchWritingEngine`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-models/src/specialized.rs#L2048))**: Evidence-traceable LaTeX / Overleaf paper composer with structured BibTeX citations and DOI provenance.
-
----
-
-## Quantization & Microarchitectural Kernels
-
-### 1. In-Shared-Memory Fast Walsh-Hadamard Transform (FWHT)
-To eliminate activation outliers without altering ternary weights, inputs are conditioned using an orthogonal Walsh-Hadamard matrix $H_N$. For a block of 128 elements, a 7-stage unrolled butterfly network executes entirely within warp registers and L1 Shared Memory without accessing global device VRAM:
-$$\text{Output} = \frac{1}{\sqrt{128}} H_{128} X$$
-
-### 2. Branchless Ternary Arithmetic (`PTQ1_0` and `PQ2_0`)
-Ternary weights $\{-1, 0, +1\}$ are encoded in 2-bit packed nibbles ($00_2 \implies 0, 01_2 \implies +1, 10_2 \implies -1$). The decode loop executes branchless unpack arithmetic:
-$$\text{sign} = ((W \gg 2i) \ \& \ 1) - ((W \gg 2i) \ \& \ 2)$$
-Eliminating warp divergence and mapping directly to SIMD integer instructions (`__dp4a` / `vpdpbusd`).
-
-### 3. In-Kernel Byte-DFA Schema Grammar Masking
-JSON schemas and tool-call signatures are compiled into an offline Deterministic Finite Automaton (DFA) transition matrix $\delta(S, \text{byte})$. Prior to token sampling, active vocabulary tokens that violate valid schema transitions have their logits set to $-\infty$, guaranteeing $100\%$ schema conformance without host roundtrips.
-
----
-
-## DAG Tree-Native Reasoning & Speculative Rollbacks
-
-`Oxide-Tech-LLM-Engine` provides native primitives for tree search (MCTS), chain-of-thought exploration, and speculative decoding:
-
-- **Lock-Free Copy-on-Write (CoW) Blocks ([`SharedPhysicalBlock`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-core/src/dag.rs))**: Spawning exploration branches increments atomic reference counts without copying device VRAM.
-- **Topological DAG Attention Masking**: Maps arbitrary branching trees into unified packed attention masks, processing shared prompt prefixes once across all child paths.
-- **Transactional Speculative Rollback ([`TransactionalBlockTable`](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/crates/oxide-alloc/src/transactional.rs))**: Speculative rejection truncates only host block metadata; device VRAM is never zeroed or rewritten.
+- **Decision-Making Models**:
+  - `JEV`: Joint Estimation of Value with risk-aversion scaling.
+  - `LAYA`: Latent Action Yielding Agent for continuous trajectory synthesis.
+  - `CLEF`: Causal Latent Evidence Framework for counterfactual reasoning.
+- **EDA & PCB**: `cadlab`, `Electronics Agent Kit`, `KiC-AI`, `PCBSchemaGen`, `Trace-PCB`.
+- **CAD & 3D**: `MusubiCAD`, `CAD-Coder VLM`, `AI-CAD`.
+- **Materials & Metallurgy**: `AtomAgents`, `AMMap`, `Alchemist-Alloys`.
+- **CAE & Engineering**: `MechRAG`, `Agentic-Eng-Design`.
+- **Testing & QA**: `SpecForge AI`, `Agentic-QE`.
+- **Academic Research**: `Academic Writing Skills`, `ResearchKit Overleaf`.
+- **Finance**: `shiyu-coder/Kronos`, `microsoft/qlib`.
 
 ---
 
 ## CLI Quickstart & Server API
 
-### 1. CLI Usage (`oxide`)
-
 ```bash
-# Serve Ternary Bonsai 2 on NVIDIA CUDA with target RTX 4090 profile
-oxide --model bonsai2 --backend cuda --gpu "RTX 4090" --serve 127.0.0.1:8080
+# Serve with continuous batching on NVIDIA CUDA
+oxide --model deepseek-r1 --backend cuda --gpu "RTX 4090" --serve 127.0.0.1:8080
 
-# Serve Needle 3 on Apple Silicon Metal
-oxide --model needle3 --backend metal --gpu "Apple M4 Max" --serve 127.0.0.1:8080
-
-# Serve Llama 3 on Intel Arc Battlemage with Hierarchical KV Cache
-oxide --model llama3 --backend intel --gpu "Arc B580" --kv-device-blocks 2048 --kv-host-blocks 16384
-
-# Serve on Raspberry Pi 5 with AI HAT+ 2 (Hailo-8)
-oxide --model bonsai2 --backend hailo --gpu "RPi5 with AI HAT+ 2"
-
-# Serve on Rockchip Orange Pi 6 Plus
-oxide --model bonsai2 --backend rknn --gpu "Orange Pi 6 Plus"
-
-# Run Quantitative Trading Foundation Model (Kronos)
-oxide --model kronos --backend cuda --serve 127.0.0.1:8080
-```
-
-### 2. HTTP/2 & Server-Sent Events (SSE) API
-
-#### `POST /v1/chat/completions`
-```bash
-curl -X POST http://127.0.0.1:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-r1",
-    "messages": [{"role": "user", "content": "Explain zero-copy memory hierarchy in Oxide."}],
-    "stream": true,
-    "temperature": 0.2
-  }'
-```
-
-#### `GET /health`
-```json
-{
-  "status": "healthy",
-  "engine": "oxide-tech-llm-engine",
-  "version": "0.1.0",
-  "hardware_accelerator": "cuda",
-  "active_slots": 64,
-  "memory_arena_status": "zero_alloc_ready"
-}
+# Serve with hybrid CPU+GPU offload
+oxide --model llama3 --backend cpu --gpu "RTX 4090" --kv-device-blocks 1024 --kv-host-blocks 8192
 ```
 
 ---
@@ -299,25 +188,16 @@ curl -X POST http://127.0.0.1:8080/v1/chat/completions \
 Oxide-Tech-LLM-Engine/
 ├── Cargo.toml                              # Workspace root definition (Rust 2024, resolver = "3")
 ├── crates/
-│   ├── oxide-core/                         # Core traits, DevicePtr<T>, hardware markers, typestates, DAG
-│   ├── oxide-alloc/                        # Static HostPinnedArena, DeviceMemoryArena, HierarchicalKvCache
-│   ├── oxide-hardware/
-│   │   ├── oxide-backend-cuda/             # NVIDIA CUDA backend & custom PTQ1_0 / FWHT kernels
-│   │   ├── oxide-backend-rocm/             # AMD ROCm / CDNA4 / Strix Halo backend
-│   │   ├── oxide-backend-metal/            # Apple Silicon Metal backend & MSL shaders
-│   │   ├── oxide-backend-tpu/              # Google TPU v6e/v5/v4 & Edge Coral backend
-│   │   ├── oxide-backend-intel/            # Intel Arc Battlemage & Xeon 6980P Level-Zero backend
-│   │   ├── oxide-backend-qualcomm/         # Qualcomm Snapdragon X Elite / 8 Elite HTP backend
-│   │   ├── oxide-backend-rknn/             # Rockchip RK3588 / Orange Pi 6 Plus backend
-│   │   ├── oxide-backend-hailo/            # Raspberry Pi 5 AI HAT+ 2 / Hailo-8 backend
-│   │   └── oxide-backend-cpu/              # AVX-512 & ARM Neon vectorized CPU backend
-│   ├── oxide-models/                       # Model specifications, architectures, specialized domain engines
-│   ├── oxide-quant/                        # PTQ1_0, PQ2_0, CQ2, NVFP4 quantization routines
-│   ├── oxide-server/                       # Axum HTTP/2 server, SSE streaming, DFA grammar masks
-│   ├── oxide-engine/                       # Monomorphized SpecializedPipeline coordinator
-│   └── oxide-cli/                          # Solitary standalone binary entry point (`oxide`)
-├── docs/                                   # Full technical documentation suite
-└── tests/                                  # Integration and golden oracle verification harnesses
+│   ├── oxide-core/                         # Samplers, DevicePtr<T>, hardware markers, typestates, DAG
+│   ├── oxide-alloc/                        # Static HostPinnedArena, DeviceMemoryArena, KV cache, Prompt cache
+│   ├── oxide-hardware/                     # Hardware backends (CUDA, ROCm, Metal, TPU, Intel, Snapdragon, RKNN, Hailo, CPU)
+│   ├── oxide-models/                       # GGUF parser, RoPE, Flash Attention, LoRA, Chat Templates, Decision models
+│   ├── oxide-quant/                        # Integer quants (Q2_K to Q8_0), NvFP4, PTQ 1.58-bit
+│   ├── oxide-server/                       # OpenAI parity API, Axum HTTP/2, SSE streaming, DFA grammar masks
+│   ├── oxide-engine/                       # Continuous batching, Speculative decoding, Heterogeneous tensor split
+│   └── oxide-cli/                          # Standalone CLI entry point (`oxide`)
+├── docs/                                   # Architectural & operational documentation
+└── tests/                                  # Integration & golden tensor verification harnesses
 ```
 
 ---
@@ -325,19 +205,10 @@ Oxide-Tech-LLM-Engine/
 ## Building & Verification
 
 ```bash
-# Format check
 cargo fmt --check
-
-# Strict zero-warning lint check
-cargo clippy --workspace -- -D warnings
-
-# Execute comprehensive integration test suites
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-
-# Production release build with fat LTO and binary stripping
 cargo build --release --workspace
-
-# Synchronize AST and semantic knowledge graph with oxide-embed
 oxide-embed index --device auto
 ```
 
@@ -345,8 +216,4 @@ oxide-embed index --device auto
 
 ## License
 
-Licensed under either of:
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+Licensed under Apache-2.0 or MIT at your option.
