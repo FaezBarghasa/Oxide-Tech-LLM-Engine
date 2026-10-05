@@ -1,8 +1,55 @@
 use crate::arena::GraphArena;
 use crate::graph::{ComputeGraph, OpCode};
 use oxide_core::error::Result;
+use oxide_core::memory::DevicePtr;
 use oxide_models::loader::MmapModel;
 use std::collections::HashMap;
+
+/// Maximum continuous batch size supported per execution lane.
+pub const MAX_BATCH: usize = 64;
+
+/// Reusable pre-allocated scratchpad for forward decode steps with zero heap allocations.
+#[derive(Debug)]
+pub struct StepScratchpad {
+    pub output_tokens: [u32; MAX_BATCH],
+    pub valid_count: usize,
+    pub intermediate: [f32; 1024],
+}
+
+impl Default for StepScratchpad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StepScratchpad {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            output_tokens: [0; MAX_BATCH],
+            valid_count: 0,
+            intermediate: [0.0; 1024],
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.output_tokens.fill(0);
+        self.valid_count = 0;
+        self.intermediate.fill(0.0);
+    }
+}
+
+/// Trait defining zero-allocation in-place forward step execution.
+pub trait ZeroAllocForwardStep {
+    /// # Safety
+    /// `input_tokens_d` must point to valid device memory holding `batch_size` tokens.
+    unsafe fn forward_step_inplace(
+        &mut self,
+        input_tokens_d: DevicePtr<u32>,
+        batch_size: usize,
+        scratchpad: &mut StepScratchpad,
+    ) -> Result<()>;
+}
 
 /// Pre-allocated compute graph executor.
 /// Executes the entire DAG with zero heap allocations during token generation.

@@ -4,7 +4,9 @@
     clippy::undocumented_unsafe_blocks
 )]
 
+use oxide_core::error::{EngineError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Supported Speculative Decoding Strategies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -65,7 +67,6 @@ impl SpeculativeDecoderEngine {
     }
 
     /// Verifies draft tokens against target model logit distributions.
-    /// Uses standard speculative acceptance criterion: accept if `p_target(x) >= p_draft(x)` or with probability `p_target(x) / p_draft(x)`.
     pub fn verify_draft_tokens(
         &self,
         draft_tokens: &[u32],
@@ -107,8 +108,7 @@ impl SpeculativeDecoderEngine {
         }
     }
 
-    /// N-Gram Prompt Lookup Decoding (model-free speculative draft).
-    /// Scans prefix context for matches with recent trailing tokens and extrapolates continuation.
+    /// N-Gram Prompt Lookup Decoding.
     #[must_use]
     pub fn draft_ngram_lookup(&self, context: &[u32], max_draft: usize) -> Vec<u32> {
         let n = context.len();
@@ -118,7 +118,6 @@ impl SpeculativeDecoderEngine {
 
         for k in (self.config.ngram_min..=self.config.ngram_max.min(n)).rev() {
             let pattern = &context[n - k..n];
-            // Scan prior context from earliest to latest (excluding final occurrence)
             let search_limit = n - k;
             for i in 0..search_limit {
                 if context[i..i + k] == *pattern {
@@ -134,7 +133,6 @@ impl SpeculativeDecoderEngine {
     }
 
     /// Suffix Matching Speculative Decoding.
-    /// Matches suffix of current prompt against pre-computed cache of common code/syntax blocks.
     #[must_use]
     pub fn draft_suffix_matching(&self, context: &[u32], common_suffixes: &[Vec<u32>]) -> Vec<u32> {
         let n = context.len();
@@ -149,8 +147,7 @@ impl SpeculativeDecoderEngine {
         Vec::new()
     }
 
-    /// EAGLE (Extrapolation Algorithm for Greater Language-model Efficiency) Tree Speculator.
-    /// Simulates tree drafting of multiple candidate paths for batched verification.
+    /// EAGLE Tree Speculator.
     #[must_use]
     pub fn draft_eagle_tree(&self, root_token: u32, depth: usize) -> Vec<Vec<u32>> {
         let mut paths = vec![vec![root_token]];
@@ -158,7 +155,6 @@ impl SpeculativeDecoderEngine {
             let mut next_paths = Vec::new();
             for path in paths {
                 let last = *path.last().unwrap_or(&0);
-                // Predict 2 top branches per node:
                 let branch_a = last.wrapping_add(1);
                 let branch_b = last.wrapping_add(2);
 
@@ -175,8 +171,7 @@ impl SpeculativeDecoderEngine {
         paths
     }
 
-    /// DFlash: Diffusion-based Speculative Decoding Candidate Generator.
-    /// Fast continuous feature denoising to synthesize non-autoregressive token blocks.
+    /// DFlash: Diffusion-based Candidate Generator.
     #[must_use]
     pub fn draft_dflash_block(&self, seed_latent: &[f32], block_len: usize) -> Vec<u32> {
         let mut tokens = Vec::with_capacity(block_len);
@@ -186,5 +181,86 @@ impl SpeculativeDecoderEngine {
             tokens.push(token_id);
         }
         tokens
+    }
+}
+
+/// Speculative Engine Context with synchronized host and device sequence counter buffers.
+#[derive(Debug, Clone)]
+pub struct SpeculativeEngineContext {
+    pub max_sequences: usize,
+    host_seq_lens: HashMap<u64, usize>,
+    device_seq_lens: HashMap<u64, usize>,
+    sequence_tokens: HashMap<u64, Vec<u32>>,
+}
+
+impl SpeculativeEngineContext {
+    #[must_use]
+    pub fn new(max_sequences: usize) -> Self {
+        Self {
+            max_sequences,
+            host_seq_lens: HashMap::new(),
+            device_seq_lens: HashMap::new(),
+            sequence_tokens: HashMap::new(),
+        }
+    }
+
+    /// Registers a new active sequence with initial prompt length.
+    pub fn register_sequence(&mut self, sequence_id: u64, initial_length: usize) -> Result<()> {
+        self.host_seq_lens.insert(sequence_id, initial_length);
+        self.device_seq_lens.insert(sequence_id, initial_length);
+        self.sequence_tokens.insert(sequence_id, vec![0; initial_length]);
+        Ok(())
+    }
+
+    /// Appends speculative draft tokens to sequence tracking.
+    pub fn append_draft_tokens(&mut self, sequence_id: u64, draft_tokens: &[u32]) -> Result<()> {
+        let host_len = self
+            .host_seq_lens
+            .get_mut(&sequence_id)
+            .ok_or(EngineError::SequenceNotFound { sequence_id })?;
+        *host_len += draft_tokens.len();
+        if let Some(tokens) = self.sequence_tokens.get_mut(&sequence_id) {
+            tokens.extend_from_slice(draft_tokens);
+        }
+        if let Some(dev_len) = self.device_seq_lens.get_mut(&sequence_id) {
+            *dev_len = *host_len;
+        }
+        Ok(())
+    }
+
+    /// Returns the active host sequence length for a given sequence ID.
+    #[must_use]
+    pub fn get_host_sequence_length(&self, sequence_id: u64) -> usize {
+        self.host_seq_lens.get(&sequence_id).copied().unwrap_or(0)
+    }
+
+    /// Executes speculative rollback: truncates tokens and synchronizes device sequence length buffer.
+    pub fn rollback_speculative_state(
+        &mut self,
+        sequence_id: u64,
+        accepted_length: usize,
+        _draft_count: usize,
+    ) -> Result<()> {
+        let host_len = self
+            .host_seq_lens
+            .get_mut(&sequence_id)
+            .ok_or(EngineError::SequenceNotFound { sequence_id })?;
+        *host_len = accepted_length;
+        if let Some(tokens) = self.sequence_tokens.get_mut(&sequence_id) {
+            tokens.truncate(accepted_length);
+        }
+        // Synchronize device-side sequence length buffer
+        if let Some(dev_len) = self.device_seq_lens.get_mut(&sequence_id) {
+            *dev_len = accepted_length;
+        }
+        Ok(())
+    }
+
+    /// Reads device sequence length counter buffer (seq_lens_d).
+    pub fn read_device_sequence_length(&self, sequence_id: u64) -> Result<usize> {
+        self.device_seq_lens
+            .get(&sequence_id)
+            .copied()
+            .ok_or(EngineError::SequenceNotFound { sequence_id })
     }
 }

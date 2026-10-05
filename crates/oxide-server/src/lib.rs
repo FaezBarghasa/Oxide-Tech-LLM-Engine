@@ -27,6 +27,7 @@ pub mod dfa;
 pub mod grammar_engine;
 pub mod grpc;
 pub mod reasoning_tools;
+pub mod server;
 
 use axum::extract::State;
 use axum::response::IntoResponse;
