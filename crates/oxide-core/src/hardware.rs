@@ -44,6 +44,12 @@ pub enum GpuArchitecture {
     IntelXeonGraniteRapids,       // Intel Xeon 6 6900P / 6700P (AMX FP16/BF16/INT8 + 12-ch DDR5/MCR)
     IntelXeonSierraForest,        // Intel Xeon 6 6700E / 6900E (up to 288 E-cores + AVX-VNNI)
     IntelXeonEmeraldSapphireRapids,// Intel Xeon 5th/4th Gen Scalable & Xeon Max (64GB HBM2e)
+
+    // Apple Silicon Mac Architectures (Metal / MLX)
+    AppleSiliconM1, // Apple M1 / M1 Pro / M1 Max / M1 Ultra (Metal 2.4/3.0, 16-core ANE, FP16 SIMD-matrix)
+    AppleSiliconM2, // Apple M2 / M2 Pro / M2 Max / M2 Ultra (Metal 3.0, 15.8 TOPS ANE, BF16/FP16)
+    AppleSiliconM3, // Apple M3 / M3 Pro / M3 Max (Metal 3.1, Dynamic Caching, HW Ray Tracing)
+    AppleSiliconM4, // Apple M4 / M4 Pro / M4 Max (Metal 3.2, 38 TOPS Neural Engine, 2nd Gen Dynamic Caching)
 }
 
 /// Compute Capability / Target ISA Version.
@@ -162,6 +168,24 @@ impl ComputeCapability {
         minor: 40,
     };
 
+    // Apple Silicon Metal GPU Families (Metal 2.4/3.0/3.1/3.2)
+    pub const APPLE_GPU_FAMILY_7_M1: Self = Self {
+        major: 40,
+        minor: 7,
+    };
+    pub const APPLE_GPU_FAMILY_8_M2: Self = Self {
+        major: 40,
+        minor: 8,
+    };
+    pub const APPLE_GPU_FAMILY_9_M3: Self = Self {
+        major: 40,
+        minor: 9,
+    };
+    pub const APPLE_GPU_FAMILY_10_M4: Self = Self {
+        major: 40,
+        minor: 10,
+    };
+
     #[must_use]
     pub const fn new(major: u32, minor: u32) -> Self {
         Self { major, minor }
@@ -197,6 +221,10 @@ impl ComputeCapability {
             (30, 69) => GpuArchitecture::IntelXeonGraniteRapids,
             (30, 67) => GpuArchitecture::IntelXeonSierraForest,
             (30, 40) => GpuArchitecture::IntelXeonEmeraldSapphireRapids,
+            (40, 7) => GpuArchitecture::AppleSiliconM1,
+            (40, 8) => GpuArchitecture::AppleSiliconM2,
+            (40, 9) => GpuArchitecture::AppleSiliconM3,
+            (40, 10) => GpuArchitecture::AppleSiliconM4,
             _ => GpuArchitecture::Ampere,
         }
     }
@@ -204,7 +232,15 @@ impl ComputeCapability {
 
 impl fmt::Display for ComputeCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.major == 30 {
+        if self.major == 40 {
+            match self.minor {
+                7 => write!(f, "apple_gpu_family_7_m1"),
+                8 => write!(f, "apple_gpu_family_8_m2"),
+                9 => write!(f, "apple_gpu_family_9_m3"),
+                10 => write!(f, "apple_gpu_family_10_m4"),
+                _ => write!(f, "apple_gpu_family_{}", self.minor),
+            }
+        } else if self.major == 30 {
             match self.minor {
                 20 => write!(f, "intel_xe2_battlemage"),
                 10 => write!(f, "intel_xe1_alchemist"),
@@ -257,6 +293,7 @@ pub enum HardwareFormFactor {
     DgxStationSpark,    // NVIDIA DGX Spark / Station AI nodes
     SuperchipGraceBlackwell, // Grace-Blackwell Coherent Memory Substrate
     ApuUnifiedMemoryWithNpu, // AMD Ryzen AI / Strix Point / MI300A Coherent Unified APU + XDNA NPU
+    UnifiedAppleSiliconMac,  // Apple Silicon Mac (MacBook Pro, Mac Studio, Mac mini, Mac Pro, iMac)
 }
 
 /// Memory silicon technology.
@@ -275,6 +312,9 @@ pub enum MemoryTechnology {
     McrDdr5,
     Hbm2eOnPackageCpu,
     SramOnChip,
+    LpDdr4xUnifiedMemory,
+    LpDdr5UnifiedMemory,
+    LpDdr5xUnifiedMemory,
 }
 
 /// Tensor / Matrix Core hardware generation.
@@ -300,6 +340,11 @@ pub enum TensorCoreGeneration {
     IntelXmxPonteVecchio,    // Intel Xe-HPC Systolic Matrix Engine
     IntelAmxTileEngine,      // Intel AMX (Advanced Matrix Extensions TMUL FP16/BF16/INT8)
     IntelAvxVnni,            // Intel AVX-512 / AVX10 VNNI Vector Engine
+    AppleSimdgroupMatrixM1,  // Apple M1 SIMD-group Matrix (Metal 2.4 / 16-core ANE)
+    AppleSimdgroupMatrixM2,  // Apple M2 SIMD-group Matrix (Metal 3.0 / BF16 / 15.8 TOPS ANE)
+    AppleSimdgroupMatrixM3,  // Apple M3 SIMD-group Matrix (Metal 3.1 / Dynamic Caching)
+    AppleSimdgroupMatrixM4,  // Apple M4 SIMD-group Matrix (Metal 3.2 / 38 TOPS Neural Engine)
+    AppleNeuralEngine,       // Apple Neural Engine (ANE Dedicated Subsystem)
 }
 
 /// Comprehensive hardware profiling descriptor for target GPU / accelerator / APU.
@@ -1431,6 +1476,260 @@ impl GpuDeviceProfile {
             });
         }
 
+        // ==========================================
+        // 5. APPLE SILICON MACS (METAL / MLX)
+        // ==========================================
+
+        // Apple M4 Max / M4 Pro / M4 (Metal 3.2, 38 TOPS Neural Engine, 2nd Gen Dynamic Caching)
+        if n.contains("m4") || n.contains("apple m4") {
+            let is_max = n.contains("max");
+            let is_pro = n.contains("pro");
+            let sm_count = if is_max {
+                40
+            } else if is_pro {
+                20
+            } else {
+                10
+            };
+            let vram_gb = if is_max {
+                128
+            } else if is_pro {
+                64
+            } else {
+                32
+            };
+            let bw_gbps = if is_max {
+                546.0
+            } else if is_pro {
+                273.0
+            } else {
+                120.0
+            };
+            let bus_bits = if is_max {
+                512
+            } else if is_pro {
+                256
+            } else {
+                128
+            };
+
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::APPLE_GPU_FAMILY_10_M4,
+                architecture: GpuArchitecture::AppleSiliconM4,
+                form_factor: HardwareFormFactor::UnifiedAppleSiliconMac,
+                memory_tech: MemoryTechnology::LpDdr5xUnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::AppleSimdgroupMatrixM4,
+                sm_count,
+                vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
+                memory_bus_width_bits: bus_bits,
+                memory_bandwidth_gbps: bw_gbps,
+                l2_cache_bytes: 48 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Apple M3 Max / M3 Pro / M3 (Metal 3.1, Dynamic Caching, HW Ray Tracing)
+        if n.contains("m3") || n.contains("apple m3") {
+            let is_max = n.contains("max");
+            let is_pro = n.contains("pro");
+            let sm_count = if is_max {
+                40
+            } else if is_pro {
+                18
+            } else {
+                10
+            };
+            let vram_gb = if is_max {
+                128
+            } else if is_pro {
+                36
+            } else {
+                24
+            };
+            let bw_gbps = if is_max {
+                400.0
+            } else if is_pro {
+                150.0
+            } else {
+                100.0
+            };
+            let bus_bits = if is_max {
+                512
+            } else if is_pro {
+                192
+            } else {
+                128
+            };
+
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::APPLE_GPU_FAMILY_9_M3,
+                architecture: GpuArchitecture::AppleSiliconM3,
+                form_factor: HardwareFormFactor::UnifiedAppleSiliconMac,
+                memory_tech: MemoryTechnology::LpDdr5UnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::AppleSimdgroupMatrixM3,
+                sm_count,
+                vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
+                memory_bus_width_bits: bus_bits,
+                memory_bandwidth_gbps: bw_gbps,
+                l2_cache_bytes: 36 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
+        // Apple M2 Ultra / M2 Max / M2 Pro / M2 (Metal 3.0, 15.8 TOPS ANE, BF16/FP16)
+        if n.contains("m2") || n.contains("apple m2") {
+            let is_ultra = n.contains("ultra");
+            let is_max = n.contains("max");
+            let is_pro = n.contains("pro");
+            let sm_count = if is_ultra {
+                76
+            } else if is_max {
+                38
+            } else if is_pro {
+                19
+            } else {
+                10
+            };
+            let vram_gb = if is_ultra {
+                192
+            } else if is_max {
+                96
+            } else if is_pro {
+                32
+            } else {
+                24
+            };
+            let bw_gbps = if is_ultra {
+                800.0
+            } else if is_max {
+                400.0
+            } else if is_pro {
+                200.0
+            } else {
+                100.0
+            };
+            let bus_bits = if is_ultra {
+                1024
+            } else if is_max {
+                512
+            } else if is_pro {
+                256
+            } else {
+                128
+            };
+
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::APPLE_GPU_FAMILY_8_M2,
+                architecture: GpuArchitecture::AppleSiliconM2,
+                form_factor: HardwareFormFactor::UnifiedAppleSiliconMac,
+                memory_tech: MemoryTechnology::LpDdr5UnifiedMemory,
+                tensor_core_gen: TensorCoreGeneration::AppleSimdgroupMatrixM2,
+                sm_count,
+                vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
+                memory_bus_width_bits: bus_bits,
+                memory_bandwidth_gbps: bw_gbps,
+                l2_cache_bytes: 48 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: is_ultra, // UltraFusion Interconnect
+                nvlink_bandwidth_gbps: if is_ultra { 2500.0 } else { 0.0 },
+            });
+        }
+
+        // Apple M1 Ultra / M1 Max / M1 Pro / M1 (Metal 2.4/3.0, 16-core ANE)
+        if n.contains("m1") || n.contains("apple m1") || n.contains("apple silicon") || n.contains("metal") {
+            let is_ultra = n.contains("ultra");
+            let is_max = n.contains("max");
+            let is_pro = n.contains("pro");
+            let sm_count = if is_ultra {
+                64
+            } else if is_max {
+                32
+            } else if is_pro {
+                16
+            } else {
+                8
+            };
+            let vram_gb = if is_ultra {
+                128
+            } else if is_max {
+                64
+            } else if is_pro {
+                32
+            } else {
+                16
+            };
+            let bw_gbps = if is_ultra {
+                800.0
+            } else if is_max {
+                400.0
+            } else if is_pro {
+                200.0
+            } else {
+                68.25
+            };
+            let bus_bits = if is_ultra {
+                1024
+            } else if is_max {
+                512
+            } else if is_pro {
+                256
+            } else {
+                128
+            };
+
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::APPLE_GPU_FAMILY_7_M1,
+                architecture: GpuArchitecture::AppleSiliconM1,
+                form_factor: HardwareFormFactor::UnifiedAppleSiliconMac,
+                memory_tech: if is_ultra || is_max || is_pro {
+                    MemoryTechnology::LpDdr5UnifiedMemory
+                } else {
+                    MemoryTechnology::LpDdr4xUnifiedMemory
+                },
+                tensor_core_gen: TensorCoreGeneration::AppleSimdgroupMatrixM1,
+                sm_count,
+                vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
+                memory_bus_width_bits: bus_bits,
+                memory_bandwidth_gbps: bw_gbps,
+                l2_cache_bytes: 32 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 32 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: is_ultra,
+                nvlink_bandwidth_gbps: if is_ultra { 2500.0 } else { 0.0 },
+            });
+        }
+
         None
     }
 
@@ -1438,7 +1737,10 @@ impl GpuDeviceProfile {
     #[must_use]
     pub const fn optimal_gemv_threads(&self) -> u32 {
         match self.architecture {
-            GpuArchitecture::IntelXeHpcPonteVecchio
+            GpuArchitecture::AppleSiliconM4
+            | GpuArchitecture::AppleSiliconM3
+            | GpuArchitecture::AppleSiliconM2
+            | GpuArchitecture::IntelXeHpcPonteVecchio
             | GpuArchitecture::IntelXeonGraniteRapids
             | GpuArchitecture::GoogleTpuV6eTrillium
             | GpuArchitecture::GoogleTpuV5p
@@ -1446,8 +1748,9 @@ impl GpuDeviceProfile {
             | GpuArchitecture::Cdna4
             | GpuArchitecture::Cdna3
             | GpuArchitecture::Blackwell
-            | GpuArchitecture::Hopper => 256, // 8 warps / Wave64 x 4 / High-throughput 128x128 MXU / AMX 1KB tiles
-            GpuArchitecture::IntelXe2Battlemage
+            | GpuArchitecture::Hopper => 256, // 8 warps / simdgroups x 8 / AMX 1KB tiles
+            GpuArchitecture::AppleSiliconM1
+            | GpuArchitecture::IntelXe2Battlemage
             | GpuArchitecture::IntelXe1Alchemist
             | GpuArchitecture::IntelXeonSierraForest
             | GpuArchitecture::IntelXeonEmeraldSapphireRapids
@@ -1462,7 +1765,7 @@ impl GpuDeviceProfile {
             | GpuArchitecture::Orin
             | GpuArchitecture::Cdna2
             | GpuArchitecture::Cdna1
-            | GpuArchitecture::XdnaNpu => 128, // 4 warps / Wave32 x 4 / Standard MXU / Xe-core
+            | GpuArchitecture::XdnaNpu => 128, // 4 warps / simdgroups x 4 / Standard MXU / Xe-core
             GpuArchitecture::GoogleEdgeTpu
             | GpuArchitecture::Turing
             | GpuArchitecture::Volta
