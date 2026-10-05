@@ -63,6 +63,9 @@ parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0"
+half = { version = "2.4", default-features = false, features = ["num-traits", "bytemuck", "serde"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+axum-test = "17.2"
 
 [profile.release]
 opt-level = 3

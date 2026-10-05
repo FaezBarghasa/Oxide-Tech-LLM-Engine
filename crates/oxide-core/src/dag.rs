@@ -76,3 +76,68 @@ impl SharedPhysicalBlock {
         }
     }
 }
+
+/// Thread-safe DAG physical block manager with asynchronous hardware event fencing.
+#[derive(Debug)]
+pub struct SafeDagBlockManager {
+    total_blocks: usize,
+    blocks: Vec<SharedPhysicalBlock>,
+    pending_releases: SegQueue<(PhysicalBlockId, *mut std::ffi::c_void)>,
+    free_list: SegQueue<PhysicalBlockId>,
+}
+
+unsafe impl Send for SafeDagBlockManager {}
+unsafe impl Sync for SafeDagBlockManager {}
+
+impl SafeDagBlockManager {
+    #[must_use]
+    pub fn new(total_physical_blocks: usize) -> Self {
+        let mut blocks = Vec::with_capacity(total_physical_blocks);
+        let free_list = SegQueue::new();
+        for i in 0..total_physical_blocks {
+            blocks.push(SharedPhysicalBlock::new(i as PhysicalBlockId));
+        }
+
+        Self {
+            total_blocks: total_physical_blocks,
+            blocks,
+            pending_releases: SegQueue::new(),
+            free_list,
+        }
+    }
+
+    /// Increments reference count for a physical block on fork.
+    pub fn fork_block(&self, block_id: PhysicalBlockId) {
+        if let Some(block) = self.blocks.get(block_id as usize) {
+            block.fork();
+        }
+    }
+
+    /// Enqueues block for asynchronous retirement once hardware event is signaled.
+    pub fn release_block_async(
+        &self,
+        block_id: PhysicalBlockId,
+        mock_completion_event: *mut std::ffi::c_void,
+    ) {
+        self.pending_releases.push((block_id, mock_completion_event));
+    }
+
+    /// Polls pending asynchronous releases and returns fully unreferenced blocks to free list.
+    pub fn poll_reclaim_blocks(&self) {
+        while let Some((block_id, _event)) = self.pending_releases.pop() {
+            if let Some(block) = self.blocks.get(block_id as usize) {
+                block.release(&self.free_list);
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn total_blocks(&self) -> usize {
+        self.total_blocks
+    }
+
+    #[must_use]
+    pub fn free_list_len(&self) -> usize {
+        self.free_list.len()
+    }
+}

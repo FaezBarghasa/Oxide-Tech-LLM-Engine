@@ -64,7 +64,7 @@ pub use int_quant::{
     BlockQ5_0, BlockQ5_1, BlockQ6_K, BlockQ8_0, BlockQ8_1, BlockQ8_K, f16,
 };
 pub use int_standard::{Int4Asym, Int4Sym, Int8Asym, Int8Sym};
-pub use marlin::{MarlinQuant, MarlinWeightMatrix};
+pub use marlin::{pack_marlin_int4, MarlinQuant, MarlinQuantizedMatrix, MarlinWeightMatrix};
 pub use modelopt::{apply_smoothquant_weights, ModelOptAlgorithm, ModelOptConfig};
 pub use mxfp::{BlockMxFp4, BlockMxFp6, BlockMxFp8, BlockMxInt8, E8M0Scale};
 pub use nvfp4::{BlockNvFp4_16, NvFp4};

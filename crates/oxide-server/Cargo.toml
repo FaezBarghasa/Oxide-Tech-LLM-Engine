@@ -24,4 +24,5 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 oxide-backend-cpu.workspace = true
 oxide-quant.workspace = true
+axum-test.workspace = true
 
