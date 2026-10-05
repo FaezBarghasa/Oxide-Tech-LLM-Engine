@@ -55,6 +55,71 @@ impl Llama3Config {
     pub fn rms_norm_eps_f32(&self) -> f32 {
         f32::from_bits(self.rms_norm_eps)
     }
+
+    /// Construct configuration from a ModelSpecification in the catalog.
+    #[must_use]
+    pub fn from_spec(spec: &crate::registry::ModelSpecification) -> Self {
+        Self {
+            hidden_dim: spec.hidden_dim as usize,
+            intermediate_dim: spec.intermediate_dim as usize,
+            num_layers: spec.num_layers as usize,
+            num_heads: spec.num_heads as usize,
+            num_kv_heads: spec.num_kv_heads as usize,
+            head_dim: spec.head_dim as usize,
+            vocab_size: spec.vocab_size as usize,
+            max_seq_len: spec.max_context_tokens as usize,
+            rms_norm_eps: 1e-5f32.to_bits(),
+        }
+    }
+
+    /// Construct configuration dynamically from a parsed GGUF file header.
+    #[must_use]
+    pub fn from_gguf(gguf: &GgufFile) -> Self {
+        let arch = gguf.architecture();
+        let hidden_dim = gguf
+            .get_u64(&format!("{arch}.embedding_length"))
+            .unwrap_or(4096) as usize;
+        let num_layers = gguf
+            .get_u64(&format!("{arch}.block_count"))
+            .unwrap_or(32) as usize;
+        let num_heads = gguf
+            .get_u64(&format!("{arch}.attention.head_count"))
+            .unwrap_or(32) as usize;
+        let num_kv_heads = gguf
+            .get_u64(&format!("{arch}.attention.head_count_kv"))
+            .unwrap_or(num_heads as u64) as usize;
+        let head_dim = if num_heads > 0 {
+            hidden_dim / num_heads
+        } else {
+            128
+        };
+        let intermediate_dim = gguf
+            .get_u64(&format!("{arch}.feed_forward_length"))
+            .unwrap_or((hidden_dim * 4) as u64) as usize;
+        let max_seq_len = gguf
+            .get_u64(&format!("{arch}.context_length"))
+            .unwrap_or(8192) as usize;
+        let eps = gguf
+            .get_f32(&format!("{arch}.attention.layer_norm_rms_epsilon"))
+            .unwrap_or(1e-5);
+        let vocab_size = gguf
+            .tensors
+            .get("token_embd.weight")
+            .and_then(|t| t.dimensions.first().copied())
+            .unwrap_or(128_256) as usize;
+
+        Self {
+            hidden_dim,
+            intermediate_dim,
+            num_layers,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            vocab_size,
+            max_seq_len,
+            rms_norm_eps: eps.to_bits(),
+        }
+    }
 }
 
 impl ModelConfig for Llama3Config {
@@ -255,6 +320,60 @@ impl Llama3Model {
             }
         }
         Ok(())
+    }
+
+    /// Construct model directly from a ModelSpecification.
+    #[must_use]
+    pub fn from_spec(spec: &crate::registry::ModelSpecification) -> Self {
+        Self::new(Llama3Config::from_spec(spec))
+    }
+
+    /// Load any model from disk (GGUF or SafeTensors) with automatic architecture discovery.
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let p = path.as_ref();
+        let bytes = std::fs::read(p).map_err(|e| {
+            oxide_core::error::EngineError::BackendError(format!(
+                "Failed to read model file {}: {e}",
+                p.display()
+            ))
+        })?;
+
+        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if ext.eq_ignore_ascii_case("gguf") {
+            let gguf = GgufFile::parse(&bytes)?;
+            let cfg = Llama3Config::from_gguf(&gguf);
+            let mut model = Self::new(cfg);
+            model.load_from_gguf(&gguf, &bytes)?;
+            Ok(model)
+        } else if ext.eq_ignore_ascii_case("safetensors") {
+            let (header, _) = SafeTensorsHeader::parse_from_bytes(&bytes)?;
+            let filename = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let cfg = if let Some(spec) = crate::registry::ModelSpecification::lookup(filename) {
+                Llama3Config::from_spec(&spec)
+            } else {
+                Llama3Config::default()
+            };
+            let mut model = Self::new(cfg);
+            model.load_from_safetensors(&header, &bytes)?;
+            Ok(model)
+        } else {
+            Err(oxide_core::error::EngineError::BackendError(format!(
+                "Unsupported model format for file: {}",
+                p.display()
+            )))
+        }
+    }
+
+    /// Universal loader: resolves from model file path on disk or catalog lookup by name.
+    pub fn from_model_name_or_path(query_or_path: &str) -> Result<Self> {
+        let path = std::path::Path::new(query_or_path);
+        if path.exists() {
+            return Self::from_file(path);
+        }
+        if let Some(spec) = crate::registry::ModelSpecification::lookup(query_or_path) {
+            return Ok(Self::from_spec(&spec));
+        }
+        Ok(Self::new(Llama3Config::default()))
     }
 
     /// Computes a single autoregressive forward step for an input token.

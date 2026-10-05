@@ -450,9 +450,28 @@ impl GgufFile {
     pub fn get_u64(&self, key: &str) -> Option<u64> {
         match self.metadata.get(key) {
             Some(GgufValue::Uint64(v)) => Some(*v),
-            Some(GgufValue::Uint32(v)) => Some(*v as u64),
+            Some(GgufValue::Uint32(v)) => Some(u64::from(*v)),
             _ => None,
         }
+    }
+
+    #[must_use]
+    pub fn get_f32(&self, key: &str) -> Option<f32> {
+        match self.metadata.get(key) {
+            Some(GgufValue::Float32(v)) => Some(*v),
+            Some(GgufValue::Float64(v)) => Some(*v as f32),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn architecture(&self) -> &str {
+        self.get_string("general.architecture").unwrap_or("llama")
+    }
+
+    #[must_use]
+    pub fn model_name(&self) -> &str {
+        self.get_string("general.name").unwrap_or("OxideModel")
     }
 }
 

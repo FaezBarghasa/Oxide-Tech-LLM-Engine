@@ -193,4 +193,85 @@ impl SpecializedPipeline {
             Self::HybridMultiDevice(pipeline) => pipeline.step_hybrid(cmd),
         }
     }
+
+    /// Universal model loader resolving from a local file path (GGUF/SafeTensors),
+    /// a catalog model name (e.g. Qwen, DeepSeek, Mistral, Llama), or domain pipelines.
+    pub fn from_model_or_path(
+        model_query_or_path: &str,
+        backend_name: &str,
+        gpu_profile: Option<&str>,
+        max_slots: usize,
+        weights_override: Option<&str>,
+    ) -> Result<Self> {
+        let q_lower = model_query_or_path.to_lowercase();
+        let path = std::path::Path::new(model_query_or_path);
+
+        // 1. If explicit file path on disk (GGUF or SafeTensors)
+        if path.exists() {
+            let model = oxide_models::Llama3Model::from_file(path)?;
+            let kv_cache = (0..model.config.num_layers)
+                .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
+                .collect();
+            return Ok(Self::Llama3Dense {
+                model,
+                kv_cache,
+                seq_positions: std::collections::HashMap::new(),
+            });
+        }
+
+        // 2. Multi-modal / domain engine routes
+        if q_lower.contains("diffusion") || q_lower.contains("flux") {
+            let cfg = oxide_models::diffusion::DiffusionTransformerConfig::default();
+            return Ok(Self::DiffusionPipeline(DiffusionEngine::new(cfg)));
+        }
+        if q_lower.contains("audio-tts") || q_lower.contains("kokoro") {
+            let cfg = oxide_models::audio::AudioModelConfig::new_tts_config(24000);
+            return Ok(Self::AudioPipeline(AudioServingEngine::new(cfg)));
+        }
+        if q_lower.contains("audio-asr") || q_lower.contains("whisper") {
+            let cfg = oxide_models::audio::AudioModelConfig::default();
+            return Ok(Self::AudioPipeline(AudioServingEngine::new(cfg)));
+        }
+        if q_lower.contains("kronos") || q_lower.contains("trading") {
+            let engine = oxide_models::KronosTradingEngine::new(2048, 60, 10, 1.0);
+            return Ok(Self::KronosTradingPipeline(engine));
+        }
+        if q_lower.contains("bonsai") {
+            let backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+            let config = TernaryBonsai2Config::default();
+            return Ok(Self::Bonsai2Cuda(OxideEngine::new(backend, config)));
+        }
+        if q_lower.contains("needle") {
+            let backend = CpuBackend::new(0, max_slots);
+            let config = CactusNeedleConfig::<8>::default();
+            return Ok(Self::Needle3Cpu(OxideEngine::new(backend, config)));
+        }
+
+        // 3. Universal LLM: Load from weights override or catalog lookup
+        let model = if let Some(weights_path) = weights_override {
+            let w_path = std::path::Path::new(weights_path);
+            if w_path.exists() {
+                oxide_models::Llama3Model::from_file(w_path)?
+            } else {
+                oxide_models::Llama3Model::from_model_name_or_path(model_query_or_path)?
+            }
+        } else {
+            oxide_models::Llama3Model::from_model_name_or_path(model_query_or_path)?
+        };
+
+        if backend_name.eq_ignore_ascii_case("cuda") && weights_override.is_none() {
+            let backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+            return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
+        }
+
+        let kv_cache = (0..model.config.num_layers)
+            .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
+            .collect();
+
+        Ok(Self::Llama3Dense {
+            model,
+            kv_cache,
+            seq_positions: std::collections::HashMap::new(),
+        })
+    }
 }

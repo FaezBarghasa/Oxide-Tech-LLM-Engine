@@ -802,6 +802,7 @@ dependencies = [
  "rtrb",
  "serde",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

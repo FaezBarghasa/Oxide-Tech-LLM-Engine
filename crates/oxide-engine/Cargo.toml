@@ -21,6 +21,7 @@ oxide-models.workspace = true
 oxide-quant.workspace = true
 rtrb.workspace = true
 crossbeam.workspace = true
+tokio.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
