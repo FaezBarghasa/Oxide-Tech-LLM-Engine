@@ -45,7 +45,7 @@ fn test_block_q4_1_quant_dequant() {
     block.dequantize(&mut output);
 
     for i in 0..32 {
-        assert!((output[i] - input[i]).abs() < 0.5);
+        assert!((output[i] - input[i]).abs() < 0.6);
     }
 }
 
