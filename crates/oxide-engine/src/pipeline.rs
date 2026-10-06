@@ -385,68 +385,170 @@ impl SpecializedPipeline {
 
         let scratch = Box::new(model.create_scratch());
 
-        let is_apu = backend_name.eq_ignore_ascii_case("apu");
-        let is_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu_igpu");
-        let auto_apu = backend_name.eq_ignore_ascii_case("cpu")
-            && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some();
+        let norm_backend = backend_name.to_ascii_lowercase().replace('-', "_");
 
-        if is_apu || is_cpu_igpu || auto_apu {
-            let has_npu = is_apu
-                || oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
-                    .is_some_and(|(_, _, npu)| npu);
-            let topology = crate::hybrid::HybridDeviceTopology::amd_apu_full_partition(
-                model.config.num_layers,
-                has_npu,
-            );
-            return Ok(Self::Llama3AmdApuCpuIgpu {
-                model,
-                kv_cache,
-                seq_positions: std::collections::HashMap::new(),
-                scratch,
-                topology,
-            });
-        }
+        let maybe_topology = match norm_backend.as_str() {
+            "cpu_nvidia" | "cpu+nvidia" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_nvidia_partition(
+                    model.config.num_layers,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_amd" | "cpu+amd" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_amd_partition(
+                    model.config.num_layers,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_intel" | "cpu+intel" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_intel_partition(
+                    model.config.num_layers,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_tpu" | "cpu+tpu" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_tpu_partition(
+                    model.config.num_layers,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_npu" | "cpu+npu" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_npu_partition(
+                    model.config.num_layers,
+                    0.65,
+                ),
+            ),
+            "cpu_nvidia_amd_intel" | "cpu+nvidia+amd+intel" | "triple_gpu" | "hybrid" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_nvidia_amd_intel_partition(
+                    model.config.num_layers,
+                    1,
+                    1,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_amd_intel" | "cpu+amd+intel" | "amd_intel" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_amd_intel_partition(
+                    model.config.num_layers,
+                    1,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_nvidia_intel" | "cpu+nvidia+intel" | "nvidia_intel" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_nvidia_intel_partition(
+                    model.config.num_layers,
+                    1,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_nvidia_amd" | "cpu+nvidia+amd" | "nvidia_amd" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_nvidia_amd_partition(
+                    model.config.num_layers,
+                    1,
+                    1,
+                    (model.config.num_layers * 2) / 10,
+                ),
+            ),
+            "cpu_igpu_npu" | "cpu+igpu+npu" | "apu" | "cpu_igpu" => {
+                let has_npu = norm_backend == "apu"
+                    || norm_backend.contains("npu")
+                    || oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
+                        .is_some_and(|(_, _, npu)| npu);
+                Some(crate::hybrid::HybridDeviceTopology::amd_apu_full_partition(
+                    model.config.num_layers,
+                    has_npu,
+                ))
+            }
+            "cpu_igpu_tpu" | "cpu+igpu+tpu" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_igpu_tpu_partition(
+                    model.config.num_layers,
+                    1,
+                ),
+            ),
+            "cpu_igpu_npu_nvidia" | "cpu+igpu+npu+nvidia" | "apu_nvidia" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_igpu_npu_nvidia_partition(
+                    model.config.num_layers,
+                    1,
+                ),
+            ),
+            "cpu_igpu_npu_amd" | "cpu+igpu+npu+amd" | "apu_amd" => Some(
+                crate::hybrid::HybridDeviceTopology::cpu_igpu_npu_amd_partition(
+                    model.config.num_layers,
+                    1,
+                ),
+            ),
+            "arm_npu_hat" | "arm+npu+hat" | "arm_npu" | "arm+npu" => Some(
+                crate::hybrid::HybridDeviceTopology::arm_npu_external_hat_partition(
+                    model.config.num_layers,
+                ),
+            ),
+            "arm_integrated_npu" | "arm_npu_only" => Some(
+                crate::hybrid::HybridDeviceTopology::arm_integrated_npu_partition(
+                    model.config.num_layers,
+                ),
+            ),
+            "epyc" | "epyc_server" => Some(
+                crate::hybrid::HybridDeviceTopology::epyc_server_standalone_partition(
+                    model.config.num_layers,
+                    2,
+                ),
+            ),
+            "epyc_gpu" | "epyc+gpu" => Some(
+                crate::hybrid::HybridDeviceTopology::epyc_server_gpu_partition(
+                    model.config.num_layers,
+                    2,
+                    &[crate::hybrid::DeviceRole::NvidiaGpu(0)],
+                ),
+            ),
+            "apple" | "apple_silicon" => Some(
+                crate::hybrid::HybridDeviceTopology::apple_silicon_uma_partition(
+                    model.config.num_layers,
+                ),
+            ),
+            "snapdragon" | "qualcomm" => Some(
+                crate::hybrid::HybridDeviceTopology::qualcomm_snapdragon_partition(
+                    model.config.num_layers,
+                ),
+            ),
+            "intel_ultra" => Some(
+                crate::hybrid::HybridDeviceTopology::intel_core_ultra_partition(
+                    model.config.num_layers,
+                    0,
+                ),
+            ),
+            "rockchip" | "rknn" => Some(
+                crate::hybrid::HybridDeviceTopology::rockchip_rknn_partition(
+                    model.config.num_layers,
+                ),
+            ),
+            "rpi_hailo" | "hailo" => Some(
+                crate::hybrid::HybridDeviceTopology::raspberry_pi_hailo_partition(
+                    model.config.num_layers,
+                ),
+            ),
+            _ => {
+                if norm_backend == "cpu"
+                    && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some()
+                {
+                    let has_npu = oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
+                        .is_some_and(|(_, _, npu)| npu);
+                    Some(crate::hybrid::HybridDeviceTopology::amd_apu_full_partition(
+                        model.config.num_layers,
+                        has_npu,
+                    ))
+                } else {
+                    None
+                }
+            }
+        };
 
-        if backend_name.eq_ignore_ascii_case("epyc") {
-            let topology = crate::hybrid::HybridDeviceTopology::epyc_server_partition(
-                model.config.num_layers,
-                2, // Default dual-socket EPYC server
-                &[],
-            );
-            return Ok(Self::Llama3AmdApuCpuIgpu {
-                model,
-                kv_cache,
-                seq_positions: std::collections::HashMap::new(),
-                scratch,
-                topology,
-            });
-        }
-
-        if backend_name.eq_ignore_ascii_case("arm_npu")
-            || backend_name.eq_ignore_ascii_case("arm-npu")
-        {
-            let topology = crate::hybrid::HybridDeviceTopology::arm_npu_hat_partition(
-                model.config.num_layers,
-                true, // Support external NPU HAT (Hailo-8 / Coral TPU) + Integrated NPU
-            );
-            return Ok(Self::Llama3AmdApuCpuIgpu {
-                model,
-                kv_cache,
-                seq_positions: std::collections::HashMap::new(),
-                scratch,
-                topology,
-            });
-        }
-
-        if backend_name.eq_ignore_ascii_case("hybrid") {
-            // Heterogeneous multi-vendor GPU (NVIDIA + AMD + Intel + CPU offload)
-            let topology = crate::hybrid::HybridDeviceTopology::multi_vendor_gpu_partition(
-                model.config.num_layers,
-                1,                                  // NVIDIA
-                1,                                  // AMD
-                1,                                  // Intel
-                (model.config.num_layers * 2) / 10, // 20% CPU offload
-            );
+        if let Some(topology) = maybe_topology {
             return Ok(Self::Llama3AmdApuCpuIgpu {
                 model,
                 kv_cache,

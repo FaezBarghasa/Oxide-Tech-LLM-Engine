@@ -396,6 +396,624 @@ impl HybridDeviceTopology {
             staging_buffer_elements: 4096,
         }
     }
+
+    /// CPU + NVIDIA GPUs (1 to 16 cards with optional CPU offload).
+    #[must_use]
+    pub fn cpu_nvidia_partition(
+        total_layers: usize,
+        nvidia_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        Self::multi_vendor_gpu_partition(total_layers, nvidia_gpus, 0, 0, cpu_offload_layers)
+    }
+
+    /// CPU + AMD GPUs (ROCm CDNA/RDNA discrete cards with optional CPU offload).
+    #[must_use]
+    pub fn cpu_amd_partition(
+        total_layers: usize,
+        amd_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        Self::multi_vendor_gpu_partition(total_layers, 0, amd_gpus, 0, cpu_offload_layers)
+    }
+
+    /// CPU + Intel GPUs (Arc / Xe discrete cards with optional CPU offload).
+    #[must_use]
+    pub fn cpu_intel_partition(
+        total_layers: usize,
+        intel_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        Self::multi_vendor_gpu_partition(total_layers, 0, 0, intel_gpus, cpu_offload_layers)
+    }
+
+    /// CPU + Google TPU cores (systolic array MXU with optional CPU offload).
+    #[must_use]
+    pub fn cpu_tpu_partition(
+        total_layers: usize,
+        tpu_cores: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let cpu_layers = cpu_offload_layers.min(total_layers);
+        let tpu_layers = total_layers - cpu_layers;
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+        let cores = tpu_cores.max(1);
+
+        if tpu_layers > 0 {
+            let per_core = tpu_layers / cores;
+            for i in 0..cores {
+                let count = per_core + usize::from(i < (tpu_layers % cores));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::Tpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+        }
+        if cur < total_layers {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: cur,
+                end_layer: total_layers,
+            });
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// CPU + NPU (Intel NPU, AMD XDNA, or discrete PCIe NPU with optional CPU offload).
+    #[must_use]
+    pub fn cpu_npu_partition(total_layers: usize, npu_ratio: f32) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let ratio = npu_ratio.clamp(0.1, 0.9);
+        let npu_layers = ((total_layers as f32) * ratio).round() as usize;
+        let npu_layers = npu_layers.clamp(1, total_layers.saturating_sub(1));
+
+        let partitions = vec![
+            LayerPartition {
+                device: DeviceRole::Npu,
+                start_layer: 0,
+                end_layer: npu_layers,
+            },
+            LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: npu_layers,
+                end_layer: total_layers,
+            },
+        ];
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// CPU + NVIDIA GPUs + AMD GPUs + Intel GPUs (Triple-vendor dGPU co-processing).
+    #[must_use]
+    pub fn cpu_nvidia_amd_intel_partition(
+        total_layers: usize,
+        nvidia_gpus: usize,
+        amd_gpus: usize,
+        intel_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        Self::multi_vendor_gpu_partition(
+            total_layers,
+            nvidia_gpus,
+            amd_gpus,
+            intel_gpus,
+            cpu_offload_layers,
+        )
+    }
+
+    /// CPU + AMD GPUs + Intel GPUs (Cross-vendor ROCm + Xe co-processing).
+    #[must_use]
+    pub fn cpu_amd_intel_partition(
+        total_layers: usize,
+        amd_gpus: usize,
+        intel_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        Self::multi_vendor_gpu_partition(total_layers, 0, amd_gpus, intel_gpus, cpu_offload_layers)
+    }
+
+    /// CPU + NVIDIA GPUs + Intel GPUs (Cross-vendor CUDA + Xe co-processing).
+    #[must_use]
+    pub fn cpu_nvidia_intel_partition(
+        total_layers: usize,
+        nvidia_gpus: usize,
+        intel_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        Self::multi_vendor_gpu_partition(
+            total_layers,
+            nvidia_gpus,
+            0,
+            intel_gpus,
+            cpu_offload_layers,
+        )
+    }
+
+    /// CPU + NVIDIA GPUs + AMD GPUs (Cross-vendor CUDA + ROCm co-processing).
+    #[must_use]
+    pub fn cpu_nvidia_amd_partition(
+        total_layers: usize,
+        nvidia_gpus: usize,
+        amd_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        Self::multi_vendor_gpu_partition(
+            total_layers,
+            nvidia_gpus,
+            amd_gpus,
+            0,
+            cpu_offload_layers,
+        )
+    }
+
+    /// CPU + iGPU + NPU (Coherent APU 3-way partition: Zen CPU + RDNA iGPU + XDNA NPU).
+    #[must_use]
+    pub fn cpu_igpu_npu_partition(total_layers: usize) -> Self {
+        Self::amd_apu_full_partition(total_layers, true)
+    }
+
+    /// CPU + iGPU + TPU (Host CPU + Integrated GPU + Google TPU / Coral TPU).
+    #[must_use]
+    pub fn cpu_igpu_tpu_partition(total_layers: usize, tpu_cores: usize) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let tpu_layers = (total_layers * 50) / 100;
+        let igpu_layers = (total_layers * 30) / 100;
+
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+        let cores = tpu_cores.max(1);
+
+        if tpu_layers > 0 {
+            let per_core = tpu_layers / cores;
+            for i in 0..cores {
+                let count = per_core + usize::from(i < (tpu_layers % cores));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::Tpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+        }
+        if igpu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Igpu,
+                start_layer: cur,
+                end_layer: cur + igpu_layers,
+            });
+            cur += igpu_layers;
+        }
+        if cur < total_layers {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: cur,
+                end_layer: total_layers,
+            });
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// CPU + iGPU + NPU + NVIDIA GPUs (Quad-heterogeneous: APU local + discrete CUDA dGPU).
+    #[must_use]
+    pub fn cpu_igpu_npu_nvidia_partition(total_layers: usize, nvidia_gpus: usize) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let nv_layers = ((total_layers as f32) * 0.60).round() as usize;
+        let apu_layers = total_layers.saturating_sub(nv_layers);
+
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+        let gpus = nvidia_gpus.max(1);
+
+        if nv_layers > 0 {
+            let per_gpu = nv_layers / gpus;
+            for i in 0..gpus {
+                let count = per_gpu + usize::from(i < (nv_layers % gpus));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::NvidiaGpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+        }
+
+        if apu_layers > 0 {
+            let npu_count = (apu_layers * 40) / 100;
+            let igpu_count = (apu_layers * 35) / 100;
+
+            if npu_count > 0 {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::Npu,
+                    start_layer: cur,
+                    end_layer: cur + npu_count,
+                });
+                cur += npu_count;
+            }
+            if igpu_count > 0 {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::Igpu,
+                    start_layer: cur,
+                    end_layer: cur + igpu_count,
+                });
+                cur += igpu_count;
+            }
+            if cur < total_layers {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::Cpu,
+                    start_layer: cur,
+                    end_layer: total_layers,
+                });
+            }
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// CPU + iGPU + NPU + AMD GPUs (Quad-heterogeneous: APU local + discrete ROCm dGPU).
+    #[must_use]
+    pub fn cpu_igpu_npu_amd_partition(total_layers: usize, amd_gpus: usize) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let amd_layers = ((total_layers as f32) * 0.60).round() as usize;
+        let apu_layers = total_layers.saturating_sub(amd_layers);
+
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+        let gpus = amd_gpus.max(1);
+
+        if amd_layers > 0 {
+            let per_gpu = amd_layers / gpus;
+            for i in 0..gpus {
+                let count = per_gpu + usize::from(i < (amd_layers % gpus));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::AmdGpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+        }
+
+        if apu_layers > 0 {
+            let npu_count = (apu_layers * 40) / 100;
+            let igpu_count = (apu_layers * 35) / 100;
+
+            if npu_count > 0 {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::Npu,
+                    start_layer: cur,
+                    end_layer: cur + npu_count,
+                });
+                cur += npu_count;
+            }
+            if igpu_count > 0 {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::Igpu,
+                    start_layer: cur,
+                    end_layer: cur + igpu_count,
+                });
+                cur += igpu_count;
+            }
+            if cur < total_layers {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::Cpu,
+                    start_layer: cur,
+                    end_layer: total_layers,
+                });
+            }
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// ARM CPU + Integrated NPU + External NPU HAT (e.g. Raspberry Pi 5 + Hailo-8 or Coral TPU).
+    #[must_use]
+    pub fn arm_npu_external_hat_partition(total_layers: usize) -> Self {
+        Self::arm_npu_hat_partition(total_layers, true)
+    }
+
+    /// ARM CPU + Integrated NPU (e.g. Apple M-series, Rockchip RK3588, Snapdragon X Elite).
+    #[must_use]
+    pub fn arm_integrated_npu_partition(total_layers: usize) -> Self {
+        Self::arm_npu_hat_partition(total_layers, false)
+    }
+
+    /// AMD EPYC Server CPU (8 to 128 cores per socket, pure CPU cluster with NUMA affinity).
+    #[must_use]
+    pub fn epyc_server_standalone_partition(total_layers: usize, num_sockets: usize) -> Self {
+        Self::epyc_server_partition(total_layers, num_sockets, &[])
+    }
+
+    /// AMD EPYC Server CPU (8 to 128 cores per socket) + any GPU combinations.
+    #[must_use]
+    pub fn epyc_server_gpu_partition(
+        total_layers: usize,
+        num_sockets: usize,
+        gpu_devices: &[DeviceRole],
+    ) -> Self {
+        Self::epyc_server_partition(total_layers, num_sockets, gpu_devices)
+    }
+
+    /// Apple Silicon UMA (Firestorm/Avalanche CPU + Metal GPU + Apple Neural Engine ANE).
+    #[must_use]
+    pub fn apple_silicon_uma_partition(total_layers: usize) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let gpu_layers = ((total_layers as f32) * 0.65).round() as usize;
+        let ane_layers = ((total_layers as f32) * 0.25).round() as usize;
+
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+        if gpu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Igpu,
+                start_layer: cur,
+                end_layer: cur + gpu_layers,
+            });
+            cur += gpu_layers;
+        }
+        if ane_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::ArmIntegratedNpu,
+                start_layer: cur,
+                end_layer: cur + ane_layers,
+            });
+            cur += ane_layers;
+        }
+        if cur < total_layers {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: cur,
+                end_layer: total_layers,
+            });
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// Qualcomm Snapdragon X Elite / 8 Elite (Oryon CPU + Adreno GPU + Hexagon HTP NPU).
+    #[must_use]
+    pub fn qualcomm_snapdragon_partition(total_layers: usize) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let npu_layers = ((total_layers as f32) * 0.50).round() as usize;
+        let gpu_layers = ((total_layers as f32) * 0.35).round() as usize;
+
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+        if npu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::ArmIntegratedNpu,
+                start_layer: cur,
+                end_layer: cur + npu_layers,
+            });
+            cur += npu_layers;
+        }
+        if gpu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Igpu,
+                start_layer: cur,
+                end_layer: cur + gpu_layers,
+            });
+            cur += gpu_layers;
+        }
+        if cur < total_layers {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: cur,
+                end_layer: total_layers,
+            });
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// Intel Core Ultra / Lunar Lake / Arrow Lake (CPU + Arc Xe iGPU + Intel NPU + optional Arc dGPU).
+    #[must_use]
+    pub fn intel_core_ultra_partition(total_layers: usize, discrete_arc_gpus: usize) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+
+        if discrete_arc_gpus > 0 {
+            let dgpu_layers = ((total_layers as f32) * 0.50).round() as usize;
+            let per_gpu = dgpu_layers / discrete_arc_gpus;
+            for i in 0..discrete_arc_gpus {
+                let count = per_gpu + usize::from(i < (dgpu_layers % discrete_arc_gpus));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::IntelGpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+        }
+
+        let remaining = total_layers - cur;
+        let npu_layers = (remaining * 50) / 100;
+        let igpu_layers = (remaining * 30) / 100;
+
+        if npu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Npu,
+                start_layer: cur,
+                end_layer: cur + npu_layers,
+            });
+            cur += npu_layers;
+        }
+        if igpu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Igpu,
+                start_layer: cur,
+                end_layer: cur + igpu_layers,
+            });
+            cur += igpu_layers;
+        }
+        if cur < total_layers {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: cur,
+                end_layer: total_layers,
+            });
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// Rockchip RK3588 (Cortex-A76/A55 CPU + Mali GPU + Tri-Core RKNN NPU).
+    #[must_use]
+    pub fn rockchip_rknn_partition(total_layers: usize) -> Self {
+        Self::arm_npu_hat_partition(total_layers, false)
+    }
+
+    /// Raspberry Pi 5 + Hailo AI HAT+ (Hailo-8 / Hailo-8L).
+    #[must_use]
+    pub fn raspberry_pi_hailo_partition(total_layers: usize) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let hailo_layers = ((total_layers as f32) * 0.70).round() as usize;
+        let hailo_layers = hailo_layers.clamp(1, total_layers.saturating_sub(1));
+        let cpu_layers = total_layers - hailo_layers;
+
+        let partitions = vec![
+            LayerPartition {
+                device: DeviceRole::ExternalNpuHat,
+                start_layer: 0,
+                end_layer: hailo_layers,
+            },
+            LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: hailo_layers,
+                end_layer: total_layers,
+            },
+        ];
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// Distributed Multi-Node Cluster Partition (over NVLink, InfiniBand, or RoCEv2).
+    #[must_use]
+    pub fn distributed_cluster_partition(total_layers: usize, nodes: &[DeviceRole]) -> Self {
+        if total_layers == 0 || nodes.is_empty() {
+            return Self {
+                total_layers: 0,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+        let per_node = total_layers / nodes.len();
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+        for (i, &dev) in nodes.iter().enumerate() {
+            let count = per_node + usize::from(i < (total_layers % nodes.len()));
+            if count > 0 {
+                partitions.push(LayerPartition {
+                    device: dev,
+                    start_layer: cur,
+                    end_layer: cur + count,
+                });
+                cur += count;
+            }
+        }
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
 }
 
 /// CPU+GPU Multi-Device Hybrid Execution Pipeline.

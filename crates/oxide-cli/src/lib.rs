@@ -76,6 +76,74 @@ pub enum BackendArg {
     #[value(name = "arm_npu", alias = "arm-npu")]
     ArmNpu,
     Hybrid,
+    #[value(name = "cpu_nvidia", alias = "cpu-nvidia", alias = "cpu+nvidia")]
+    CpuNvidia,
+    #[value(name = "cpu_amd", alias = "cpu-amd", alias = "cpu+amd")]
+    CpuAmd,
+    #[value(name = "cpu_intel", alias = "cpu-intel", alias = "cpu+intel")]
+    CpuIntel,
+    #[value(name = "cpu_tpu", alias = "cpu-tpu", alias = "cpu+tpu")]
+    CpuTpu,
+    #[value(name = "cpu_npu", alias = "cpu-npu", alias = "cpu+npu")]
+    CpuNpu,
+    #[value(
+        name = "cpu_nvidia_amd_intel",
+        alias = "cpu-nvidia-amd-intel",
+        alias = "triple-gpu"
+    )]
+    CpuNvidiaAmdIntel,
+    #[value(name = "cpu_amd_intel", alias = "cpu-amd-intel", alias = "amd-intel")]
+    CpuAmdIntel,
+    #[value(
+        name = "cpu_nvidia_intel",
+        alias = "cpu-nvidia-intel",
+        alias = "nvidia-intel"
+    )]
+    CpuNvidiaIntel,
+    #[value(name = "cpu_nvidia_amd", alias = "cpu-nvidia-amd", alias = "nvidia-amd")]
+    CpuNvidiaAmd,
+    #[value(name = "cpu_igpu_npu", alias = "cpu-igpu-npu", alias = "cpu+igpu+npu")]
+    CpuIgpuNpu,
+    #[value(name = "cpu_igpu_tpu", alias = "cpu-igpu-tpu", alias = "cpu+igpu+tpu")]
+    CpuIgpuTpu,
+    #[value(
+        name = "cpu_igpu_npu_nvidia",
+        alias = "cpu-igpu-npu-nvidia",
+        alias = "apu-nvidia"
+    )]
+    CpuIgpuNpuNvidia,
+    #[value(
+        name = "cpu_igpu_npu_amd",
+        alias = "cpu-igpu-npu-amd",
+        alias = "apu-amd"
+    )]
+    CpuIgpuNpuAmd,
+    #[value(name = "arm_npu_hat", alias = "arm-npu-hat", alias = "arm+hat")]
+    ArmNpuHat,
+    #[value(
+        name = "arm_integrated_npu",
+        alias = "arm-integrated-npu",
+        alias = "arm-npu-only"
+    )]
+    ArmIntegratedNpu,
+    #[value(name = "epyc_server", alias = "epyc-server")]
+    EpycServer,
+    #[value(name = "epyc_gpu", alias = "epyc-gpu", alias = "epyc+gpu")]
+    EpycGpu,
+    #[value(name = "apple_silicon", alias = "apple", alias = "apple-silicon")]
+    AppleSilicon,
+    #[value(name = "qualcomm_snapdragon", alias = "snapdragon", alias = "qualcomm")]
+    QualcommSnapdragon,
+    #[value(
+        name = "intel_core_ultra",
+        alias = "intel-ultra",
+        alias = "intel_ultra"
+    )]
+    IntelCoreUltra,
+    #[value(name = "rockchip_rknn", alias = "rockchip", alias = "rknn")]
+    RockchipRknn,
+    #[value(name = "raspberry_pi_hailo", alias = "rpi-hailo", alias = "rpi_hailo")]
+    RaspberryPiHailo,
 }
 
 impl BackendArg {
@@ -96,6 +164,28 @@ impl BackendArg {
             Self::Epyc => "epyc",
             Self::ArmNpu => "arm_npu",
             Self::Hybrid => "hybrid",
+            Self::CpuNvidia => "cpu_nvidia",
+            Self::CpuAmd => "cpu_amd",
+            Self::CpuIntel => "cpu_intel",
+            Self::CpuTpu => "cpu_tpu",
+            Self::CpuNpu => "cpu_npu",
+            Self::CpuNvidiaAmdIntel => "cpu_nvidia_amd_intel",
+            Self::CpuAmdIntel => "cpu_amd_intel",
+            Self::CpuNvidiaIntel => "cpu_nvidia_intel",
+            Self::CpuNvidiaAmd => "cpu_nvidia_amd",
+            Self::CpuIgpuNpu => "cpu_igpu_npu",
+            Self::CpuIgpuTpu => "cpu_igpu_tpu",
+            Self::CpuIgpuNpuNvidia => "cpu_igpu_npu_nvidia",
+            Self::CpuIgpuNpuAmd => "cpu_igpu_npu_amd",
+            Self::ArmNpuHat => "arm_npu_hat",
+            Self::ArmIntegratedNpu => "arm_integrated_npu",
+            Self::EpycServer => "epyc_server",
+            Self::EpycGpu => "epyc_gpu",
+            Self::AppleSilicon => "apple_silicon",
+            Self::QualcommSnapdragon => "qualcomm_snapdragon",
+            Self::IntelCoreUltra => "intel_core_ultra",
+            Self::RockchipRknn => "rockchip_rknn",
+            Self::RaspberryPiHailo => "raspberry_pi_hailo",
         }
     }
 }
