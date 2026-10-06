@@ -9,18 +9,44 @@ use serde::{Deserialize, Serialize};
 /// Accelerator Device Backend Classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AcceleratorKind {
-    CudaNvidia { device_id: u32 },
-    RocmExtAmd { device_id: u32 },
-    IntelGpuXe { device_id: u32 },
-    MetalAppleSilicon { device_id: u32 },
-    IntelNpuVpu { device_id: u32 },
-    GoogleTpuV4V5 { core_id: u32 },
-    AmdXdnaNpu { device_id: u32 },
-    AmdApuIgpu { device_id: u32 },
-    ArmIntegratedNpu { device_id: u32 },
-    ExternalNpuHat { device_id: u32 },
-    NumaCpuNode { numa_node_id: u32 },
-    EpycServerNode { socket_id: u32, numa_node_id: u32, core_count: u32 },
+    CudaNvidia {
+        device_id: u32,
+    },
+    RocmExtAmd {
+        device_id: u32,
+    },
+    IntelGpuXe {
+        device_id: u32,
+    },
+    MetalAppleSilicon {
+        device_id: u32,
+    },
+    IntelNpuVpu {
+        device_id: u32,
+    },
+    GoogleTpuV4V5 {
+        core_id: u32,
+    },
+    AmdXdnaNpu {
+        device_id: u32,
+    },
+    AmdApuIgpu {
+        device_id: u32,
+    },
+    ArmIntegratedNpu {
+        device_id: u32,
+    },
+    ExternalNpuHat {
+        device_id: u32,
+    },
+    NumaCpuNode {
+        numa_node_id: u32,
+    },
+    EpycServerNode {
+        socket_id: u32,
+        numa_node_id: u32,
+        core_count: u32,
+    },
 }
 
 /// Tensor Splitting Strategy for Multi-Device and Heterogeneous Compute.
@@ -104,10 +130,16 @@ impl TensorSplitDistributionEngine {
             let bw = match accel {
                 AcceleratorKind::CudaNvidia { .. } => 1008.0,
                 AcceleratorKind::RocmExtAmd { .. } => 800.0,
+                AcceleratorKind::IntelGpuXe { .. } => 512.0,
                 AcceleratorKind::MetalAppleSilicon { .. } => 400.0,
                 AcceleratorKind::IntelNpuVpu { .. } => 128.0,
                 AcceleratorKind::GoogleTpuV4V5 { .. } => 1200.0,
+                AcceleratorKind::AmdXdnaNpu { .. } => 128.0,
+                AcceleratorKind::AmdApuIgpu { .. } => 256.0,
+                AcceleratorKind::ArmIntegratedNpu { .. } => 100.0,
+                AcceleratorKind::ExternalNpuHat { .. } => 64.0,
                 AcceleratorKind::NumaCpuNode { .. } => 64.0,
+                AcceleratorKind::EpycServerNode { .. } => 460.8,
             };
 
             slices.push(TensorSliceDescriptor {

@@ -119,7 +119,10 @@ fn test_all_hardware_heterogeneous_topologies() {
     // 4. Triple Multi-Vendor GPU Array: CPU + NVIDIA + AMD + Intel GPUs
     let top_triple_gpu = HybridDeviceTopology::multi_vendor_gpu_partition(32, 1, 1, 1, 5);
     assert_eq!(top_triple_gpu.partitions.len(), 4); // 1 NV + 1 AMD + 1 Intel + 1 CPU
-    assert_eq!(top_triple_gpu.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(
+        top_triple_gpu.partitions[0].device,
+        DeviceRole::NvidiaGpu(0)
+    );
     assert_eq!(top_triple_gpu.partitions[1].device, DeviceRole::AmdGpu(0));
     assert_eq!(top_triple_gpu.partitions[2].device, DeviceRole::IntelGpu(0));
     assert_eq!(top_triple_gpu.partitions[3].device, DeviceRole::Cpu);
@@ -136,13 +139,19 @@ fn test_all_hardware_heterogeneous_topologies() {
     let top_arm_hat = HybridDeviceTopology::arm_npu_hat_partition(32, true);
     assert_eq!(top_arm_hat.partitions.len(), 3);
     assert_eq!(top_arm_hat.partitions[0].device, DeviceRole::ExternalNpuHat);
-    assert_eq!(top_arm_hat.partitions[1].device, DeviceRole::ArmIntegratedNpu);
+    assert_eq!(
+        top_arm_hat.partitions[1].device,
+        DeviceRole::ArmIntegratedNpu
+    );
     assert_eq!(top_arm_hat.partitions[2].device, DeviceRole::Cpu);
 
     // 7. ARM SoC + Integrated NPU (no external HAT)
     let top_arm_npu = HybridDeviceTopology::arm_npu_hat_partition(32, false);
     assert_eq!(top_arm_npu.partitions.len(), 2);
-    assert_eq!(top_arm_npu.partitions[0].device, DeviceRole::ArmIntegratedNpu);
+    assert_eq!(
+        top_arm_npu.partitions[0].device,
+        DeviceRole::ArmIntegratedNpu
+    );
     assert_eq!(top_arm_npu.partitions[1].device, DeviceRole::Cpu);
 
     // 8. AMD EPYC Server CPU (8 to 128 cores per socket, pure CPU cluster)
@@ -174,7 +183,6 @@ fn test_all_hardware_heterogeneous_topologies() {
     assert_eq!(comp.sequence_id, 505);
     assert_eq!(comp.sampled_token, 13);
 }
-
 
 #[test]
 fn test_continuous_batching_slot_manager() {

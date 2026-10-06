@@ -387,7 +387,7 @@ pub enum HardwareFormFactor {
     DatacenterTpuPod3dTorus, // Google Cloud TPU v4/v5p 3D Torus OCS Pod
     DatacenterTpuPod2dTorus, // Google Cloud TPU v2/v3/v5e/v6e 2D Torus Pod
     DatacenterIntelXeonSocket, // Multi-socket Intel Xeon 6 Enterprise Server (1S/2S/4S/8S)
-    AmdEpycServerSocket,       // AMD EPYC Server 8 to 128 cores per socket (1S/2S EPYC 9004/9005 series)
+    AmdEpycServerSocket, // AMD EPYC Server 8 to 128 cores per socket (1S/2S EPYC 9004/9005 series)
     DatacenterIntelMaxPvc, // OAM / PCIe Intel Data Center GPU Max Node
     EdgeEmbedded,       // Jetson Orin / Embedded APU Modules
     EdgeTpuModule,      // Google Coral Edge TPU USB/PCIe/M.2
@@ -1627,7 +1627,11 @@ impl GpuDeviceProfile {
         // ==========================================
         // 4B. AMD EPYC SERVER CPUS (8 TO 128 CORES)
         // ==========================================
-        if n.contains("epyc") || n.contains("amd epyc") || n.contains("zen 4 epyc") || n.contains("zen 5 epyc") {
+        if n.contains("epyc")
+            || n.contains("amd epyc")
+            || n.contains("zen 4 epyc")
+            || n.contains("zen 5 epyc")
+        {
             let cores: usize = if n.contains("128") || n.contains("9754") || n.contains("9755") {
                 128
             } else if n.contains("96") || n.contains("9654") || n.contains("9655") {
@@ -1654,7 +1658,7 @@ impl GpuDeviceProfile {
                 tensor_core_gen: TensorCoreGeneration::AmdAvx512Vnni,
                 sm_count: cores as u32,
                 vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
-                memory_bus_width_bits: 768, // 12-channel DDR5-4800/6000
+                memory_bus_width_bits: 768,   // 12-channel DDR5-4800/6000
                 memory_bandwidth_gbps: 460.8, // Up to 460.8 GB/s on 12-channel DDR5
                 l2_cache_bytes: cores * 1024 * 1024,
                 smem_per_sm_bytes: 64 * 1024,

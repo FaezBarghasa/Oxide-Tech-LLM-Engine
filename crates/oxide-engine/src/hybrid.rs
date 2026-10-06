@@ -9,17 +9,17 @@ use serde::{Deserialize, Serialize};
 /// Physical compute device role in heterogeneous hybrid execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceRole {
-    Gpu(u8),       // Generic GPU (GPU 0, GPU 1...)
-    NvidiaGpu(u8), // NVIDIA CUDA GPU (e.g. RTX 4090, H100, B200)
-    AmdGpu(u8),    // AMD ROCm discrete GPU (e.g. RX 7900 XTX, MI300X)
-    IntelGpu(u8),  // Intel Arc / Xe discrete GPU (e.g. Arc B580, A770, PVC)
-    Igpu,          // Integrated GPU (AMD APU RDNA or Intel Xe-LPG sharing unified memory)
-    Cpu,           // Host CPU SIMD (AVX2, AVX-512, Neon)
-    EpycServer(u8),// AMD EPYC High-core NUMA socket node (8 to 128 cores per socket)
-    Npu,           // Integrated or discrete NPU (Intel NPU, AMD XDNA)
+    Gpu(u8),          // Generic GPU (GPU 0, GPU 1...)
+    NvidiaGpu(u8),    // NVIDIA CUDA GPU (e.g. RTX 4090, H100, B200)
+    AmdGpu(u8),       // AMD ROCm discrete GPU (e.g. RX 7900 XTX, MI300X)
+    IntelGpu(u8),     // Intel Arc / Xe discrete GPU (e.g. Arc B580, A770, PVC)
+    Igpu,             // Integrated GPU (AMD APU RDNA or Intel Xe-LPG sharing unified memory)
+    Cpu,              // Host CPU SIMD (AVX2, AVX-512, Neon)
+    EpycServer(u8),   // AMD EPYC High-core NUMA socket node (8 to 128 cores per socket)
+    Npu,              // Integrated or discrete NPU (Intel NPU, AMD XDNA)
     ArmIntegratedNpu, // ARM SoC Integrated NPU (Apple Neural Engine, RKNN, Snapdragon HTP)
-    ExternalNpuHat,   // External NPU HAT / PCIe / M.2 / USB accelerator (Raspberry Pi AI HAT+, Coral Edge TPU, Hailo-8)
-    Tpu(u8),       // Google TPU Core / MXU (v4, v5e, v5p, v6e)
+    ExternalNpuHat, // External NPU HAT / PCIe / M.2 / USB accelerator (Raspberry Pi AI HAT+, Coral Edge TPU, Hailo-8)
+    Tpu(u8),        // Google TPU Core / MXU (v4, v5e, v5p, v6e)
 }
 
 /// Contiguous layer partition assigned to a physical device.
@@ -273,7 +273,7 @@ impl HybridDeviceTopology {
             // Split: External HAT (45%), Integrated NPU (35%), ARM CPU Neon (20%)
             let hat_layers = ((total_layers as f32) * 0.45).round() as usize;
             let int_npu_layers = ((total_layers as f32) * 0.35).round() as usize;
-            let cpu_layers = total_layers - (hat_layers + int_npu_layers);
+            let _cpu_layers = total_layers - (hat_layers + int_npu_layers);
 
             let mut cur = 0;
             if hat_layers > 0 {
@@ -302,7 +302,7 @@ impl HybridDeviceTopology {
         } else {
             // ARM CPU + Integrated NPU
             let int_npu_layers = (total_layers * 3) / 5;
-            let cpu_layers = total_layers - int_npu_layers;
+            let _cpu_layers = total_layers - int_npu_layers;
             partitions.push(LayerPartition {
                 device: DeviceRole::ArmIntegratedNpu,
                 start_layer: 0,

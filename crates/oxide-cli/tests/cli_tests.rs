@@ -261,4 +261,3 @@ fn test_cli_advanced_heterogeneous_backends() {
     assert_eq!(cli_hybrid.backend, BackendArg::Hybrid);
     assert_eq!(cli_hybrid.backend.as_str(), "hybrid");
 }
-
