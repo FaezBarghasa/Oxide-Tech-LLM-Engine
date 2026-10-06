@@ -11,10 +11,16 @@ use serde::{Deserialize, Serialize};
 pub enum AcceleratorKind {
     CudaNvidia { device_id: u32 },
     RocmExtAmd { device_id: u32 },
+    IntelGpuXe { device_id: u32 },
     MetalAppleSilicon { device_id: u32 },
     IntelNpuVpu { device_id: u32 },
     GoogleTpuV4V5 { core_id: u32 },
+    AmdXdnaNpu { device_id: u32 },
+    AmdApuIgpu { device_id: u32 },
+    ArmIntegratedNpu { device_id: u32 },
+    ExternalNpuHat { device_id: u32 },
     NumaCpuNode { numa_node_id: u32 },
+    EpycServerNode { socket_id: u32, numa_node_id: u32, core_count: u32 },
 }
 
 /// Tensor Splitting Strategy for Multi-Device and Heterogeneous Compute.

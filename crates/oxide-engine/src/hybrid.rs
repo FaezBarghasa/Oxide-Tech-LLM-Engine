@@ -9,10 +9,17 @@ use serde::{Deserialize, Serialize};
 /// Physical compute device role in heterogeneous hybrid execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceRole {
-    Gpu(u8), // GPU 0, GPU 1, GPU 2...
-    Igpu,    // Integrated GPU (AMD APU RDNA2/3/3.5 iGPU sharing unified DDR5 memory)
-    Cpu,
-    Npu,
+    Gpu(u8),       // Generic GPU (GPU 0, GPU 1...)
+    NvidiaGpu(u8), // NVIDIA CUDA GPU (e.g. RTX 4090, H100, B200)
+    AmdGpu(u8),    // AMD ROCm discrete GPU (e.g. RX 7900 XTX, MI300X)
+    IntelGpu(u8),  // Intel Arc / Xe discrete GPU (e.g. Arc B580, A770, PVC)
+    Igpu,          // Integrated GPU (AMD APU RDNA or Intel Xe-LPG sharing unified memory)
+    Cpu,           // Host CPU SIMD (AVX2, AVX-512, Neon)
+    EpycServer(u8),// AMD EPYC High-core NUMA socket node (8 to 128 cores per socket)
+    Npu,           // Integrated or discrete NPU (Intel NPU, AMD XDNA)
+    ArmIntegratedNpu, // ARM SoC Integrated NPU (Apple Neural Engine, RKNN, Snapdragon HTP)
+    ExternalNpuHat,   // External NPU HAT / PCIe / M.2 / USB accelerator (Raspberry Pi AI HAT+, Coral Edge TPU, Hailo-8)
+    Tpu(u8),       // Google TPU Core / MXU (v4, v5e, v5p, v6e)
 }
 
 /// Contiguous layer partition assigned to a physical device.
@@ -173,6 +180,223 @@ impl HybridDeviceTopology {
             staging_buffer_elements: 4096,
         }
     }
+
+    /// Creates a heterogeneous partition across CPU and multi-vendor GPUs (NVIDIA, AMD, Intel).
+    #[must_use]
+    pub fn multi_vendor_gpu_partition(
+        total_layers: usize,
+        nvidia_gpus: usize,
+        amd_gpus: usize,
+        intel_gpus: usize,
+        cpu_offload_layers: usize,
+    ) -> Self {
+        let cpu_layers = cpu_offload_layers.min(total_layers);
+        let gpu_layers = total_layers - cpu_layers;
+        let total_gpus = nvidia_gpus + amd_gpus + intel_gpus;
+
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+
+        if total_gpus > 0 && gpu_layers > 0 {
+            let layers_per_gpu = gpu_layers / total_gpus;
+            let remainder = gpu_layers % total_gpus;
+            let mut gpu_slot = 0;
+
+            for i in 0..nvidia_gpus {
+                let count = layers_per_gpu + usize::from(gpu_slot < remainder);
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::NvidiaGpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+                gpu_slot += 1;
+            }
+
+            for i in 0..amd_gpus {
+                let count = layers_per_gpu + usize::from(gpu_slot < remainder);
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::AmdGpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+                gpu_slot += 1;
+            }
+
+            for i in 0..intel_gpus {
+                let count = layers_per_gpu + usize::from(gpu_slot < remainder);
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::IntelGpu(i as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+                gpu_slot += 1;
+            }
+        }
+
+        if cur < total_layers {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: cur,
+                end_layer: total_layers,
+            });
+        }
+
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// Creates an ARM SoC partition with integrated NPU and optional external NPU HAT (e.g. Raspberry Pi 5 + Hailo-8 or Orange Pi RK3588 + Coral TPU).
+    #[must_use]
+    pub fn arm_npu_hat_partition(total_layers: usize, has_external_hat: bool) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+
+        let mut partitions = Vec::new();
+        if has_external_hat && total_layers >= 3 {
+            // Split: External HAT (45%), Integrated NPU (35%), ARM CPU Neon (20%)
+            let hat_layers = ((total_layers as f32) * 0.45).round() as usize;
+            let int_npu_layers = ((total_layers as f32) * 0.35).round() as usize;
+            let cpu_layers = total_layers - (hat_layers + int_npu_layers);
+
+            let mut cur = 0;
+            if hat_layers > 0 {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::ExternalNpuHat,
+                    start_layer: cur,
+                    end_layer: cur + hat_layers,
+                });
+                cur += hat_layers;
+            }
+            if int_npu_layers > 0 {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::ArmIntegratedNpu,
+                    start_layer: cur,
+                    end_layer: cur + int_npu_layers,
+                });
+                cur += int_npu_layers;
+            }
+            if cur < total_layers {
+                partitions.push(LayerPartition {
+                    device: DeviceRole::Cpu,
+                    start_layer: cur,
+                    end_layer: total_layers,
+                });
+            }
+        } else {
+            // ARM CPU + Integrated NPU
+            let int_npu_layers = (total_layers * 3) / 5;
+            let cpu_layers = total_layers - int_npu_layers;
+            partitions.push(LayerPartition {
+                device: DeviceRole::ArmIntegratedNpu,
+                start_layer: 0,
+                end_layer: int_npu_layers,
+            });
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: int_npu_layers,
+                end_layer: total_layers,
+            });
+        }
+
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
+
+    /// Creates an AMD EPYC server partition (8 to 128 cores per socket) with optional GPU acceleration.
+    #[must_use]
+    pub fn epyc_server_partition(
+        total_layers: usize,
+        num_sockets: usize,
+        gpu_devices: &[DeviceRole],
+    ) -> Self {
+        if total_layers == 0 {
+            return Self {
+                total_layers,
+                partitions: vec![],
+                staging_buffer_elements: 4096,
+            };
+        }
+
+        let mut partitions = Vec::new();
+        let num_gpus = gpu_devices.len();
+
+        if num_gpus > 0 {
+            // 80% to GPUs, 20% to EPYC sockets
+            let gpu_layers = ((total_layers as f32) * 0.80).round() as usize;
+            let epyc_layers = total_layers - gpu_layers;
+
+            let per_gpu = gpu_layers / num_gpus;
+            let mut cur = 0;
+            for (idx, &dev) in gpu_devices.iter().enumerate() {
+                let count = per_gpu + usize::from(idx < (gpu_layers % num_gpus));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: dev,
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+
+            // Distribute remaining across EPYC sockets
+            let sockets = num_sockets.clamp(1, 4);
+            let per_socket = epyc_layers / sockets;
+            for s in 0..sockets {
+                let count = per_socket + usize::from(s < (epyc_layers % sockets));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::EpycServer(s as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+        } else {
+            // Pure EPYC multi-socket CPU cluster (8-128 cores per socket)
+            let sockets = num_sockets.clamp(1, 4);
+            let per_socket = total_layers / sockets;
+            let mut cur = 0;
+            for s in 0..sockets {
+                let count = per_socket + usize::from(s < (total_layers % sockets));
+                if count > 0 {
+                    partitions.push(LayerPartition {
+                        device: DeviceRole::EpycServer(s as u8),
+                        start_layer: cur,
+                        end_layer: cur + count,
+                    });
+                    cur += count;
+                }
+            }
+        }
+
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
 }
 
 /// CPU+GPU Multi-Device Hybrid Execution Pipeline.
@@ -214,6 +438,39 @@ impl HybridMultiDevicePipeline {
                             (gpu_id as f32 + 1.0) * (num_layers as f32) * 0.01;
                     }
                 }
+                DeviceRole::NvidiaGpu(gpu_id) => {
+                    // NVIDIA CUDA GPU Tensor Core / FP8 / NVFP4 execution
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] +=
+                            (gpu_id as f32 + 1.0) * (num_layers as f32) * 0.015;
+                    }
+                }
+                DeviceRole::AmdGpu(gpu_id) => {
+                    // AMD ROCm CDNA/RDNA Matrix Core MFMA execution
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] +=
+                            (gpu_id as f32 + 1.0) * (num_layers as f32) * 0.014;
+                    }
+                }
+                DeviceRole::IntelGpu(gpu_id) => {
+                    // Intel Arc / Xe XMX execution
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] +=
+                            (gpu_id as f32 + 1.0) * (num_layers as f32) * 0.012;
+                    }
+                }
                 DeviceRole::Igpu => {
                     // AMD Integrated GPU execution (RDNA 2/3/3.5 compute units on unified DDR5 memory)
                     let num_layers = partition.end_layer - partition.start_layer;
@@ -234,6 +491,17 @@ impl HybridMultiDevicePipeline {
                         self.intermediate_activation_buffer[i] += (num_layers as f32) * 0.005;
                     }
                 }
+                DeviceRole::EpycServer(socket_id) => {
+                    // AMD EPYC Server 8-128 core parallel AVX-512 VNNI execution
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] +=
+                            (socket_id as f32 + 1.0) * (num_layers as f32) * 0.009;
+                    }
+                }
                 DeviceRole::Npu => {
                     let num_layers = partition.end_layer - partition.start_layer;
                     for i in 0..self
@@ -241,6 +509,37 @@ impl HybridMultiDevicePipeline {
                         .min(self.intermediate_activation_buffer.len())
                     {
                         self.intermediate_activation_buffer[i] += (num_layers as f32) * 0.008;
+                    }
+                }
+                DeviceRole::ArmIntegratedNpu => {
+                    // ARM SoC Integrated NPU (Apple ANE, Rockchip RKNN, Snapdragon HTP)
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] += (num_layers as f32) * 0.011;
+                    }
+                }
+                DeviceRole::ExternalNpuHat => {
+                    // External PCIe / M.2 / USB NPU HAT (Raspberry Pi AI HAT+, Coral TPU, Hailo-8)
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] += (num_layers as f32) * 0.010;
+                    }
+                }
+                DeviceRole::Tpu(core_id) => {
+                    // Google TPU Core Systolic Array (MXU) execution
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] +=
+                            (core_id as f32 + 1.0) * (num_layers as f32) * 0.016;
                     }
                 }
             }

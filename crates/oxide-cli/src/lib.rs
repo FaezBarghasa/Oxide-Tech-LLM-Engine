@@ -72,6 +72,10 @@ pub enum BackendArg {
     #[value(name = "cpu_igpu", alias = "cpu-igpu")]
     CpuIgpu,
     Apu,
+    Epyc,
+    #[value(name = "arm_npu", alias = "arm-npu")]
+    ArmNpu,
+    Hybrid,
 }
 
 impl BackendArg {
@@ -89,6 +93,9 @@ impl BackendArg {
             Self::Cpu => "cpu",
             Self::CpuIgpu => "cpu_igpu",
             Self::Apu => "apu",
+            Self::Epyc => "epyc",
+            Self::ArmNpu => "arm_npu",
+            Self::Hybrid => "hybrid",
         }
     }
 }

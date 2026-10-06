@@ -29,6 +29,9 @@ pub enum GpuArchitecture {
     // AMD XDNA NPU Architectures
     XdnaNpu, // XDNA 1 / XDNA 2 Tile Engine (10-55 TOPS)
 
+    // AMD EPYC Server CPU Architectures (Zen 4/Zen 5 EPYC 9004/9005 series, 8 to 128 cores)
+    AmdEpycServer,
+
     // Google Cloud & Edge TPU Architectures
     GoogleTpuV2,          // TPU v2 (128x128 MXU, HBM)
     GoogleTpuV3,          // TPU v3 (Dual 128x128 MXU, HBM2, Liquid Cooled)
@@ -247,6 +250,12 @@ impl ComputeCapability {
         minor: 1,
     };
 
+    // AMD EPYC Server CPUs (8 to 128 cores, AVX-512 VNNI, 12-channel DDR5)
+    pub const AMD_EPYC_ZEN4_5: Self = Self {
+        major: 90,
+        minor: 4,
+    };
+
     #[must_use]
     pub const fn new(major: u32, minor: u32) -> Self {
         Self { major, minor }
@@ -290,6 +299,7 @@ impl ComputeCapability {
             (60, _) => GpuArchitecture::RockchipRknnNpu,
             (70, _) => GpuArchitecture::HailoNpu,
             (80, _) => GpuArchitecture::ExternalEdgeNpu,
+            (90, _) => GpuArchitecture::AmdEpycServer,
             _ => GpuArchitecture::Ampere,
         }
     }
@@ -297,7 +307,9 @@ impl ComputeCapability {
 
 impl fmt::Display for ComputeCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.major == 80 {
+        if self.major == 90 {
+            write!(f, "amd_epyc_zen{}", self.minor)
+        } else if self.major == 80 {
             write!(f, "external_edge_accel_v{}", self.minor)
         } else if self.major == 70 {
             match self.minor {
@@ -375,6 +387,7 @@ pub enum HardwareFormFactor {
     DatacenterTpuPod3dTorus, // Google Cloud TPU v4/v5p 3D Torus OCS Pod
     DatacenterTpuPod2dTorus, // Google Cloud TPU v2/v3/v5e/v6e 2D Torus Pod
     DatacenterIntelXeonSocket, // Multi-socket Intel Xeon 6 Enterprise Server (1S/2S/4S/8S)
+    AmdEpycServerSocket,       // AMD EPYC Server 8 to 128 cores per socket (1S/2S EPYC 9004/9005 series)
     DatacenterIntelMaxPvc, // OAM / PCIe Intel Data Center GPU Max Node
     EdgeEmbedded,       // Jetson Orin / Embedded APU Modules
     EdgeTpuModule,      // Google Coral Edge TPU USB/PCIe/M.2
@@ -433,6 +446,7 @@ pub enum TensorCoreGeneration {
     IntelXmxPonteVecchio,   // Intel Xe-HPC Systolic Matrix Engine
     IntelAmxTileEngine,     // Intel AMX (Advanced Matrix Extensions TMUL FP16/BF16/INT8)
     IntelAvxVnni,           // Intel AVX-512 / AVX10 VNNI Vector Engine
+    AmdAvx512Vnni,          // AMD Zen 4 / Zen 5 AVX-512 dual 256/512-bit VNNI & BF16 vector engine
     AppleSimdgroupMatrixM1, // Apple M1 SIMD-group Matrix (Metal 2.4 / 16-core ANE)
     AppleSimdgroupMatrixM2, // Apple M2 SIMD-group Matrix (Metal 3.0 / BF16 / 15.8 TOPS ANE)
     AppleSimdgroupMatrixM3, // Apple M3 SIMD-group Matrix (Metal 3.1 / Dynamic Caching)
@@ -1606,6 +1620,51 @@ impl GpuDeviceProfile {
                 supports_nvfp4: false,
                 supports_async_copy: true,
                 supports_nvlink: true, // UPI Links
+                nvlink_bandwidth_gbps: 128.0,
+            });
+        }
+
+        // ==========================================
+        // 4B. AMD EPYC SERVER CPUS (8 TO 128 CORES)
+        // ==========================================
+        if n.contains("epyc") || n.contains("amd epyc") || n.contains("zen 4 epyc") || n.contains("zen 5 epyc") {
+            let cores: usize = if n.contains("128") || n.contains("9754") || n.contains("9755") {
+                128
+            } else if n.contains("96") || n.contains("9654") || n.contains("9655") {
+                96
+            } else if n.contains("64") || n.contains("9554") || n.contains("9555") {
+                64
+            } else if n.contains("32") || n.contains("9354") || n.contains("9355") {
+                32
+            } else if n.contains("16") || n.contains("9124") {
+                16
+            } else if n.contains("8") || n.contains("9004") {
+                8
+            } else {
+                64
+            };
+
+            let vram_gb = (cores * 8).max(64); // 8GB to 16GB DDR5 per core allocation
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::AMD_EPYC_ZEN4_5,
+                architecture: GpuArchitecture::AmdEpycServer,
+                form_factor: HardwareFormFactor::AmdEpycServerSocket,
+                memory_tech: MemoryTechnology::UnifiedDdr5Coherent,
+                tensor_core_gen: TensorCoreGeneration::AmdAvx512Vnni,
+                sm_count: cores,
+                vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
+                memory_bus_width_bits: 768, // 12-channel DDR5-4800/6000
+                memory_bandwidth_gbps: 460.8, // Up to 460.8 GB/s on 12-channel DDR5
+                l2_cache_bytes: cores * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: true, // AVX-512 VNNI / FP8 software support
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: true, // AMD Infinity Fabric 32-64 Gbps interconnect
                 nvlink_bandwidth_gbps: 128.0,
             });
         }
