@@ -243,3 +243,22 @@ fn test_cli_top_level_prompt_and_interactive_parity() {
     assert!(cli_i.interactive);
     assert_eq!(cli_i.n_gpu_layers, 33);
 }
+
+#[test]
+fn test_cli_advanced_heterogeneous_backends() {
+    let epyc_args = ["oxide-engine", "--backend", "epyc"];
+    let cli_epyc = Cli::try_parse_from(epyc_args).unwrap();
+    assert_eq!(cli_epyc.backend, BackendArg::Epyc);
+    assert_eq!(cli_epyc.backend.as_str(), "epyc");
+
+    let arm_npu_args = ["oxide-engine", "--backend", "arm-npu"];
+    let cli_arm = Cli::try_parse_from(arm_npu_args).unwrap();
+    assert_eq!(cli_arm.backend, BackendArg::ArmNpu);
+    assert_eq!(cli_arm.backend.as_str(), "arm_npu");
+
+    let hybrid_args = ["oxide-engine", "--backend", "hybrid"];
+    let cli_hybrid = Cli::try_parse_from(hybrid_args).unwrap();
+    assert_eq!(cli_hybrid.backend, BackendArg::Hybrid);
+    assert_eq!(cli_hybrid.backend.as_str(), "hybrid");
+}
+

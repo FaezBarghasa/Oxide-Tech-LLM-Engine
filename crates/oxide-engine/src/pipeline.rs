@@ -407,6 +407,53 @@ impl SpecializedPipeline {
             });
         }
 
+        if backend_name.eq_ignore_ascii_case("epyc") {
+            let topology = crate::hybrid::HybridDeviceTopology::epyc_server_partition(
+                model.config.num_layers,
+                2, // Default dual-socket EPYC server
+                &[],
+            );
+            return Ok(Self::Llama3AmdApuCpuIgpu {
+                model,
+                kv_cache,
+                seq_positions: std::collections::HashMap::new(),
+                scratch,
+                topology,
+            });
+        }
+
+        if backend_name.eq_ignore_ascii_case("arm_npu") || backend_name.eq_ignore_ascii_case("arm-npu") {
+            let topology = crate::hybrid::HybridDeviceTopology::arm_npu_hat_partition(
+                model.config.num_layers,
+                true, // Support external NPU HAT (Hailo-8 / Coral TPU) + Integrated NPU
+            );
+            return Ok(Self::Llama3AmdApuCpuIgpu {
+                model,
+                kv_cache,
+                seq_positions: std::collections::HashMap::new(),
+                scratch,
+                topology,
+            });
+        }
+
+        if backend_name.eq_ignore_ascii_case("hybrid") {
+            // Heterogeneous multi-vendor GPU (NVIDIA + AMD + Intel + CPU offload)
+            let topology = crate::hybrid::HybridDeviceTopology::multi_vendor_gpu_partition(
+                model.config.num_layers,
+                1, // NVIDIA
+                1, // AMD
+                1, // Intel
+                (model.config.num_layers * 2) / 10, // 20% CPU offload
+            );
+            return Ok(Self::Llama3AmdApuCpuIgpu {
+                model,
+                kv_cache,
+                seq_positions: std::collections::HashMap::new(),
+                scratch,
+                topology,
+            });
+        }
+
         Ok(Self::Llama3Dense {
             model,
             kv_cache,

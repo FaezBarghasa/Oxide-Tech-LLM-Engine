@@ -1644,7 +1644,7 @@ impl GpuDeviceProfile {
                 64
             };
 
-            let vram_gb = (cores * 8).max(64); // 8GB to 16GB DDR5 per core allocation
+            let vram_gb = ((cores * 8) as u64).max(64); // 8GB to 16GB DDR5 per core allocation
             return Some(Self {
                 name: name.to_string(),
                 compute_capability: ComputeCapability::AMD_EPYC_ZEN4_5,
@@ -1652,11 +1652,11 @@ impl GpuDeviceProfile {
                 form_factor: HardwareFormFactor::AmdEpycServerSocket,
                 memory_tech: MemoryTechnology::UnifiedDdr5Coherent,
                 tensor_core_gen: TensorCoreGeneration::AmdAvx512Vnni,
-                sm_count: cores,
+                sm_count: cores as u32,
                 vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
                 memory_bus_width_bits: 768, // 12-channel DDR5-4800/6000
                 memory_bandwidth_gbps: 460.8, // Up to 460.8 GB/s on 12-channel DDR5
-                l2_cache_bytes: cores * 1024 * 1024,
+                l2_cache_bytes: (cores as u64) * 1024 * 1024,
                 smem_per_sm_bytes: 64 * 1024,
                 smem_per_block_bytes: 64 * 1024,
                 max_threads_per_sm: 1024,
@@ -2249,13 +2249,14 @@ impl GpuDeviceProfile {
             | GpuArchitecture::QualcommHexagonNpu
             | GpuArchitecture::IntelXeHpcPonteVecchio
             | GpuArchitecture::IntelXeonGraniteRapids
+            | GpuArchitecture::AmdEpycServer
             | GpuArchitecture::GoogleTpuV6eTrillium
             | GpuArchitecture::GoogleTpuV5p
             | GpuArchitecture::GoogleTpuV4
             | GpuArchitecture::Cdna4
             | GpuArchitecture::Cdna3
             | GpuArchitecture::Blackwell
-            | GpuArchitecture::Hopper => 256, // 8 warps / simdgroups x 8 / AMX 1KB tiles / Hexagon Vector Extensions
+            | GpuArchitecture::Hopper => 256, // 8 warps / simdgroups x 8 / AMX 1KB tiles / Hexagon Vector Extensions / EPYC AVX-512 VNNI
             GpuArchitecture::AppleSiliconM1
             | GpuArchitecture::RockchipRknnNpu
             | GpuArchitecture::HailoNpu

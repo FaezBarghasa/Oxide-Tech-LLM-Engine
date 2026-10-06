@@ -94,6 +94,89 @@ fn test_cuda_multi_gpu_16_array_tensor_splitting() {
 }
 
 #[test]
+fn test_all_hardware_heterogeneous_topologies() {
+    use oxide_engine::hybrid::{DeviceRole, HybridDeviceTopology};
+
+    // 1. CPU + NVIDIA GPUs
+    let top_cpu_nv = HybridDeviceTopology::multi_vendor_gpu_partition(32, 2, 0, 0, 4);
+    assert_eq!(top_cpu_nv.partitions.len(), 3); // 2 NVIDIA + 1 CPU
+    assert_eq!(top_cpu_nv.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(top_cpu_nv.partitions[1].device, DeviceRole::NvidiaGpu(1));
+    assert_eq!(top_cpu_nv.partitions[2].device, DeviceRole::Cpu);
+
+    // 2. CPU + AMD GPUs
+    let top_cpu_amd = HybridDeviceTopology::multi_vendor_gpu_partition(32, 0, 2, 0, 4);
+    assert_eq!(top_cpu_amd.partitions.len(), 3); // 2 AMD + 1 CPU
+    assert_eq!(top_cpu_amd.partitions[0].device, DeviceRole::AmdGpu(0));
+    assert_eq!(top_cpu_amd.partitions[2].device, DeviceRole::Cpu);
+
+    // 3. CPU + Intel GPUs
+    let top_cpu_intel = HybridDeviceTopology::multi_vendor_gpu_partition(32, 0, 0, 2, 4);
+    assert_eq!(top_cpu_intel.partitions.len(), 3); // 2 Intel + 1 CPU
+    assert_eq!(top_cpu_intel.partitions[0].device, DeviceRole::IntelGpu(0));
+    assert_eq!(top_cpu_intel.partitions[2].device, DeviceRole::Cpu);
+
+    // 4. Triple Multi-Vendor GPU Array: CPU + NVIDIA + AMD + Intel GPUs
+    let top_triple_gpu = HybridDeviceTopology::multi_vendor_gpu_partition(32, 1, 1, 1, 5);
+    assert_eq!(top_triple_gpu.partitions.len(), 4); // 1 NV + 1 AMD + 1 Intel + 1 CPU
+    assert_eq!(top_triple_gpu.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(top_triple_gpu.partitions[1].device, DeviceRole::AmdGpu(0));
+    assert_eq!(top_triple_gpu.partitions[2].device, DeviceRole::IntelGpu(0));
+    assert_eq!(top_triple_gpu.partitions[3].device, DeviceRole::Cpu);
+    assert_eq!(top_triple_gpu.partitions[3].end_layer, 32);
+
+    // 5. AMD APU Tri-Compute: CPU + iGPU + XDNA NPU
+    let top_apu = HybridDeviceTopology::amd_apu_full_partition(32, true);
+    assert_eq!(top_apu.partitions.len(), 3);
+    assert_eq!(top_apu.partitions[0].device, DeviceRole::Cpu);
+    assert_eq!(top_apu.partitions[1].device, DeviceRole::Igpu);
+    assert_eq!(top_apu.partitions[2].device, DeviceRole::Npu);
+
+    // 6. ARM SoC + Integrated NPU + External NPU HAT (e.g. Raspberry Pi 5 + Hailo-8)
+    let top_arm_hat = HybridDeviceTopology::arm_npu_hat_partition(32, true);
+    assert_eq!(top_arm_hat.partitions.len(), 3);
+    assert_eq!(top_arm_hat.partitions[0].device, DeviceRole::ExternalNpuHat);
+    assert_eq!(top_arm_hat.partitions[1].device, DeviceRole::ArmIntegratedNpu);
+    assert_eq!(top_arm_hat.partitions[2].device, DeviceRole::Cpu);
+
+    // 7. ARM SoC + Integrated NPU (no external HAT)
+    let top_arm_npu = HybridDeviceTopology::arm_npu_hat_partition(32, false);
+    assert_eq!(top_arm_npu.partitions.len(), 2);
+    assert_eq!(top_arm_npu.partitions[0].device, DeviceRole::ArmIntegratedNpu);
+    assert_eq!(top_arm_npu.partitions[1].device, DeviceRole::Cpu);
+
+    // 8. AMD EPYC Server CPU (8 to 128 cores per socket, pure CPU cluster)
+    let top_epyc = HybridDeviceTopology::epyc_server_partition(64, 2, &[]);
+    assert_eq!(top_epyc.partitions.len(), 2); // 2 sockets
+    assert_eq!(top_epyc.partitions[0].device, DeviceRole::EpycServer(0));
+    assert_eq!(top_epyc.partitions[1].device, DeviceRole::EpycServer(1));
+    assert_eq!(top_epyc.partitions[1].end_layer, 64);
+
+    // 9. AMD EPYC Server CPU + Multi-GPU (e.g. Dual EPYC + 4 NVIDIA GPUs)
+    let gpus = vec![
+        DeviceRole::NvidiaGpu(0),
+        DeviceRole::NvidiaGpu(1),
+        DeviceRole::NvidiaGpu(2),
+        DeviceRole::NvidiaGpu(3),
+    ];
+    let top_epyc_gpu = HybridDeviceTopology::epyc_server_partition(80, 2, &gpus);
+    assert_eq!(top_epyc_gpu.partitions.len(), 6); // 4 GPUs + 2 EPYC sockets
+    assert_eq!(top_epyc_gpu.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(top_epyc_gpu.partitions[3].device, DeviceRole::NvidiaGpu(3));
+    assert_eq!(top_epyc_gpu.partitions[4].device, DeviceRole::EpycServer(0));
+    assert_eq!(top_epyc_gpu.partitions[5].device, DeviceRole::EpycServer(1));
+    assert_eq!(top_epyc_gpu.partitions[5].end_layer, 80);
+
+    // 10. Execution step test over complex hybrid topology
+    let mut pipeline = oxide_engine::hybrid::HybridMultiDevicePipeline::new(top_triple_gpu, 128);
+    let cmd = oxide_core::worker::StepCommand::new(505, 12, 0, false);
+    let comp = pipeline.step_hybrid(&cmd).unwrap();
+    assert_eq!(comp.sequence_id, 505);
+    assert_eq!(comp.sampled_token, 13);
+}
+
+
+#[test]
 fn test_continuous_batching_slot_manager() {
     let mut manager = ContinuousBatchingSlotManager::new(4);
     assert_eq!(manager.total_active_slots(), 0);
