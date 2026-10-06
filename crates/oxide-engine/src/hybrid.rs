@@ -273,7 +273,6 @@ impl HybridDeviceTopology {
             // Split: External HAT (45%), Integrated NPU (35%), ARM CPU Neon (20%)
             let hat_layers = ((total_layers as f32) * 0.45).round() as usize;
             let int_npu_layers = ((total_layers as f32) * 0.35).round() as usize;
-            let _cpu_layers = total_layers - (hat_layers + int_npu_layers);
 
             let mut cur = 0;
             if hat_layers > 0 {
@@ -302,7 +301,6 @@ impl HybridDeviceTopology {
         } else {
             // ARM CPU + Integrated NPU
             let int_npu_layers = (total_layers * 3) / 5;
-            let _cpu_layers = total_layers - int_npu_layers;
             partitions.push(LayerPartition {
                 device: DeviceRole::ArmIntegratedNpu,
                 start_layer: 0,
@@ -324,6 +322,7 @@ impl HybridDeviceTopology {
 
     /// Creates an AMD EPYC server partition (8 to 128 cores per socket) with optional GPU acceleration.
     #[must_use]
+    #[allow(clippy::manual_checked_ops)]
     pub fn epyc_server_partition(
         total_layers: usize,
         num_sockets: usize,

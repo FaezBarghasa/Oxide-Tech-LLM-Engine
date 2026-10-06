@@ -1642,7 +1642,7 @@ impl GpuDeviceProfile {
                 32
             } else if n.contains("16") || n.contains("9124") {
                 16
-            } else if n.contains("8") || n.contains("9004") {
+            } else if n.contains('8') || n.contains("9004") {
                 8
             } else {
                 64
