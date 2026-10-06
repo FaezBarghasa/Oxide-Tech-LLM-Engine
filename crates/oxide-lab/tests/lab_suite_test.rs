@@ -164,7 +164,7 @@ fn test_realtime_debug_and_drift_suite() {
 
 #[test]
 fn test_multimodal_generation_and_inputs() {
-    let engine = MultiModalLabEngine::default();
+    let engine = MultiModalLabEngine;
 
     // 1. Text-to-Image Generation
     let img_out = engine.generate_image("A futuristic quantum computer in Rust", 64, 64, 5, 7.5).unwrap();

@@ -105,7 +105,7 @@ impl MultiModalLabEngine {
         guidance_scale: f32,
     ) -> Result<MultiModalOutput> {
         if prompt.is_empty() {
-            return Err(EngineError::InvalidInput("empty prompt for image generation".into()));
+            return Err(EngineError::ShapeMismatch);
         }
 
         let total_pixels = width * height * 3;
@@ -121,7 +121,7 @@ impl MultiModalLabEngine {
             let sigma = t * 0.8;
 
             for i in 0..total_pixels {
-                let pseudo_noise = (((i as u64).wrapping_add(hash).wrapping_mul(1103515245) % 1000) as f32 / 1000.0) * 2.0 - 1.0;
+                let pseudo_noise = (((i as u64).wrapping_add(hash).wrapping_mul(1_103_515_245) % 1000) as f32 / 1000.0) * 2.0 - 1.0;
                 let signal = ((i % width) as f32 / width as f32) * 0.5 + ((i / width) as f32 / height as f32) * 0.5;
                 pixels[i] = (pixels[i] * (1.0 - sigma) + (signal + pseudo_noise * sigma * 0.2) * guidance_scale.clamp(1.0, 15.0) * 0.1)
                     .clamp(0.0, 1.0);
@@ -145,10 +145,10 @@ impl MultiModalLabEngine {
         height: usize,
         num_frames: usize,
         fps: f32,
-        steps: usize,
+        _steps: usize,
     ) -> Result<MultiModalOutput> {
         if prompt.is_empty() {
-            return Err(EngineError::InvalidInput("empty prompt for video generation".into()));
+            return Err(EngineError::ShapeMismatch);
         }
 
         let frames_count = num_frames.max(1);
@@ -190,7 +190,7 @@ impl MultiModalLabEngine {
         sample_rate: u32,
     ) -> Result<MultiModalOutput> {
         if text.is_empty() {
-            return Err(EngineError::InvalidInput("empty text for speech synthesis".into()));
+            return Err(EngineError::ShapeMismatch);
         }
 
         // Approximate duration: 60ms per character
@@ -220,7 +220,7 @@ impl MultiModalLabEngine {
     /// Transcribes audio samples into text (Speech-to-Text ASR).
     pub fn transcribe_speech(&self, audio: &[f32], _sample_rate: u32) -> Result<String> {
         if audio.is_empty() {
-            return Err(EngineError::InvalidInput("empty audio for transcription".into()));
+            return Err(EngineError::ShapeMismatch);
         }
 
         // Compute signal energy

@@ -255,7 +255,7 @@ impl LrScheduler {
         } else {
             // Cosine decay
             let progress = (step - self.warmup_steps) as f32 / (self.total_steps - self.warmup_steps) as f32;
-            let cos_decay = 0.5 * (1.0 + (std::f32::consts::PI * progress).cos());
+            let cos_decay = f32::midpoint(1.0, (std::f32::consts::PI * progress).cos());
             self.min_lr + (self.base_lr - self.min_lr) * cos_decay
         }
     }

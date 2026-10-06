@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 /// Quantization formats supported in AI laboratory research.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
 pub enum LabQuantMethod {
     Q4_0,
     Q4_K,
@@ -78,7 +79,7 @@ impl LabQuantizer {
         match method {
             LabQuantMethod::Q8_0 => {
                 let block_size = 32;
-                let num_blocks = (total_elements + block_size - 1) / block_size;
+                let num_blocks = total_elements.div_ceil(block_size);
                 let mut scales = Vec::with_capacity(num_blocks);
                 let mut data = Vec::with_capacity(total_elements);
 
@@ -112,7 +113,7 @@ impl LabQuantizer {
             }
             LabQuantMethod::Q4_0 => {
                 let block_size = 32;
-                let num_blocks = (total_elements + block_size - 1) / block_size;
+                let num_blocks = total_elements.div_ceil(block_size);
                 let mut scales = Vec::with_capacity(num_blocks);
                 let mut data = Vec::with_capacity(num_blocks * 16);
 
@@ -152,7 +153,7 @@ impl LabQuantizer {
             LabQuantMethod::Ternary1_58Bit => {
                 // BitNet 1.58-bit {-1, 0, +1}
                 let block_size = 128;
-                let num_blocks = (total_elements + block_size - 1) / block_size;
+                let num_blocks = total_elements.div_ceil(block_size);
                 let mut scales = Vec::with_capacity(num_blocks);
                 let mut data = Vec::with_capacity(num_blocks * 32);
 
@@ -199,7 +200,7 @@ impl LabQuantizer {
             LabQuantMethod::Q4_K | LabQuantMethod::MarlinInt4 | LabQuantMethod::NvFP4 => {
                 // High-performance 4-bit superblock quantization
                 let block_size = 64;
-                let num_blocks = (total_elements + block_size - 1) / block_size;
+                let num_blocks = total_elements.div_ceil(block_size);
                 let mut scales = Vec::with_capacity(num_blocks);
                 let mut data = Vec::with_capacity(num_blocks * 32);
 

@@ -87,9 +87,9 @@ pub struct CustomModel {
 
 impl CustomModel {
     /// Executes forward pass for a sequence of token IDs, producing logits for the final token.
-    pub fn forward(&self, tokens: &[u32], scratch: &mut CustomModelScratch) -> Result<&[f32]> {
+    pub fn forward<'a>(&self, tokens: &[u32], scratch: &'a mut CustomModelScratch) -> Result<&'a [f32]> {
         if tokens.is_empty() {
-            return Err(EngineError::InvalidInput("empty tokens sequence".into()));
+            return Err(EngineError::ShapeMismatch);
         }
 
         let last_token = *tokens.last().unwrap() as usize;
@@ -112,15 +112,31 @@ impl CustomModel {
                         oxide_quant::simd::gemv_blocked_f32(
                             weights,
                             &scratch.hidden,
+                            h,
+                            h,
                             &mut scratch.intermediate[..h],
-                            h,
-                            h,
                         );
                         scratch.hidden.copy_from_slice(&scratch.intermediate[..h]);
                     }
                 }
                 LayerType::RmsNorm { .. } => {
-                    oxide_quant::simd::rmsnorm_f32(&mut scratch.hidden, 1e-5);
+                    if weights.len() >= h {
+                        oxide_quant::simd::rmsnorm_f32(
+                            &scratch.hidden,
+                            &weights[..h],
+                            &mut scratch.intermediate[..h],
+                            1e-5,
+                        );
+                    } else {
+                        let dummy_weights = vec![1.0f32; h];
+                        oxide_quant::simd::rmsnorm_f32(
+                            &scratch.hidden,
+                            &dummy_weights,
+                            &mut scratch.intermediate[..h],
+                            1e-5,
+                        );
+                    }
+                    scratch.hidden.copy_from_slice(&scratch.intermediate[..h]);
                 }
                 LayerType::SwiGluMlp { intermediate_dim } => {
                     let d = *intermediate_dim;
@@ -141,7 +157,7 @@ impl CustomModel {
                     for i in 0..h {
                         let freq = 1.0 / (10000.0f32.powf(((i % head_dim) * 2) as f32 / head_dim as f32));
                         let angle = tokens.len() as f32 * freq;
-                        scratch.hidden[i] = scratch.hidden[i] * angle.cos();
+                        scratch.hidden[i] *= angle.cos();
                     }
                 }
                 LayerType::Moe { num_experts, top_k, .. } => {
@@ -179,9 +195,9 @@ impl CustomModel {
             oxide_quant::simd::gemv_blocked_f32(
                 &self.head_weights[..vocab * h],
                 &scratch.hidden,
-                &mut scratch.logits[..vocab],
                 vocab,
                 h,
+                &mut scratch.logits[..vocab],
             );
         } else {
             // Uniform fallback logits
@@ -198,6 +214,7 @@ impl CustomModel {
     pub fn compile_to_graph(&self) -> oxide_engine::graph::ComputeGraph {
         let mut graph = oxide_engine::graph::ComputeGraph::new();
         let h = self.config.hidden_dim;
+        let mut prev_id: u32 = 0;
 
         for (idx, layer) in self.config.layers.iter().enumerate() {
             let op = match &layer.layer_type {
@@ -210,14 +227,15 @@ impl CustomModel {
                 LayerType::LatentAttentionMla { .. } => oxide_engine::graph::OpCode::MulMat,
                 LayerType::DiffusionBlock { .. } => oxide_engine::graph::OpCode::Add,
             };
-            graph.add_node(oxide_engine::graph::GraphNode {
-                id: idx,
-                name: layer.name.clone(),
+            let src0 = if idx > 0 { prev_id } else { 0 };
+            prev_id = graph.add_node(
                 op,
-                inputs: if idx > 0 { vec![idx - 1] } else { vec![] },
-                shape: vec![1, h],
-                layer_idx: Some(idx),
-            });
+                src0,
+                0,
+                h,
+                Some(layer.name.clone()),
+                oxide_engine::graph::NodeParams::default(),
+            );
         }
 
         graph
