@@ -17,6 +17,7 @@ members = [
     "crates/oxide-server",
     "crates/oxide-engine",
     "crates/oxide-cli",
+    "crates/oxide-lab",
 ]
 
 [workspace.package]
@@ -42,6 +43,7 @@ oxide-models = { path = "crates/oxide-models" }
 oxide-quant = { path = "crates/oxide-quant" }
 oxide-server = { path = "crates/oxide-server" }
 oxide-engine = { path = "crates/oxide-engine" }
+oxide-lab = { path = "crates/oxide-lab" }
 
 crossbeam = "0.8"
 crossbeam-epoch = "0.9"

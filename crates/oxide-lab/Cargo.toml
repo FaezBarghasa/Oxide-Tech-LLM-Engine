@@ -1,0 +1,22 @@
+[package]
+name = "oxide-lab"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide-core.workspace = true
+oxide-alloc.workspace = true
+oxide-models.workspace = true
+oxide-quant.workspace = true
+oxide-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rayon.workspace = true
+half.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
