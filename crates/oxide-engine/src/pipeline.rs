@@ -388,40 +388,34 @@ impl SpecializedPipeline {
         let norm_backend = backend_name.to_ascii_lowercase().replace('-', "_");
 
         let maybe_topology = match norm_backend.as_str() {
-            "cpu_nvidia" | "cpu+nvidia" => Some(
-                crate::hybrid::HybridDeviceTopology::cpu_nvidia_partition(
+            "cpu_nvidia" | "cpu+nvidia" => {
+                Some(crate::hybrid::HybridDeviceTopology::cpu_nvidia_partition(
                     model.config.num_layers,
                     1,
                     (model.config.num_layers * 2) / 10,
-                ),
-            ),
-            "cpu_amd" | "cpu+amd" => Some(
-                crate::hybrid::HybridDeviceTopology::cpu_amd_partition(
+                ))
+            }
+            "cpu_amd" | "cpu+amd" => Some(crate::hybrid::HybridDeviceTopology::cpu_amd_partition(
+                model.config.num_layers,
+                1,
+                (model.config.num_layers * 2) / 10,
+            )),
+            "cpu_intel" | "cpu+intel" => {
+                Some(crate::hybrid::HybridDeviceTopology::cpu_intel_partition(
                     model.config.num_layers,
                     1,
                     (model.config.num_layers * 2) / 10,
-                ),
-            ),
-            "cpu_intel" | "cpu+intel" => Some(
-                crate::hybrid::HybridDeviceTopology::cpu_intel_partition(
-                    model.config.num_layers,
-                    1,
-                    (model.config.num_layers * 2) / 10,
-                ),
-            ),
-            "cpu_tpu" | "cpu+tpu" => Some(
-                crate::hybrid::HybridDeviceTopology::cpu_tpu_partition(
-                    model.config.num_layers,
-                    1,
-                    (model.config.num_layers * 2) / 10,
-                ),
-            ),
-            "cpu_npu" | "cpu+npu" => Some(
-                crate::hybrid::HybridDeviceTopology::cpu_npu_partition(
-                    model.config.num_layers,
-                    0.65,
-                ),
-            ),
+                ))
+            }
+            "cpu_tpu" | "cpu+tpu" => Some(crate::hybrid::HybridDeviceTopology::cpu_tpu_partition(
+                model.config.num_layers,
+                1,
+                (model.config.num_layers * 2) / 10,
+            )),
+            "cpu_npu" | "cpu+npu" => Some(crate::hybrid::HybridDeviceTopology::cpu_npu_partition(
+                model.config.num_layers,
+                0.65,
+            )),
             "cpu_nvidia_amd_intel" | "cpu+nvidia+amd+intel" | "triple_gpu" | "hybrid" => Some(
                 crate::hybrid::HybridDeviceTopology::cpu_nvidia_amd_intel_partition(
                     model.config.num_layers,
@@ -465,12 +459,12 @@ impl SpecializedPipeline {
                     has_npu,
                 ))
             }
-            "cpu_igpu_tpu" | "cpu+igpu+tpu" => Some(
-                crate::hybrid::HybridDeviceTopology::cpu_igpu_tpu_partition(
+            "cpu_igpu_tpu" | "cpu+igpu+tpu" => {
+                Some(crate::hybrid::HybridDeviceTopology::cpu_igpu_tpu_partition(
                     model.config.num_layers,
                     1,
-                ),
-            ),
+                ))
+            }
             "cpu_igpu_npu_nvidia" | "cpu+igpu+npu+nvidia" | "apu_nvidia" => Some(
                 crate::hybrid::HybridDeviceTopology::cpu_igpu_npu_nvidia_partition(
                     model.config.num_layers,

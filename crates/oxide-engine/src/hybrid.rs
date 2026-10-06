@@ -562,13 +562,7 @@ impl HybridDeviceTopology {
         amd_gpus: usize,
         cpu_offload_layers: usize,
     ) -> Self {
-        Self::multi_vendor_gpu_partition(
-            total_layers,
-            nvidia_gpus,
-            amd_gpus,
-            0,
-            cpu_offload_layers,
-        )
+        Self::multi_vendor_gpu_partition(total_layers, nvidia_gpus, amd_gpus, 0, cpu_offload_layers)
     }
 
     /// CPU + iGPU + NPU (Coherent APU 3-way partition: Zen CPU + RDNA iGPU + XDNA NPU).
@@ -884,6 +878,7 @@ impl HybridDeviceTopology {
 
     /// Intel Core Ultra / Lunar Lake / Arrow Lake (CPU + Arc Xe iGPU + Intel NPU + optional Arc dGPU).
     #[must_use]
+    #[allow(clippy::manual_checked_ops)]
     pub fn intel_core_ultra_partition(total_layers: usize, discrete_arc_gpus: usize) -> Self {
         if total_layers == 0 {
             return Self {

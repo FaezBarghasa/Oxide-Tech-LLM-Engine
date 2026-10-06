@@ -248,7 +248,10 @@ fn test_all_hardware_heterogeneous_topologies() {
     // 20. Intel Core Ultra (CPU + Xe iGPU + Intel NPU + Arc dGPU)
     let top_intel_ultra = HybridDeviceTopology::intel_core_ultra_partition(32, 1);
     assert_eq!(top_intel_ultra.partitions.len(), 4);
-    assert_eq!(top_intel_ultra.partitions[0].device, DeviceRole::IntelGpu(0));
+    assert_eq!(
+        top_intel_ultra.partitions[0].device,
+        DeviceRole::IntelGpu(0)
+    );
     assert_eq!(top_intel_ultra.partitions[1].device, DeviceRole::Npu);
     assert_eq!(top_intel_ultra.partitions[2].device, DeviceRole::Igpu);
     assert_eq!(top_intel_ultra.partitions[3].device, DeviceRole::Cpu);
@@ -256,7 +259,10 @@ fn test_all_hardware_heterogeneous_topologies() {
     // 21. Raspberry Pi 5 + Hailo AI HAT+
     let top_rpi_hailo = HybridDeviceTopology::raspberry_pi_hailo_partition(32);
     assert_eq!(top_rpi_hailo.partitions.len(), 2);
-    assert_eq!(top_rpi_hailo.partitions[0].device, DeviceRole::ExternalNpuHat);
+    assert_eq!(
+        top_rpi_hailo.partitions[0].device,
+        DeviceRole::ExternalNpuHat
+    );
     assert_eq!(top_rpi_hailo.partitions[1].device, DeviceRole::Cpu);
 
     // 22. Distributed Multi-Node Cluster
@@ -304,11 +310,15 @@ fn test_all_hardware_heterogeneous_topologies() {
         assert_eq!(top.partitions[0].start_layer, 0);
         assert_eq!(top.partitions.last().unwrap().end_layer, top.total_layers);
         for i in 0..top.partitions.len() - 1 {
-            assert_eq!(top.partitions[i].end_layer, top.partitions[i + 1].start_layer);
+            assert_eq!(
+                top.partitions[i].end_layer,
+                top.partitions[i + 1].start_layer
+            );
         }
 
         // Test forward step execution on each topology
-        let mut pipeline = oxide_engine::hybrid::HybridMultiDevicePipeline::new((*top).clone(), 128);
+        let mut pipeline =
+            oxide_engine::hybrid::HybridMultiDevicePipeline::new((*top).clone(), 128);
         let cmd = oxide_core::worker::StepCommand::new(505, 12, 0, false);
         let comp = pipeline.step_hybrid(&cmd).unwrap();
         assert_eq!(comp.sequence_id, 505);
