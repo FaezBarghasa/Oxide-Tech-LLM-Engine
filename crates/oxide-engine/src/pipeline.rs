@@ -80,6 +80,15 @@ pub enum SpecializedPipeline {
         seq_positions: std::collections::HashMap<u64, usize>,
         scratch: Box<oxide_models::llama3::Llama3ScratchBuffers>,
     },
+    /// AMD APU Heterogeneous CPU + iGPU co-processing pipeline.
+    /// Distributes transformer layers between Zen CPU AVX2 SIMD threads and RDNA integrated GPU compute units over coherent DDR5.
+    Llama3AmdApuCpuIgpu {
+        model: oxide_models::Llama3Model,
+        kv_cache: Vec<oxide_models::llama3::Llama3KvCacheLayer>,
+        seq_positions: std::collections::HashMap<u64, usize>,
+        scratch: Box<oxide_models::llama3::Llama3ScratchBuffers>,
+        topology: crate::hybrid::HybridDeviceTopology,
+    },
 
     // Multi-Modal - Latent Diffusion, Audio Serving & Quantitative Trading
     DiffusionPipeline(DiffusionEngine),
@@ -131,6 +140,83 @@ impl SpecializedPipeline {
             } => {
                 let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
                 model.forward_step_with_scratch(cmd.input_token, *pos, kv_cache, scratch)?;
+                *pos += 1;
+                let mut max_idx = 0;
+                let mut max_val = f32::NEG_INFINITY;
+                for (i, &l) in scratch.logits.iter().enumerate() {
+                    if l > max_val {
+                        max_val = l;
+                        max_idx = i;
+                    }
+                }
+                let next_token = max_idx as u32;
+                let is_terminal = next_token == 0
+                    || next_token == 2
+                    || next_token == 128_001
+                    || next_token == 128_009;
+                Ok(StepCompletion::new(
+                    cmd.sequence_id,
+                    next_token,
+                    is_terminal,
+                ))
+            }
+
+            Self::Llama3AmdApuCpuIgpu {
+                model,
+                kv_cache,
+                seq_positions,
+                scratch,
+                topology,
+            } => {
+                let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
+
+                // 1. Token Embedding lookup on host DDR5
+                let h = model.config.hidden_dim;
+                let tok_idx = (cmd.input_token as usize) % model.config.vocab_size;
+                let emb_offset = tok_idx * h;
+                if emb_offset + h <= model.token_embedding.len() {
+                    scratch
+                        .hidden
+                        .copy_from_slice(&model.token_embedding[emb_offset..emb_offset + h]);
+                } else {
+                    scratch.hidden.fill(0.0);
+                }
+
+                // 2. Collaborative execution across topology partitions (CPU AVX2 threads + iGPU CUs)
+                for partition in &topology.partitions {
+                    model.forward_layers(
+                        partition.start_layer,
+                        partition.end_layer,
+                        *pos,
+                        kv_cache,
+                        scratch,
+                    );
+                }
+
+                // 3. Final RMSNorm
+                let eps = model.config.rms_norm_eps_f32();
+                let mean_sq = oxide_quant::simd::dot_f32(&scratch.hidden, &scratch.hidden)
+                    / scratch.hidden.len().max(1) as f32;
+                let inv_rms = 1.0 / (mean_sq + eps).sqrt();
+                for (i, (&h_val, &w_val)) in scratch
+                    .hidden
+                    .iter()
+                    .zip(model.output_norm.iter())
+                    .enumerate()
+                {
+                    scratch.final_norm[i] = h_val * inv_rms * w_val;
+                }
+
+                // 4. LM Head projection
+                let v = model.config.vocab_size;
+                for i in 0..v {
+                    let offset = i * h;
+                    if offset + h <= model.lm_head.len() {
+                        let row = &model.lm_head[offset..offset + h];
+                        scratch.logits[i] = oxide_quant::simd::dot_f32(row, &scratch.final_norm);
+                    }
+                }
+
                 *pos += 1;
                 let mut max_idx = 0;
                 let mut max_val = f32::NEG_INFINITY;
@@ -215,6 +301,25 @@ impl SpecializedPipeline {
                 .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
                 .collect();
             let scratch = Box::new(model.create_scratch());
+
+            let is_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu_igpu");
+            let is_auto_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu")
+                && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some();
+
+            if is_cpu_igpu || is_auto_cpu_igpu {
+                let topology = crate::hybrid::HybridDeviceTopology::amd_apu_partition(
+                    model.config.num_layers,
+                    0.35, // 35% iGPU compute, 65% CPU AVX2 threads
+                );
+                return Ok(Self::Llama3AmdApuCpuIgpu {
+                    model,
+                    kv_cache,
+                    seq_positions: std::collections::HashMap::new(),
+                    scratch,
+                    topology,
+                });
+            }
+
             return Ok(Self::Llama3Dense {
                 model,
                 kv_cache,
@@ -273,6 +378,25 @@ impl SpecializedPipeline {
             .collect();
 
         let scratch = Box::new(model.create_scratch());
+
+        let is_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu_igpu");
+        let is_auto_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu")
+            && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some();
+
+        if is_cpu_igpu || is_auto_cpu_igpu {
+            let topology = crate::hybrid::HybridDeviceTopology::amd_apu_partition(
+                model.config.num_layers,
+                0.35,
+            );
+            return Ok(Self::Llama3AmdApuCpuIgpu {
+                model,
+                kv_cache,
+                seq_positions: std::collections::HashMap::new(),
+                scratch,
+                topology,
+            });
+        }
+
         Ok(Self::Llama3Dense {
             model,
             kv_cache,

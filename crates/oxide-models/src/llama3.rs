@@ -552,127 +552,7 @@ impl Llama3Model {
 
         // 2. Transformer Decoder Layers
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            Self::rms_norm(
-                &scratch.hidden,
-                &layer.attn_norm,
-                &mut scratch.norm_hidden,
-                eps,
-            );
-
-            // Q, K, V Projections via SIMD GEMV
-            Self::gemv(
-                &layer.q_proj,
-                &scratch.norm_hidden,
-                q_dim,
-                h,
-                &mut scratch.q,
-            );
-            Self::gemv(
-                &layer.k_proj,
-                &scratch.norm_hidden,
-                kv_dim,
-                h,
-                &mut scratch.k,
-            );
-            Self::gemv(
-                &layer.v_proj,
-                &scratch.norm_hidden,
-                kv_dim,
-                h,
-                &mut scratch.v,
-            );
-
-            // RoPE Rotary Embedding
-            for head_idx in 0..self.config.num_heads {
-                let start = head_idx * self.config.head_dim;
-                let end = start + self.config.head_dim;
-                self.rope
-                    .apply_rotary_in_place(&mut scratch.q[start..end], position);
-            }
-            for kv_head_idx in 0..self.config.num_kv_heads {
-                let start = kv_head_idx * self.config.head_dim;
-                let end = start + self.config.head_dim;
-                self.rope
-                    .apply_rotary_in_place(&mut scratch.k[start..end], position);
-            }
-
-            // KV Cache append
-            if let Some(layer_cache) = kv_cache.get_mut(layer_idx) {
-                layer_cache.append_kv(&scratch.k, &scratch.v);
-            }
-
-            // Attention Output Projection
-            for head in 0..self.config.num_heads {
-                let q_start = head * self.config.head_dim;
-                let q_slice = &scratch.q[q_start..q_start + self.config.head_dim];
-                let out_slice = &mut scratch.attn_out[q_start..q_start + self.config.head_dim];
-
-                // Grouped-Query Attention head mapping
-                let kv_head = head / (self.config.num_heads / self.config.num_kv_heads);
-                let k_start = kv_head * self.config.head_dim;
-                let k_slice = &scratch.k[k_start..k_start + self.config.head_dim];
-                let v_slice = &scratch.v[k_start..k_start + self.config.head_dim];
-
-                self.flash_attn
-                    .forward_head(q_slice, k_slice, v_slice, 1, 1, out_slice);
-            }
-
-            Self::gemv(
-                &layer.o_proj,
-                &scratch.attn_out,
-                h,
-                q_dim,
-                &mut scratch.o_proj_out,
-            );
-
-            // Residual 1
-            for i in 0..h {
-                scratch.hidden[i] += scratch.o_proj_out[i];
-            }
-
-            // FFN RMSNorm & SwiGLU MLP
-            Self::rms_norm(
-                &scratch.hidden,
-                &layer.ffn_norm,
-                &mut scratch.ffn_norm_hidden,
-                eps,
-            );
-
-            let inter_dim = self.config.intermediate_dim;
-            Self::gemv(
-                &layer.gate_proj,
-                &scratch.ffn_norm_hidden,
-                inter_dim,
-                h,
-                &mut scratch.gate,
-            );
-            Self::gemv(
-                &layer.up_proj,
-                &scratch.ffn_norm_hidden,
-                inter_dim,
-                h,
-                &mut scratch.up,
-            );
-
-            // SwiGLU: down_proj(silu(gate) * up)
-            for i in 0..inter_dim {
-                let g = scratch.gate[i];
-                let silu_g = g / (1.0 + (-g).exp());
-                scratch.activated[i] = silu_g * scratch.up[i];
-            }
-
-            Self::gemv(
-                &layer.down_proj,
-                &scratch.activated,
-                h,
-                inter_dim,
-                &mut scratch.mlp_out,
-            );
-
-            // Residual 2
-            for i in 0..h {
-                scratch.hidden[i] += scratch.mlp_out[i];
-            }
+            self.forward_layer(layer_idx, layer, position, kv_cache, scratch, eps, h, q_dim, kv_dim);
         }
 
         // 3. Final RMSNorm
@@ -694,6 +574,166 @@ impl Llama3Model {
         );
 
         Ok(())
+    }
+
+    /// Forward pass through a single transformer decoder layer.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_layer(
+        &self,
+        layer_idx: usize,
+        layer: &Llama3LayerWeights,
+        position: usize,
+        kv_cache: &mut [Llama3KvCacheLayer],
+        scratch: &mut Llama3ScratchBuffers,
+        eps: f32,
+        h: usize,
+        q_dim: usize,
+        kv_dim: usize,
+    ) {
+        Self::rms_norm(
+            &scratch.hidden,
+            &layer.attn_norm,
+            &mut scratch.norm_hidden,
+            eps,
+        );
+
+        // Q, K, V Projections via SIMD GEMV
+        Self::gemv(
+            &layer.q_proj,
+            &scratch.norm_hidden,
+            q_dim,
+            h,
+            &mut scratch.q,
+        );
+        Self::gemv(
+            &layer.k_proj,
+            &scratch.norm_hidden,
+            kv_dim,
+            h,
+            &mut scratch.k,
+        );
+        Self::gemv(
+            &layer.v_proj,
+            &scratch.norm_hidden,
+            kv_dim,
+            h,
+            &mut scratch.v,
+        );
+
+        // RoPE Rotary Embedding
+        for head_idx in 0..self.config.num_heads {
+            let start = head_idx * self.config.head_dim;
+            let end = start + self.config.head_dim;
+            self.rope
+                .apply_rotary_in_place(&mut scratch.q[start..end], position);
+        }
+        for kv_head_idx in 0..self.config.num_kv_heads {
+            let start = kv_head_idx * self.config.head_dim;
+            let end = start + self.config.head_dim;
+            self.rope
+                .apply_rotary_in_place(&mut scratch.k[start..end], position);
+        }
+
+        // KV Cache append
+        if let Some(layer_cache) = kv_cache.get_mut(layer_idx) {
+            layer_cache.append_kv(&scratch.k, &scratch.v);
+        }
+
+        // Attention Output Projection
+        for head in 0..self.config.num_heads {
+            let q_start = head * self.config.head_dim;
+            let q_slice = &scratch.q[q_start..q_start + self.config.head_dim];
+            let out_slice = &mut scratch.attn_out[q_start..q_start + self.config.head_dim];
+
+            // Grouped-Query Attention head mapping
+            let kv_head = head / (self.config.num_heads / self.config.num_kv_heads);
+            let k_start = kv_head * self.config.head_dim;
+            let k_slice = &scratch.k[k_start..k_start + self.config.head_dim];
+            let v_slice = &scratch.v[k_start..k_start + self.config.head_dim];
+
+            self.flash_attn
+                .forward_head(q_slice, k_slice, v_slice, 1, 1, out_slice);
+        }
+
+        Self::gemv(
+            &layer.o_proj,
+            &scratch.attn_out,
+            h,
+            q_dim,
+            &mut scratch.o_proj_out,
+        );
+
+        // Residual 1
+        for i in 0..h {
+            scratch.hidden[i] += scratch.o_proj_out[i];
+        }
+
+        // FFN RMSNorm & SwiGLU MLP
+        Self::rms_norm(
+            &scratch.hidden,
+            &layer.ffn_norm,
+            &mut scratch.ffn_norm_hidden,
+            eps,
+        );
+
+        let inter_dim = self.config.intermediate_dim;
+        Self::gemv(
+            &layer.gate_proj,
+            &scratch.ffn_norm_hidden,
+            inter_dim,
+            h,
+            &mut scratch.gate,
+        );
+        Self::gemv(
+            &layer.up_proj,
+            &scratch.ffn_norm_hidden,
+            inter_dim,
+            h,
+            &mut scratch.up,
+        );
+
+        // SwiGLU: down_proj(silu(gate) * up)
+        for i in 0..inter_dim {
+            let g = scratch.gate[i];
+            let silu_g = g / (1.0 + (-g).exp());
+            scratch.activated[i] = silu_g * scratch.up[i];
+        }
+
+        Self::gemv(
+            &layer.down_proj,
+            &scratch.activated,
+            h,
+            inter_dim,
+            &mut scratch.mlp_out,
+        );
+
+        // Residual 2
+        for i in 0..h {
+            scratch.hidden[i] += scratch.mlp_out[i];
+        }
+    }
+
+    /// Forward pass through a range of transformer decoder layers [start_layer..end_layer].
+    pub fn forward_layers(
+        &self,
+        start_layer: usize,
+        end_layer: usize,
+        position: usize,
+        kv_cache: &mut [Llama3KvCacheLayer],
+        scratch: &mut Llama3ScratchBuffers,
+    ) {
+        let h = self.config.hidden_dim;
+        let q_dim = self.config.num_heads * self.config.head_dim;
+        let kv_dim = self.config.num_kv_heads * self.config.head_dim;
+        let eps = self.config.rms_norm_eps_f32();
+
+        let end = end_layer.min(self.layers.len());
+        for layer_idx in start_layer..end {
+            if let Some(layer) = self.layers.get(layer_idx) {
+                self.forward_layer(layer_idx, layer, position, kv_cache, scratch, eps, h, q_dim, kv_dim);
+            }
+        }
     }
 
     /// Computes a single autoregressive forward step for an input token.

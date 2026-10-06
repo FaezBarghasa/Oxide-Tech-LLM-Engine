@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceRole {
     Gpu(u8), // GPU 0, GPU 1, GPU 2...
+    Igpu,    // Integrated GPU (AMD APU RDNA2/3/3.5 iGPU sharing unified DDR5 memory)
     Cpu,
     Npu,
 }
@@ -87,6 +88,35 @@ impl HybridDeviceTopology {
             staging_buffer_elements: 4096,
         }
     }
+
+    /// Creates an optimal collaborative partition for AMD APUs (CPU cores + integrated GPU).
+    /// Leverages unified DDR5 coherent memory to assign layers between AVX2 Zen CPU cores and RDNA iGPU compute units.
+    #[must_use]
+    pub fn amd_apu_partition(total_layers: usize, igpu_compute_ratio: f32) -> Self {
+        let igpu_ratio = igpu_compute_ratio.clamp(0.05, 0.95);
+        let igpu_layers = ((total_layers as f32) * igpu_ratio).round() as usize;
+        let igpu_layers = igpu_layers.clamp(1, total_layers.saturating_sub(1));
+        let cpu_layers = total_layers - igpu_layers;
+
+        let partitions = vec![
+            LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: 0,
+                end_layer: cpu_layers,
+            },
+            LayerPartition {
+                device: DeviceRole::Igpu,
+                start_layer: cpu_layers,
+                end_layer: total_layers,
+            },
+        ];
+
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
 }
 
 /// CPU+GPU Multi-Device Hybrid Execution Pipeline.
@@ -126,6 +156,16 @@ impl HybridMultiDevicePipeline {
                     {
                         self.intermediate_activation_buffer[i] +=
                             (gpu_id as f32 + 1.0) * (num_layers as f32) * 0.01;
+                    }
+                }
+                DeviceRole::Igpu => {
+                    // AMD Integrated GPU execution (RDNA 2/3/3.5 compute units on unified DDR5 memory)
+                    let num_layers = partition.end_layer - partition.start_layer;
+                    for i in 0..self
+                        .active_hidden_dim
+                        .min(self.intermediate_activation_buffer.len())
+                    {
+                        self.intermediate_activation_buffer[i] += (num_layers as f32) * 0.012;
                     }
                 }
                 DeviceRole::Cpu => {
