@@ -29,8 +29,9 @@ graph TD
 ```
 
 ### Supported Hardware Accelerators
-- `NvidiaCuda` (CUDA 12.x / PTX / Blackwell NVFP4)
+- `NvidiaCuda` (CUDA 12.x / PTX / Blackwell NVFP4 / Single-GPU up to Array of 16 GPUs via NCCL)
 - `RocmAmd` (ROCm 6.x / HIP / MI300X / RDNA3)
+- `AmdApu` (Tri-compute CPU + iGPU + XDNA NPU over coherent unified DDR5 memory)
 - `MetalApple` (Apple Silicon M1/M2/M3/M4 AMX + Metal Shading Language)
 - `IntelNpuVpu` (Intel Lunar Lake / Arrow Lake NPU & Arc B580)
 - `GoogleTpu` (Cloud TPU v4 / v5e XLA HLO)
@@ -38,6 +39,21 @@ graph TD
 - `RockchipRknn` (RK3588 NPU)
 - `HailoAi` (Hailo-8 / Hailo-15H)
 - `NumaCpuNode` (AVX-512 / AMX / ARM NEON multi-socket NUMA distribution)
+
+### Multi-GPU Array Scaling (1 to 16 NVIDIA GPUs)
+For high-parameter models ($70\text{B}-671\text{B}$ parameters) exceeding single-GPU VRAM:
+- **`CudaDeviceClusterArray`**: Orchestrates ranks $r \in [0, N)$ where $1 \le N \le 16$.
+- **Tensor Parallelism (TP)**: Splits weight projections across 16 GPUs (`ColumnParallel` for QKV heads, `RowParallel` for down-projections) coupled with non-blocking NCCL AllReduce.
+- **Pipeline Parallelism (PP)**: Partitions transformer layers across GPU ranks with remainder-aware distribution:
+$$\text{LayerCount}_g = \left\lfloor \frac{L}{N} \right\rfloor + \begin{cases} 1 & \text{if } g < (L \bmod N) \\ 0 & \text{otherwise} \end{cases}$$
+
+### AMD APU Tri-Compute Partitioning
+On AMD Ryzen APUs (Zen 4/5 + RDNA 2/3/3.5 + XDNA NPU):
+- **Zero-Copy Coherence**: All three processing engines share physical system DDR5 memory without PCIe serialization.
+- **Microarchitectural Role Assignment**:
+  - `DeviceRole::Npu`: Accelerates recurrent systolic GEMM operations (~30% of layers).
+  - `DeviceRole::Igpu`: Executes vectorized matrix-vector attention operations (~35% of layers).
+  - `DeviceRole::Cpu`: AVX2/AVX-512 vector units perform prefill embeddings and logit sampling (~35% of layers).
 
 ### Proportional Memory Partitioning
 The engine automatically partitions layer matrices and token slices according to each device's available VRAM/SRAM and memory bandwidth:

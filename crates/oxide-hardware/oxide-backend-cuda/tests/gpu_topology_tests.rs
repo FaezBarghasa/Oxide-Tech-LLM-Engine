@@ -121,3 +121,50 @@ fn test_cuda_backend_autonomic_plan_dispatch() {
     assert!(!backend_2080.execution_plan().use_fp8_tensor_cores);
     assert_eq!(backend_2080.execution_plan().threadblock_size, 64);
 }
+
+#[test]
+fn test_cuda_multi_gpu_cluster_array_scaling() {
+    use oxide_backend_cuda::CudaDeviceClusterArray;
+
+    // Single GPU
+    let single = CudaDeviceClusterArray::new(1, 24 * 1024 * 1024 * 1024, false);
+    assert_eq!(single.num_gpus, 1);
+    assert_eq!(single.communicators.len(), 1);
+    assert_eq!(single.layer_partition_for_gpu(0, 32), (0, 32));
+
+    // Array of 16 NVIDIA GPUs (e.g., 16x H100 SXM5 / B200 NVLink mesh)
+    let cluster16 = CudaDeviceClusterArray::new(16, 80 * 1024 * 1024 * 1024, true);
+    assert_eq!(cluster16.num_gpus, 16);
+    assert_eq!(cluster16.communicators.len(), 16);
+    assert!(cluster16.nvlink_mesh);
+    assert_eq!(cluster16.total_vram_bytes, 16 * 80 * 1024 * 1024 * 1024);
+
+    // Verify 80 layers partitioned across 16 GPUs (5 layers per GPU)
+    for gpu_idx in 0..16 {
+        let (start, end) = cluster16.layer_partition_for_gpu(gpu_idx, 80);
+        assert_eq!(start, gpu_idx * 5);
+        assert_eq!(end, (gpu_idx + 1) * 5);
+    }
+
+    // Verify uneven 35 layers partitioned across 16 GPUs
+    let mut total_assigned = 0;
+    for gpu_idx in 0..16 {
+        let (start, end) = cluster16.layer_partition_for_gpu(gpu_idx, 35);
+        assert_eq!(start, total_assigned);
+        assert!(end >= start);
+        total_assigned = end;
+    }
+    assert_eq!(total_assigned, 35);
+
+    // Verify distributed Tensor Parallel All-Reduce across 16 GPU ranks
+    let mut partials = Vec::with_capacity(16);
+    for rank in 0..16 {
+        partials.push(vec![rank as f32 + 1.0; 4]); // 1.0 to 16.0
+    }
+    let mut output = vec![0.0f32; 4];
+    cluster16.execute_tensor_parallel_allreduce(&partials, &mut output);
+    // Sum of 1..=16 is 16 * 17 / 2 = 136.0
+    for val in output {
+        assert_eq!(val, 136.0);
+    }
+}

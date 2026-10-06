@@ -50,6 +50,50 @@ fn test_heterogeneous_tensor_splitting_and_numa() {
 }
 
 #[test]
+fn test_cuda_multi_gpu_16_array_tensor_splitting() {
+    // Array of 16 CUDA GPUs
+    let devices: Vec<AcceleratorKind> = (0..16)
+        .map(|id| AcceleratorKind::CudaNvidia { device_id: id })
+        .collect();
+    assert_eq!(devices.len(), 16);
+
+    let splitter = TensorSplitDistributionEngine::new(devices, TensorSplitMode::RowParallel);
+
+    // Distribute a large weight matrix (e.g. 16,384,000 elements) evenly across 16 CUDA GPUs
+    let total_elements = 16_384_000;
+    let weights = vec![1.0f32; 16]; // Equal weighting across 16 GPUs
+    let slices = splitter.compute_tensor_slices(total_elements, &weights);
+
+    assert_eq!(slices.len(), 16);
+    let expected_slice_size = 16_384_000 / 16;
+    for (i, slice) in slices.iter().enumerate() {
+        assert_eq!(
+            slice.accelerator,
+            AcceleratorKind::CudaNvidia {
+                device_id: i as u32
+            }
+        );
+        assert_eq!(slice.split_mode, TensorSplitMode::RowParallel);
+        assert_eq!(slice.slice_index, i);
+        assert_eq!(slice.total_slices, 16);
+        assert_eq!(slice.start_offset, i * expected_slice_size);
+        assert_eq!(slice.element_count, expected_slice_size);
+    }
+
+    // Distributed AllReduce Sum across 16 CUDA devices
+    let mut partials = Vec::with_capacity(16);
+    for rank in 0..16 {
+        partials.push(vec![rank as f32 + 1.0; 8]);
+    }
+    let mut reduced = vec![0.0f32; 8];
+    splitter.all_reduce_sum(&partials, &mut reduced);
+    // Sum of 1..=16 is 136.0
+    for val in reduced {
+        assert_eq!(val, 136.0);
+    }
+}
+
+#[test]
 fn test_continuous_batching_slot_manager() {
     let mut manager = ContinuousBatchingSlotManager::new(4);
     assert_eq!(manager.total_active_slots(), 0);

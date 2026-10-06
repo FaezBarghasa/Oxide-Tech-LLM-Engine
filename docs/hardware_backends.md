@@ -8,17 +8,27 @@
 
 ## 1. NVIDIA CUDA Backend (`oxide-backend-cuda`)
 
-- **Target Architectures**: Blackwell (GB200 / B200 / B100), Hopper (H100 / H200), Ada Lovelace (RTX 4090 / L40S), Ampere (A100 / RTX 3090).
+- **Target Architectures**: Blackwell (GB200 / B200 / B100), Hopper (H100 / H200), Ada Lovelace (RTX 4090 / L40S / RTX 4060 Mobile), Ampere (A100 / RTX 3090), Turing (RTX 2080 Ti).
+- **Cluster Array Scaling (1 to 16 NVIDIA GPUs)**:
+  - `CudaDeviceClusterArray`: Clustered execution topology orchestrating from a single card up to an array of 16 NVIDIA GPUs (`num_gpus: 1..=16`).
+  - **NCCL Distributed Collective Communication**: Non-blocking `all_reduce_f32`, `all_gather_f32`, and in-place `all_reduce_slice` scaling across NVLink meshes and PCIe switches.
+  - **Pipeline Parallelism Layer Splitting**: Automatic even and remainder partition allocation (`layer_partition_for_gpu`) distributing $L$ transformer layers across $N \le 16$ GPU ranks.
+  - **Tensor Parallelism**: Distributed column/row projection splitting with AllReduce reduction over NVLink/PCIe ring topologies.
 - **In-Shared-Memory FWHT**: 7-stage unrolled Fast Walsh-Hadamard Transform running inside warp-shuffle registers and L1 Shared Memory without global VRAM accesses.
 - **Branchless Ternary GEMV**: `__dp4a` hardware integer dot-product lowering with group-128 FP16 scaling.
 - **NVFP4 Tensor Cores**: Support for Blackwell 4-bit floating-point (E2M1) format.
+- **CUDA Graphs (`CudaGraphManager`)**: Sub-microsecond forward decode kernel dispatch via captured and replayed execution graphs.
 - **P2P NVLink DMA**: Direct peer-to-peer memory transfers via `cudaMemcpyPeerAsync`.
 
 ---
 
-## 2. AMD ROCm Backend (`oxide-backend-rocm`)
+## 2. AMD ROCm & APU Backend (`oxide-backend-rocm`)
 
-- **Target Architectures**: Instinct MI350X / MI355X (CDNA4), Instinct MI300X / MI325X (CDNA3), Radeon RX 7900 XTX / RX 7900 XT (RDNA3), Ryzen AI Max+ 395 / Ryzen AI 9 HX 370 (Strix Halo / Strix Point APU with AIE2 NPU).
+- **Target Architectures**: Instinct MI350X / MI355X (CDNA4), Instinct MI300X / MI325X (CDNA3), Radeon RX 7900 XTX / RX 7900 XT (RDNA3), Ryzen 7000/8000/9000 & Ryzen AI 300 / Strix Point / Strix Halo APUs.
+- **Tri-Compute APU Co-Processing (`DeviceRole::Cpu` + `DeviceRole::Igpu` + `DeviceRole::Npu`)**:
+  - Unified coherent DDR5 / LPDDR5X memory partitioning with zero PCIe transfer penalties.
+  - Tripartite layer distribution: NPU handles dense GEMM/MLP layers, RDNA iGPU computes multi-head attention projections, and Zen CPU executes AVX2/AVX-512 prefill and head sampling.
+  - Direct CLI support via `--backend apu` and `--backend cpu-igpu`.
 - **Matrix Core MFMA**: High-throughput Matrix Fused Multiply-Add instructions.
 - **APU Zero-Copy Unified Memory**: Direct CPU/GPU memory sharing on AMD APUs without PCIe transfer overhead.
 - **HSA Signal Polling**: Asynchronous queue doorbell submission with low-overhead event completion querying.

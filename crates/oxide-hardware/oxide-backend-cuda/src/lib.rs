@@ -24,6 +24,7 @@ pub mod nccl;
 
 pub use arch::KernelExecutionPlan;
 pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
+pub use nccl::{CudaDeviceClusterArray, NcclCommunicator};
 
 use oxide_core::error::Result;
 use oxide_core::hardware::GpuDeviceProfile;

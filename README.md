@@ -85,13 +85,14 @@ To support loading any model dynamically at runtime without requiring binary rec
 `crates/oxide-engine/src/tensor_split.rs` and `crates/oxide-engine/src/hybrid.rs`:
 
 - **Heterogeneous Tensor Splitting**: Split model tensors across any combination of accelerators:
-  - NVIDIA GPUs (CUDA)
-  - AMD GPUs (ROCm)
-  - Apple Silicon (Metal)
+  - NVIDIA GPUs (CUDA: 1 to 16 GPUs with NVLink mesh / PCIe AllReduce)
+  - AMD APUs (Tri-compute CPU Zen + iGPU RDNA + NPU XDNA over unified DDR5)
+  - AMD GPUs (ROCm / CDNA / RDNA)
+  - Apple Silicon (Metal UMA)
   - Intel NPUs / Arc GPUs (Level-Zero)
   - Google Cloud TPUs (v4/v5)
   - Host CPU NUMA nodes
-- **All-Reduce Collective**: Ring all-reduce and host-synchronized sum aggregation across heterogeneous devices.
+- **All-Reduce Collective**: Ring all-reduce, NCCL communicator primitives, and host-synchronized sum aggregation across heterogeneous devices.
 - **CPU+GPU Hybrid Inference**: Automatic layer partitioning for running models that exceed single-GPU VRAM capacity.
 
 ---
@@ -128,15 +129,15 @@ To support loading any model dynamically at runtime without requiring binary rec
 
 | Hardware Family | Backend Crate | Key Acceleration Features |
 | :--- | :--- | :--- |
-| **NVIDIA CUDA** | `oxide-backend-cuda` | In-SMem FWHT butterflies, `__dp4a` ternary dot products, NVFP4 tensor cores. |
-| **AMD ROCm** | `oxide-backend-rocm` | Matrix Core MFMA GEMV, unified memory direct zero-copy, AIE2 NPU offloading. |
+| **NVIDIA CUDA** | `oxide-backend-cuda` | In-SMem FWHT butterflies, `__dp4a` ternary dot products, NVFP4 tensor cores, **1 to 16 GPU Clustered Arrays**, NCCL AllReduce. |
+| **AMD ROCm & APU** | `oxide-backend-rocm` | Matrix Core MFMA GEMV, unified memory direct zero-copy, **Tri-Compute APU (CPU + iGPU + XDNA NPU)**. |
 | **Apple Silicon** | `oxide-backend-metal` | Metal Shading Language threadgroup memory, SIMD-group intrinsics. |
 | **Google TPU** | `oxide-backend-tpu` | ICI inter-chip AllReduce, Systolic Array Matrix Units (MXU). |
 | **Intel Arc & Xeon** | `oxide-backend-intel` | XMX Matrix Engines, AMX Advanced Matrix Extensions (TMM). |
 | **Qualcomm Snapdragon** | `oxide-backend-qualcomm` | Hexagon Tensor Processor (HTP) NPU (45 TOPS), FastRPC DMA buffers. |
 | **Rockchip RKNN** | `oxide-backend-rknn` | Tri-core NPU (6.0 TOPS INT8 / 16-bit FP), DMA-BUF sharing. |
 | **Raspberry Pi & Hailo** | `oxide-backend-hailo` | Hailo-8 Dataflow Architecture, PCIe DMA ring buffers. |
-| **CPU SIMD** | `oxide-backend-cpu` | Branchless `vpdpbusd` ternary GEMV, AVX-512 & ARM Neon. |
+| **CPU SIMD** | `oxide-backend-cpu` | Branchless `vpdpbusd` ternary GEMV, AVX2 FMA, AVX-512 & ARM Neon. |
 
 ---
 

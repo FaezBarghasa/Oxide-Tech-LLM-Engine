@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-10-06
+
+### Added
+
+#### Clustered CUDA Scaling (1 to 16 NVIDIA GPUs) & NCCL Collectives (`crates/oxide-hardware/oxide-backend-cuda/`)
+- **`CudaDeviceClusterArray`**: Scalable cluster management supporting from a single NVIDIA GPU up to an array of 16 GPUs (`1..=16`).
+- **Non-blocking NCCL Primitives**:
+  - `all_reduce_f32`: In-kernel peer-to-peer collective reduction over NVLink / PCIe.
+  - `all_gather_f32`: Non-blocking activation gathering across GPU ranks.
+  - `all_reduce_slice`: In-place host/device staging slice reduction.
+- **Pipeline Parallelism Partitioning (`layer_partition_for_gpu`)**: Remainder-aware layer slicing across 1 to 16 CUDA GPUs.
+- **Tensor Parallelism Reduction (`execute_tensor_parallel_allreduce`)**: Zero-copy vector and tensor slice accumulation.
+- **CUDA Graph Replay (`CudaGraphManager`)**: Sub-microsecond forward decode launch with zero-driver-overhead execution.
+
+#### AMD APU Tri-Compute Co-Processing (`DeviceRole::Cpu` + `DeviceRole::Igpu` + `DeviceRole::Npu`)
+- **Coherent Tripartite Partitioning (`crates/oxide-engine/src/hybrid.rs`)**:
+  - Leverages unified physical DDR5/LPDDR5X memory without PCIe interconnect stalls.
+  - Layer distribution: ~30% NPU (dense systolic GEMM/MLP), ~35% RDNA iGPU (attention projections), ~35% Zen CPU (AVX2/AVX-512 prefill and token sampling).
+- **CLI & Protocol Integration (`crates/oxide-cli/`)**: Added `--backend apu` and `--backend cpu-igpu` arguments.
+
 ## [0.3.0] - 2026-10-05
 
 ### Added
