@@ -449,9 +449,17 @@ fn run_chat_session(
         print!("Assistant: ");
         let _ = std::io::Write::flush(&mut std::io::stdout());
 
+        let t_start = std::time::Instant::now();
+        let mut ttft = None;
+        let mut gen_count = 0usize;
+
         for _ in 0..64 {
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
+            if ttft.is_none() {
+                ttft = Some(t_start.elapsed());
+            }
+            gen_count += 1;
             cur_token = step_res.sampled_token;
             let text = tokenizer.decode_token(cur_token);
             print!("{text}");
@@ -460,7 +468,25 @@ fn run_chat_session(
                 break;
             }
         }
+        let elapsed = t_start.elapsed();
         println!();
+        if let Some(first_tok_time) = ttft {
+            let tps = if elapsed.as_secs_f64() > 0.0 {
+                gen_count as f64 / elapsed.as_secs_f64()
+            } else {
+                0.0
+            };
+            println!(
+                "--------------------------------------------------\n\
+                 [Benchmark Metrics]\n\
+                 Generated Tokens : {}\n\
+                 Total Time       : {:.2?}\n\
+                 TTFT             : {:.2?}\n\
+                 Throughput       : {:.2} tokens/sec\n\
+                 --------------------------------------------------",
+                gen_count, elapsed, first_tok_time, tps
+            );
+        }
         return Ok(());
     }
 

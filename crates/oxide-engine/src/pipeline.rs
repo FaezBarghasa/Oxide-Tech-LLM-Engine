@@ -15,7 +15,9 @@
     clippy::return_self_not_must_use,
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::cast_precision_loss
 )]
 
 use crate::engine::OxideEngine;

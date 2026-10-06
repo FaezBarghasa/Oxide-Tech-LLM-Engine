@@ -2237,8 +2237,9 @@ impl GpuDeviceProfile {
                     let mut model_name = String::new();
                     for line in cpuinfo.lines() {
                         if line.starts_with("model name") {
-                            if let Some((_, val)) = line.split_once(':') {
-                                model_name = val.trim().to_string();
+                            let val = line.split_once(':').map_or("", |(_, v)| v.trim());
+                            if !val.is_empty() {
+                                model_name = val.to_string();
                                 break;
                             }
                         }
