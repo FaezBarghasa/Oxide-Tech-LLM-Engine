@@ -281,7 +281,7 @@ mod tests {
                 assert_eq!(*start_pos, 0);
                 assert!(!is_last_chunk);
             }
-            _ => panic!("Expected PrefillChunk"),
+            ChunkedBatchItem::DecodeStep { .. } => panic!("Expected PrefillChunk"),
         }
 
         // Step 2: Chunk 64..128
@@ -298,7 +298,7 @@ mod tests {
                 assert_eq!(token_chunk.len(), 64);
                 assert!(!is_last_chunk);
             }
-            _ => panic!("Expected PrefillChunk"),
+            ChunkedBatchItem::DecodeStep { .. } => panic!("Expected PrefillChunk"),
         }
 
         // Step 3: Chunk 128..150 (final prefill chunk)
@@ -315,7 +315,7 @@ mod tests {
                 assert_eq!(token_chunk.len(), 22);
                 assert!(is_last_chunk);
             }
-            _ => panic!("Expected PrefillChunk"),
+            ChunkedBatchItem::DecodeStep { .. } => panic!("Expected PrefillChunk"),
         }
 
         // Step 4: Now transitioned to DecodeStep!
@@ -331,7 +331,7 @@ mod tests {
                 assert_eq!(*token, 150);
                 assert_eq!(*pos, 150);
             }
-            _ => panic!("Expected DecodeStep"),
+            ChunkedBatchItem::PrefillChunk { .. } => panic!("Expected DecodeStep"),
         }
     }
 }

@@ -93,7 +93,7 @@ fn test_specialized_pipeline_llama3_dense_execution() {
         model,
         kv_cache,
         seq_positions: std::collections::HashMap::new(),
-        scratch,
+        scratch: Box::new(scratch),
     };
 
     let cmd = StepCommand::new(101, 42, 0, false);
