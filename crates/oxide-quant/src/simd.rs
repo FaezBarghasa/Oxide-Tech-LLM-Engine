@@ -147,8 +147,8 @@ unsafe fn dot_f32_avx(a: &[f32], b: &[f32]) -> f32 {
         let mut buf0 = [0.0f32; 8];
         _mm256_storeu_ps(buf0.as_mut_ptr(), sum0);
 
-        let mut total = (buf0[0] + buf0[1] + buf0[2] + buf0[3])
-            + (buf0[4] + buf0[5] + buf0[6] + buf0[7]);
+        let mut total =
+            (buf0[0] + buf0[1] + buf0[2] + buf0[3]) + (buf0[4] + buf0[5] + buf0[6] + buf0[7]);
 
         let rem_start = chunks * 8;
         for i in rem_start..len {
@@ -252,7 +252,7 @@ fn dot_q8_0_portable(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
 #[target_feature(enable = "avx512f")]
 unsafe fn dot_q8_0_avx512(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
     use core::arch::x86_64::{
-        _mm256_loadu_si256, _mm512_cvtepi32_ps, _mm512_cvtepi8_epi32, _mm512_fmadd_ps,
+        _mm256_loadu_si256, _mm512_cvtepi8_epi32, _mm512_cvtepi32_ps, _mm512_fmadd_ps,
         _mm512_loadu_ps, _mm512_setzero_ps, _mm512_storeu_ps,
     };
 
@@ -428,7 +428,7 @@ fn dot_q4_0_portable(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
 unsafe fn dot_q4_0_avx512(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
     use core::arch::x86_64::{
         _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm_sub_epi8,
-        _mm512_cvtepi32_ps, _mm512_cvtepi8_epi32, _mm512_fmadd_ps, _mm512_loadu_ps,
+        _mm512_cvtepi8_epi32, _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps,
         _mm512_setzero_ps, _mm512_storeu_ps,
     };
 
@@ -567,7 +567,7 @@ fn dot_q4_k_portable(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32
 unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     use core::arch::x86_64::{
         _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm512_add_ps,
-        _mm512_cvtepi32_ps, _mm512_cvtepi8_epi32, _mm512_fmadd_ps, _mm512_loadu_ps,
+        _mm512_cvtepi8_epi32, _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps,
         _mm512_setzero_ps, _mm512_storeu_ps,
     };
 
@@ -618,8 +618,8 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
 unsafe fn dot_q4_k_avx2(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     use core::arch::x86_64::{
         _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm_srli_si128,
-        _mm256_add_ps, _mm256_cvtepi32_ps, _mm256_cvtepi8_epi32, _mm256_fmadd_ps,
-        _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+        _mm256_add_ps, _mm256_cvtepi8_epi32, _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_ps,
+        _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
     // SAFETY: Verified AVX2 and FMA support and valid slices.
@@ -919,4 +919,3 @@ mod tests {
         println!("Host AMX support detected: {supported}");
     }
 }
-

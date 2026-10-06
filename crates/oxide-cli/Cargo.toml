@@ -9,6 +9,10 @@ license.workspace = true
 name = "oxide-engine"
 path = "src/main.rs"
 
+[[bin]]
+name = "oxide-quantize"
+path = "src/bin/oxide_quantize.rs"
+
 [lib]
 path = "src/lib.rs"
 
