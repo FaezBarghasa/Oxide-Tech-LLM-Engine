@@ -205,7 +205,12 @@ oxide server --serve 127.0.0.1:8080 -m ./models/deepseek-r1.gguf --backend cuda 
 # or via top-level flags:
 oxide --serve 127.0.0.1:8080 -m llama-3-8b.gguf -ngl 33
 
-# 4. Multi-modal image generation / vision
+# 4. Automated multi-silicon real-hardware benchmark
+oxide bench --tokens 2000 --warmup 100
+# or for a custom model:
+oxide bench -m llama3 --tokens 1000 --warmup 50
+
+# 5. Multi-modal image generation / vision
 oxide img --model diffusion --prompt "A cybernetic rustacean on Mars"
 ```
 

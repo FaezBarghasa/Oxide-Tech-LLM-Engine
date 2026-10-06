@@ -114,6 +114,10 @@ pub enum Commands {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct BenchArgs {
+    /// Model name or path to GGUF/SafeTensors file to benchmark (defaults to llama3)
+    #[arg(short = 'm', long, default_value = "llama3")]
+    pub model: String,
+
     /// Number of tokens to decode per benchmark run
     #[arg(long, default_value_t = 1000)]
     pub tokens: usize,
@@ -370,7 +374,9 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             );
             Ok(())
         }
-        Some(Commands::Bench(bench)) => run_all_hardware_benchmarks(bench.tokens, bench.warmup),
+        Some(Commands::Bench(bench)) => {
+            run_all_hardware_benchmarks(&bench.model, bench.tokens, bench.warmup)
+        }
         Some(Commands::Server(srv)) => {
             let addr: SocketAddr = format!("{}:{}", srv.host, srv.port).parse()?;
             run_server_with_options(
@@ -729,6 +735,7 @@ async fn run_server_with_options(
 /// Computes real latency, decode tokens/sec, and compares against vLLM, llama.cpp, and SGLang.
 #[allow(clippy::cast_precision_loss)]
 pub fn run_all_hardware_benchmarks(
+    model: &str,
     tokens: usize,
     warmup: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -762,7 +769,7 @@ pub fn run_all_hardware_benchmarks(
         "║ Host dGPU: NVIDIA GeForce RTX 4060 Laptop GPU (8GB VRAM, sm_89 Ada Lovelace)          ║"
     );
     println!(
-        "║ Workload:  Decode {tokens} tokens (Warmup: {warmup} iterations)                       ║"
+        "║ Workload:  Model: {model} | Decode {tokens} tokens (Warmup: {warmup} iterations)                       ║"
     );
     println!(
         "╚═══════════════════════════════════════════════════════════════════════════════════════╝\n"
@@ -819,7 +826,7 @@ pub fn run_all_hardware_benchmarks(
 
     for target in &targets {
         let mut pipeline = match SpecializedPipeline::from_model_or_path(
-            "llama3",
+            model,
             target.backend_name,
             target.target_device,
             1,

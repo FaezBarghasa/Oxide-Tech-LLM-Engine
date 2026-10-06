@@ -19,16 +19,17 @@ oxide-engine --serve 127.0.0.1:8080 -m llama-3-8b.gguf -ngl 33
 - **Subcommands**:
   - `server`: Launch the HTTP/2 OpenAI-compatible API server.
   - `chat`: Launch the interactive terminal chat session.
+  - `bench`: Execute automated hardware benchmarks across all local host silicon and display comparative matrix vs vLLM, llama.cpp, and SGLang.
   - `img`: Execute multi-modal vision-language or diffusion tasks.
 - **Model & Offloading**:
-  - `-m, --model <MODEL_OR_PATH>`: Target model identifier or direct file path to `.gguf` / `.safetensors`. Default: `bonsai2`.
+  - `-m, --model <MODEL_OR_PATH>`: Target model identifier or direct file path to `.gguf` / `.safetensors`. Default: `llama3`.
   - `-ngl, --n-gpu-layers <N>`: Number of transformer layers to offload to GPU accelerator VRAM.
   - `--models-dir <DIR>`: Directory path to scan for dynamic model loading. Default: `./models`.
   - `-p, --prompt <PROMPT>`: Single-shot prompt for direct generation.
   - `-i, --interactive`: Enter interactive conversational REPL with in-session model hot-swapping.
 - **Hardware & Backend**:
-  - `--backend <BACKEND>`: Hardware backend (`cuda`, `rocm`, `tpu`, `intel`, `metal`, `snapdragon`, `rknn`, `hailo`, `cpu`). Default: `cuda`.
-  - `--gpu <PROFILE>`: Target hardware profile string (e.g., `"RTX 4090"`, `"H100"`, `"Arc B580"`, `"Apple M4 Max"`, `"Orange Pi 6 Plus"`, `"RPi5 with AI HAT+ 2"`).
+  - `--backend <BACKEND>`: Hardware backend (`cuda`, `rocm`, `tpu`, `intel`, `metal`, `snapdragon`, `rknn`, `hailo`, `cpu`, `cpu_igpu`, `apu`, `epyc`, `arm_npu`, `hybrid`). Default: `cuda`.
+  - `--gpu <PROFILE>`: Target hardware profile string (e.g., `"RTX 4090"`, `"H100"`, `"Arc B580"`, `"Apple M4 Max"`, `"Orange Pi 6 Plus"`, `"RPi5 with AI HAT+ 2"`, `"AMD Ryzen 7 7745HX"`, `"AMD Radeon 610M"`).
 - **Server & Serving Capacity**:
   - `--serve <ADDR>`: Socket address to bind the HTTP/2 server. Default: `127.0.0.1:8080`.
   - `--max-slots <N>`: Maximum concurrent continuous batch decoding slots. Default: `64`.
@@ -279,4 +280,29 @@ The user can hot-swap models directly inside the active REPL session without res
 | `/info` | Displays architecture parameters and quant of loaded model | `/info` |
 | `/help` | Shows interactive command reference | `/help` |
 | `/exit` or `/quit` | Terminates the interactive session | `/exit` |
+
+---
+
+## 5. Automated Hardware Benchmarks & Performance Verification
+
+`Oxide-Tech-LLM-Engine` provides built-in automated hardware benchmarking across all local compute engines via the `bench` subcommand:
+
+```bash
+# Run 1000 tokens benchmark with 50 warmup iterations
+oxide-engine bench --tokens 1000 --warmup 50
+
+# Benchmark a specific model
+oxide-engine bench -m llama3 --tokens 2000 --warmup 100
+```
+
+### Benchmark Metrics Matrix
+The benchmark measures real microsecond Time-To-First-Token (TTFT) and decode tokens/sec against known industrial baselines (`llama.cpp`, `vLLM`, `SGLang`):
+
+| Compute Target | Silicon / Bus Architecture | Primary Execution Kernel | Comparative Baseline |
+| :--- | :--- | :--- | :--- |
+| **Raw CPU** | AMD Zen 4 / AVX-512 VNNI / AVX2 FMA | 8-way unrolled parallel FMA dot products | vs llama.cpp AVX2/AVX-512 |
+| **Raw iGPU** | AMD RDNA 2 / Unified Coherent DDR5 | Heterogeneous compute units over zero-copy memory | vs llama.cpp Vulkan/OpenCL |
+| **Raw dGPU** | NVIDIA Ada Lovelace / FP8 / Tensor Cores | `sm_89` CUDA Graphs & Tensor Core WMMA kernels | vs vLLM & SGLang FlashInfer |
+| **Hybrid Collaborative** | CPU + AMD iGPU + NVIDIA dGPU | Multi-vendor pipelined layer partitioning | vs homogeneous GPU runtimes |
+
 
