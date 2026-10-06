@@ -78,7 +78,7 @@ pub enum SpecializedPipeline {
         model: oxide_models::Llama3Model,
         kv_cache: Vec<oxide_models::llama3::Llama3KvCacheLayer>,
         seq_positions: std::collections::HashMap<u64, usize>,
-        scratch: oxide_models::llama3::Llama3ScratchBuffers,
+        scratch: Box<oxide_models::llama3::Llama3ScratchBuffers>,
     },
 
     // Multi-Modal - Latent Diffusion, Audio Serving & Quantitative Trading
@@ -214,7 +214,7 @@ impl SpecializedPipeline {
             let kv_cache = (0..model.config.num_layers)
                 .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
                 .collect();
-            let scratch = model.create_scratch();
+            let scratch = Box::new(model.create_scratch());
             return Ok(Self::Llama3Dense {
                 model,
                 kv_cache,
@@ -272,7 +272,7 @@ impl SpecializedPipeline {
             .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
             .collect();
 
-        let scratch = model.create_scratch();
+        let scratch = Box::new(model.create_scratch());
         Ok(Self::Llama3Dense {
             model,
             kv_cache,

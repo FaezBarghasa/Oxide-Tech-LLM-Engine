@@ -32,7 +32,7 @@ impl MockEngineContext {
             model,
             kv_cache,
             seq_positions: std::collections::HashMap::new(),
-            scratch,
+            scratch: Box::new(scratch),
         };
 
         let kv_cache = Arc::new(Mutex::new(HierarchicalKvCache::new(128, 512, 1024)));
