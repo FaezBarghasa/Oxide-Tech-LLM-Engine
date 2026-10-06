@@ -89,9 +89,47 @@
 
 ## 9. Vectorized CPU Backend (`oxide-backend-cpu`)
 
-- **x86_64 AVX-512**:
+- **x86_64 AVX-512 & AVX2**:
   - `vpdpbusd` integer vector dot products for branchless ternary matrix-vector multiplication.
-  - AVX-512 FMA parallel float conversion.
+  - AVX2 FMA & AVX-512 FMA parallel float conversion.
 - **ARM Neon / SVE2**:
   - `vdotq_s32` vector dot products on ARM64 processors.
 - **Cacheline Isolation**: Thread context structures aligned to 64 bytes (`#[repr(C, align(64))]`) to prevent L1/L2 cacheline bouncing across CPU cores.
+
+---
+
+## 10. AMD EPYC Server CPU High-Core Substrate (8 to 128 Cores)
+
+- **Target Processors**: AMD EPYC 9004 / 9005 series (e.g., EPYC 9754 128-core, 9654 96-core, 9554 64-core, 9354 32-core, 9124 16-core, 9004 8-core).
+- **NUMA & Memory Bandwidth**:
+  - 12-channel DDR5-4800 / DDR5-6000 memory controllers delivering up to 460.8 GB/s sustained memory bandwidth per socket.
+  - Dual-socket (2S) and single-socket (1S) NUMA domain isolation (`HardwareFormFactor::AmdEpycServerSocket`).
+- **SIMD Vector Engine**: AVX-512 dual 256/512-bit VNNI execution (`TensorCoreGeneration::AmdAvx512Vnni`) for fast INT8/BF16/FP8 matrix-vector operations.
+- **Infinity Fabric Interconnect**: 32–64 Gbps coherent interconnect for inter-socket tensor all-reduce and NUMA paging.
+
+---
+
+## 11. Heterogeneous Hardware Combination Matrix
+
+`Oxide-Tech-LLM-Engine` provides native topology construction and pipeline orchestration for arbitrary combinations of silicon:
+
+| Hardware Combination | Topology Constructor | Execution Mechanism |
+| :--- | :--- | :--- |
+| **CPU + NVIDIA GPUs** | `multi_vendor_gpu_partition(L, N, 0, 0, C)` | CUDA Tensor Cores + CPU SIMD offloading |
+| **CPU + AMD GPUs** | `multi_vendor_gpu_partition(L, 0, A, 0, C)` | ROCm MFMA Matrix Cores + CPU SIMD offloading |
+| **CPU + Intel GPUs** | `multi_vendor_gpu_partition(L, 0, 0, I, C)` | Intel Xe2/Xe1 XMX matrix engines + CPU SIMD |
+| **CPU + Google TPU** | `HybridDeviceTopology` (`DeviceRole::Tpu`) | Cloud/Edge TPU systolic MXU + Host prefill |
+| **CPU + NPU** | `HybridDeviceTopology` (`DeviceRole::Npu`) | Intel NPU / AMD XDNA tile systolic array |
+| **CPU + NVIDIA + AMD + Intel** | `multi_vendor_gpu_partition(L, N, A, I, C)` | Triple-vendor dGPU array with AllReduce reduction |
+| **CPU + AMD + Intel** | `multi_vendor_gpu_partition(L, 0, A, I, C)` | ROCm + Xe multi-vendor dGPU co-processing |
+| **CPU + NVIDIA + Intel** | `multi_vendor_gpu_partition(L, N, 0, I, C)` | CUDA + Xe multi-vendor dGPU co-processing |
+| **CPU + NVIDIA + AMD** | `multi_vendor_gpu_partition(L, N, A, 0, C)` | CUDA + ROCm cross-vendor dGPU co-processing |
+| **CPU + iGPU + NPU (APU)** | `amd_apu_full_partition(L, true)` | Coherent 3-way unified DDR5 zero-copy memory |
+| **CPU + iGPU + TPU** | `HybridDeviceTopology` (`Igpu` + `Tpu` + `Cpu`) | Integrated GPU attention + TPU systolic GEMM |
+| **CPU + iGPU + NPU + NVIDIA** | `HybridDeviceTopology` (`Igpu` + `Npu` + `NvidiaGpu`) | APU local layers + discrete NVIDIA CUDA offload |
+| **CPU + iGPU + NPU + AMD dGPU**| `HybridDeviceTopology` (`Igpu` + `Npu` + `AmdGpu`) | APU local layers + discrete AMD Radeon/Instinct |
+| **ARM CPU + Integrated NPU + HAT** | `arm_npu_hat_partition(L, true)` | SoC NPU (Apple/RKNN/HTP) + PCIe/USB NPU HAT (Hailo/Coral) |
+| **ARM CPU + Integrated NPU** | `arm_npu_hat_partition(L, false)` | Direct ARM SoC NPU + Neon SIMD offloading |
+| **AMD EPYC (8 to 128 cores)** | `epyc_server_partition(L, sockets, &[])` | 12-channel DDR5 multi-socket AVX-512 VNNI scaling |
+| **AMD EPYC + Any GPUs** | `epyc_server_partition(L, sockets, gpus)` | High-memory bandwidth server CPU + arbitrary dGPUs |
+
