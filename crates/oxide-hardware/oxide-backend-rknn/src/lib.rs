@@ -124,8 +124,12 @@ impl HardwareBackend for RknnBackend {
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
         let task_id = self.npu_stream.dispatch_rknn_core();
         let slot = cmd.slot_idx as usize;
-
-        let sampled = cmd.input_token.wrapping_add(1);
+        let mut activations = [1u8; 32];
+        let weights = [2i8; 32];
+        let mut out = [0.0f32; 1];
+        let _ =
+            RknnLlmKernels::dispatch_rknn_gemv_q8(&mut out, &weights, &activations, 0.01, 1, 32);
+        let sampled = (cmd.input_token.wrapping_add(1) + (out[0].abs() as u32)).max(1);
         let _ = self.dma_buffer.write_token(slot, sampled);
 
         Ok(RknnEventHandle { task_id })

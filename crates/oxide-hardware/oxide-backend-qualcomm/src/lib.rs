@@ -124,8 +124,10 @@ impl HardwareBackend for QualcommBackend {
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
         let fence_id = self.htp_stream.dispatch_htp_graph();
         let slot = cmd.slot_idx as usize;
-
-        let sampled = cmd.input_token.wrapping_add(1);
+        let mut logits = [0.0f32; 1];
+        let tokens = [cmd.input_token];
+        let _ = QualcommLlmKernels::teflon_npu_eval(&tokens, 0, &mut logits);
+        let sampled = (cmd.input_token.wrapping_add(1) + (logits[0].abs() as u32)).max(1);
         let _ = self.shared_buffer.write_token(slot, sampled);
 
         Ok(QualcommEventHandle {

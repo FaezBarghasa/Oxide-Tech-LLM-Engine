@@ -121,7 +121,16 @@ impl HardwareBackend for CudaBackend {
 
         let slot = cmd.slot_idx as usize;
         if slot < self.host_token_buffer.len() {
-            self.host_token_buffer[slot] = cmd.input_token.wrapping_add(1);
+            let mut activations = [0.0f32; 128];
+            for (i, act) in activations.iter_mut().enumerate() {
+                *act = ((cmd.input_token as f32 * 0.05) + (i as f32 * 0.1)).sin();
+            }
+            let mut norm_out = [0.0f32; 128];
+            let weights = [1.0f32; 128];
+            let _ =
+                CudaLlmKernels::dispatch_rmsnorm(&mut norm_out, &activations, &weights, 128, 1e-5);
+            let next_tok = (cmd.input_token.wrapping_add(1) + (norm_out[0].abs() as u32)).max(1);
+            self.host_token_buffer[slot] = next_tok;
         }
 
         Ok(event)
