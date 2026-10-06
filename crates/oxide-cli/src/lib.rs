@@ -90,7 +90,6 @@ impl BackendArg {
     }
 }
 
-
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum Commands {
     /// Interactive chat or single-prompt generation
@@ -471,20 +470,20 @@ fn run_chat_session(
         let elapsed = t_start.elapsed();
         println!();
         if let Some(first_tok_time) = ttft {
+            let gen_u32 = u32::try_from(gen_count).unwrap_or(u32::MAX);
             let tps = if elapsed.as_secs_f64() > 0.0 {
-                gen_count as f64 / elapsed.as_secs_f64()
+                f64::from(gen_u32) / elapsed.as_secs_f64()
             } else {
                 0.0
             };
             println!(
                 "--------------------------------------------------\n\
                  [Benchmark Metrics]\n\
-                 Generated Tokens : {}\n\
-                 Total Time       : {:.2?}\n\
-                 TTFT             : {:.2?}\n\
-                 Throughput       : {:.2} tokens/sec\n\
-                 --------------------------------------------------",
-                gen_count, elapsed, first_tok_time, tps
+                 Generated Tokens : {gen_count}\n\
+                 Total Time       : {elapsed:.2?}\n\
+                 TTFT             : {first_tok_time:.2?}\n\
+                 Throughput       : {tps:.2} tokens/sec\n\
+                 --------------------------------------------------"
             );
         }
         return Ok(());

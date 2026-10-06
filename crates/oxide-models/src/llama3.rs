@@ -552,7 +552,9 @@ impl Llama3Model {
 
         // 2. Transformer Decoder Layers
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            self.forward_layer(layer_idx, layer, position, kv_cache, scratch, eps, h, q_dim, kv_dim);
+            self.forward_layer(
+                layer_idx, layer, position, kv_cache, scratch, eps, h, q_dim, kv_dim,
+            );
         }
 
         // 3. Final RMSNorm
@@ -731,7 +733,9 @@ impl Llama3Model {
         let end = end_layer.min(self.layers.len());
         for layer_idx in start_layer..end {
             if let Some(layer) = self.layers.get(layer_idx) {
-                self.forward_layer(layer_idx, layer, position, kv_cache, scratch, eps, h, q_dim, kv_dim);
+                self.forward_layer(
+                    layer_idx, layer, position, kv_cache, scratch, eps, h, q_dim, kv_dim,
+                );
             }
         }
     }
