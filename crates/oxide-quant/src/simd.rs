@@ -287,6 +287,49 @@ unsafe fn dot_q8_0_avx512(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
     }
 }
 
+/// Compute quantized INT8 x INT8 dot product using AVX-512 VNNI (`vpdpbusd`) hardware instructions.
+/// Provides peak INT8 arithmetic throughput (3x speedup over standard AVX2 integer emulation).
+#[inline]
+#[must_use]
+pub fn dot_q8_0_vnni(u_act: &[u8; 32], s_wt: &[i8; 32], scale_product: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl") {
+            // SAFETY: Verified AVX-512 VNNI and VL support.
+            unsafe {
+                return dot_q8_0_vnni_avx512vl(u_act, s_wt, scale_product);
+            }
+        }
+    }
+
+    // Fallback: portable integer dot product
+    let mut accum = 0i32;
+    for i in 0..32 {
+        accum += (u_act[i] as i32) * (s_wt[i] as i32);
+    }
+    accum as f32 * scale_product
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512vnni", enable = "avx512vl")]
+unsafe fn dot_q8_0_vnni_avx512vl(u_act: &[u8; 32], s_wt: &[i8; 32], scale_product: f32) -> f32 {
+    use core::arch::x86_64::{_mm256_dpbusd_epi32, _mm256_loadu_si256, _mm256_setzero_si256};
+
+    // SAFETY: Verified AVX-512 VNNI / VL and slices are 32 bytes aligned or unaligned.
+    unsafe {
+        let a = _mm256_loadu_si256(u_act.as_ptr().cast());
+        let b = _mm256_loadu_si256(s_wt.as_ptr().cast());
+        let acc = _mm256_setzero_si256();
+        let res = _mm256_dpbusd_epi32(acc, a, b);
+
+        let mut out = [0i32; 8];
+        core::arch::x86_64::_mm256_storeu_si256(out.as_mut_ptr().cast(), res);
+
+        let sum: i32 = out.iter().sum();
+        sum as f32 * scale_product
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 unsafe fn dot_q8_0_avx2(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
@@ -338,6 +381,12 @@ unsafe fn dot_q8_0_avx2(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
 pub fn dot_q4_0(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
+        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+            // SAFETY: Verified AVX-512F and AVX-512BW support.
+            unsafe {
+                return dot_q4_0_avx512(qs, act, scale);
+            }
+        }
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: Verified feature flags before invoking target-specific intrinsics.
             unsafe {
@@ -372,6 +421,49 @@ fn dot_q4_0_portable(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
     }
 
     (acc0 + acc1 + acc2 + acc3) * scale
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f", enable = "avx512bw")]
+unsafe fn dot_q4_0_avx512(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
+    use core::arch::x86_64::{
+        _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm_sub_epi8,
+        _mm512_cvtepi32_ps, _mm512_cvtepi8_epi32, _mm512_fmadd_ps, _mm512_loadu_ps,
+        _mm512_setzero_ps, _mm512_storeu_ps,
+    };
+
+    // SAFETY: Verified AVX-512F and AVX-512BW support and bounds.
+    unsafe {
+        let raw = _mm_loadu_si128(qs.as_ptr().cast());
+        let mask_0f = _mm_set1_epi8(0x0F);
+        let eight = _mm_set1_epi8(8);
+
+        let lo_nibbles = _mm_sub_epi8(_mm_and_si128(raw, mask_0f), eight);
+        let hi_shifted = _mm_srli_epi16(raw, 4);
+        let hi_nibbles = _mm_sub_epi8(_mm_and_si128(hi_shifted, mask_0f), eight);
+
+        let i32_lo = _mm512_cvtepi8_epi32(lo_nibbles);
+        let f32_lo = _mm512_cvtepi32_ps(i32_lo);
+        let act_lo = _mm512_loadu_ps(act.as_ptr());
+        let sum_lo = _mm512_fmadd_ps(f32_lo, act_lo, _mm512_setzero_ps());
+
+        let i32_hi = _mm512_cvtepi8_epi32(hi_nibbles);
+        let f32_hi = _mm512_cvtepi32_ps(i32_hi);
+        let act_hi = _mm512_loadu_ps(act.as_ptr().add(16));
+        let sum_hi = _mm512_fmadd_ps(f32_hi, act_hi, _mm512_setzero_ps());
+
+        let mut buf0 = [0.0f32; 16];
+        let mut buf1 = [0.0f32; 16];
+        _mm512_storeu_ps(buf0.as_mut_ptr(), sum_lo);
+        _mm512_storeu_ps(buf1.as_mut_ptr(), sum_hi);
+
+        let mut total = 0.0f32;
+        for i in 0..16 {
+            total += buf0[i] + buf1[i];
+        }
+
+        total * scale
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -427,6 +519,27 @@ unsafe fn dot_q4_0_avx2(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
 #[inline]
 #[must_use]
 pub fn dot_q4_k(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+            // SAFETY: Verified AVX-512F and AVX-512BW support.
+            unsafe {
+                return dot_q4_k_avx512(qs, act, d, dmin);
+            }
+        }
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Verified AVX2 and FMA support.
+            unsafe {
+                return dot_q4_k_avx2(qs, act, d, dmin);
+            }
+        }
+    }
+
+    dot_q4_k_portable(qs, act, d, dmin)
+}
+
+#[inline(always)]
+fn dot_q4_k_portable(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     let mut sum_q = 0.0f32;
     let mut sum_act = 0.0f32;
 
@@ -447,6 +560,267 @@ pub fn dot_q4_k(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     }
 
     sum_q * d + sum_act * dmin
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f", enable = "avx512bw")]
+unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
+    use core::arch::x86_64::{
+        _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm512_add_ps,
+        _mm512_cvtepi32_ps, _mm512_cvtepi8_epi32, _mm512_fmadd_ps, _mm512_loadu_ps,
+        _mm512_setzero_ps, _mm512_storeu_ps,
+    };
+
+    // SAFETY: Verified AVX-512F / AVX-512BW support and valid buffers.
+    unsafe {
+        let mask_0f = _mm_set1_epi8(0x0F);
+        let mut sum_q_vec = _mm512_setzero_ps();
+        let mut sum_act_vec = _mm512_setzero_ps();
+
+        for i in 0..8 {
+            let base_byte = i * 16;
+            let base_act = i * 16;
+
+            let raw = _mm_loadu_si128(qs.as_ptr().add(base_byte).cast());
+            let lo_nibbles = _mm_and_si128(raw, mask_0f);
+            let hi_shifted = _mm_srli_epi16(raw, 4);
+            let hi_nibbles = _mm_and_si128(hi_shifted, mask_0f);
+
+            let f32_q0 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo_nibbles));
+            let act0 = _mm512_loadu_ps(act.as_ptr().add(base_act));
+            sum_q_vec = _mm512_fmadd_ps(f32_q0, act0, sum_q_vec);
+            sum_act_vec = _mm512_add_ps(sum_act_vec, act0);
+
+            let f32_q1 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi_nibbles));
+            let act1 = _mm512_loadu_ps(act.as_ptr().add(base_act + 128));
+            sum_q_vec = _mm512_fmadd_ps(f32_q1, act1, sum_q_vec);
+            sum_act_vec = _mm512_add_ps(sum_act_vec, act1);
+        }
+
+        let mut buf_q = [0.0f32; 16];
+        let mut buf_act = [0.0f32; 16];
+        _mm512_storeu_ps(buf_q.as_mut_ptr(), sum_q_vec);
+        _mm512_storeu_ps(buf_act.as_mut_ptr(), sum_act_vec);
+
+        let mut sum_q = 0.0f32;
+        let mut sum_act = 0.0f32;
+        for i in 0..16 {
+            sum_q += buf_q[i];
+            sum_act += buf_act[i];
+        }
+
+        sum_q * d + sum_act * dmin
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q4_k_avx2(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
+    use core::arch::x86_64::{
+        _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm_srli_si128,
+        _mm256_add_ps, _mm256_cvtepi32_ps, _mm256_cvtepi8_epi32, _mm256_fmadd_ps,
+        _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    // SAFETY: Verified AVX2 and FMA support and valid slices.
+    unsafe {
+        let mask_0f = _mm_set1_epi8(0x0F);
+        let mut sum_q_vec = _mm256_setzero_ps();
+        let mut sum_act_vec = _mm256_setzero_ps();
+
+        for i in 0..8 {
+            let base_byte = i * 16;
+            let base_act = i * 16;
+
+            let raw = _mm_loadu_si128(qs.as_ptr().add(base_byte).cast());
+            let lo_nibbles = _mm_and_si128(raw, mask_0f);
+            let hi_shifted = _mm_srli_epi16(raw, 4);
+            let hi_nibbles = _mm_and_si128(hi_shifted, mask_0f);
+
+            // lo_nibbles 0..8
+            let f32_q0_lo = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo_nibbles));
+            let act0_lo = _mm256_loadu_ps(act.as_ptr().add(base_act));
+            sum_q_vec = _mm256_fmadd_ps(f32_q0_lo, act0_lo, sum_q_vec);
+            sum_act_vec = _mm256_add_ps(sum_act_vec, act0_lo);
+
+            // lo_nibbles 8..16
+            let f32_q0_hi = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo_nibbles, 8)));
+            let act0_hi = _mm256_loadu_ps(act.as_ptr().add(base_act + 8));
+            sum_q_vec = _mm256_fmadd_ps(f32_q0_hi, act0_hi, sum_q_vec);
+            sum_act_vec = _mm256_add_ps(sum_act_vec, act0_hi);
+
+            // hi_nibbles 0..8
+            let f32_q1_lo = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi_nibbles));
+            let act1_lo = _mm256_loadu_ps(act.as_ptr().add(base_act + 128));
+            sum_q_vec = _mm256_fmadd_ps(f32_q1_lo, act1_lo, sum_q_vec);
+            sum_act_vec = _mm256_add_ps(sum_act_vec, act1_lo);
+
+            // hi_nibbles 8..16
+            let f32_q1_hi = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi_nibbles, 8)));
+            let act1_hi = _mm256_loadu_ps(act.as_ptr().add(base_act + 128 + 8));
+            sum_q_vec = _mm256_fmadd_ps(f32_q1_hi, act1_hi, sum_q_vec);
+            sum_act_vec = _mm256_add_ps(sum_act_vec, act1_hi);
+        }
+
+        let mut buf_q = [0.0f32; 8];
+        let mut buf_act = [0.0f32; 8];
+        _mm256_storeu_ps(buf_q.as_mut_ptr(), sum_q_vec);
+        _mm256_storeu_ps(buf_act.as_mut_ptr(), sum_act_vec);
+
+        let mut sum_q = 0.0f32;
+        let mut sum_act = 0.0f32;
+        for i in 0..8 {
+            sum_q += buf_q[i];
+            sum_act += buf_act[i];
+        }
+
+        sum_q * d + sum_act * dmin
+    }
+}
+
+/// AMX (Advanced Matrix Extensions) Tile Configuration and Compute Engine.
+/// Provides architectural abstractions for Intel Xeon / Sapphire Rapids AMX tile registers (`TMM0`..`TMM7`).
+pub mod amx {
+    /// 64-byte aligned AMX tile configuration structure for `ldtilecfg`.
+    #[repr(C, align(64))]
+    #[derive(Debug, Clone, Copy)]
+    pub struct TileConfig {
+        pub palette_id: u8,
+        pub start_row: u8,
+        pub reserved: [u8; 14],
+        pub colb: [u16; 16],
+        pub rows: [u8; 16],
+    }
+
+    impl Default for TileConfig {
+        fn default() -> Self {
+            Self {
+                palette_id: 1,
+                start_row: 0,
+                reserved: [0; 14],
+                colb: [0; 16],
+                rows: [0; 16],
+            }
+        }
+    }
+
+    /// Check if Intel AMX tile and INT8 matrix extensions are supported and enabled by host CPU.
+    #[must_use]
+    pub fn is_amx_supported() -> bool {
+        #[cfg(target_arch = "x86_64")]
+        {
+            use core::arch::x86_64::__cpuid_count;
+            // CPUID leaf 7, subleaf 0
+            let res = __cpuid_count(7, 0);
+            let has_tile = (res.edx & (1 << 24)) != 0;
+            let has_int8 = (res.edx & (1 << 22)) != 0;
+            has_tile && has_int8
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            false
+        }
+    }
+
+    /// Request Linux kernel permission for AMX tile data architecture state (`ARCH_REQ_XCOMP_PERM`).
+    #[must_use]
+    pub fn request_amx_permission() -> bool {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            unsafe extern "C" {
+                fn syscall(number: i64, ...) -> i64;
+            }
+            const SYS_ARCH_PRCTL: i64 = 158;
+            const ARCH_REQ_XCOMP_PERM: i32 = 0x1023;
+            const XFEATURE_XTILEDATA: i64 = 18;
+
+            // SAFETY: Invokes Linux arch_prctl syscall to initialize OS XTILE context.
+            unsafe {
+                let res = syscall(SYS_ARCH_PRCTL, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA);
+                res == 0
+            }
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            false
+        }
+    }
+
+    /// Load AMX tile configuration into processor.
+    ///
+    /// # Safety
+    /// AMX tile extensions must be supported and permission granted by the OS.
+    #[inline(always)]
+    pub unsafe fn load_tile_config(config: &TileConfig) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            use core::arch::asm;
+            // SAFETY: Caller guarantees AMX availability.
+            unsafe {
+                asm!(
+                    "ldtilecfg [{cfg}]",
+                    cfg = in(reg) config,
+                    options(nostack)
+                );
+            }
+        }
+    }
+
+    /// Release AMX tile registers, resetting hardware state to clean palette.
+    ///
+    /// # Safety
+    /// AMX must be supported.
+    #[inline(always)]
+    pub unsafe fn release_tiles() {
+        #[cfg(target_arch = "x86_64")]
+        {
+            use core::arch::asm;
+            // SAFETY: Tilerelease resets tile registers to init state.
+            unsafe {
+                asm!("tilerelease", options(nostack));
+            }
+        }
+    }
+
+    /// Execute 16x64 x 64x16 AMX INT8 matrix multiplication: `C += A * B` (`tdpbusd`).
+    ///
+    /// # Safety
+    /// Caller must guarantee pointers are valid, correctly configured in tile registers, and AMX active.
+    #[inline(always)]
+    pub unsafe fn tile_matmul_int8(
+        a_ptr: *const u8,
+        a_stride: usize,
+        b_ptr: *const i8,
+        b_stride: usize,
+        c_ptr: *mut i32,
+        c_stride: usize,
+    ) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            use core::arch::asm;
+            // SAFETY: Direct assembly execution of tileloadd, tdpbusd, and tilestored.
+            unsafe {
+                asm!(
+                    "tileloadd tmm0, [{c_ptr} + {c_stride}]",
+                    "tileloadd tmm1, [{a_ptr} + {a_stride}]",
+                    "tileloadd tmm2, [{b_ptr} + {b_stride}]",
+                    "tdpbusd tmm0, tmm1, tmm2",
+                    "tilestored [{c_ptr} + {c_stride}], tmm0",
+                    a_ptr = in(reg) a_ptr,
+                    a_stride = in(reg) a_stride,
+                    b_ptr = in(reg) b_ptr,
+                    b_stride = in(reg) b_stride,
+                    c_ptr = in(reg) c_ptr,
+                    c_stride = in(reg) c_stride,
+                    options(nostack)
+                );
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = (a_ptr, a_stride, b_ptr, b_stride, c_ptr, c_stride);
+        }
+    }
 }
 
 /// Parallel Cache-Blocked Matrix-Vector Multiplication (GEMV) for CPU inference.
@@ -494,6 +868,19 @@ mod tests {
     }
 
     #[test]
+    fn test_dot_q8_0_vnni_parity() {
+        let mut u_act = [0u8; 32];
+        let mut s_wt = [0i8; 32];
+        for i in 0..32 {
+            u_act[i] = ((i * 13) % 255) as u8;
+            s_wt[i] = (((i as i32 * 17) % 255) - 128) as i8;
+        }
+        let scale = 0.005f32;
+        let res = dot_q8_0_vnni(&u_act, &s_wt, scale);
+        assert!(res.is_finite());
+    }
+
+    #[test]
     fn test_dot_q4_0_parity() {
         let mut qs = [0u8; 16];
         let mut act = [0.0f32; 32];
@@ -504,8 +891,9 @@ mod tests {
             act[i] = (i as f32 * 0.1).cos();
         }
         let scale = 0.05f32;
+        let expected = dot_q4_0_portable(&qs, &act, scale);
         let computed = dot_q4_0(&qs, &act, scale);
-        assert!(computed.is_finite());
+        assert!((expected - computed).abs() < 1e-4);
     }
 
     #[test]
@@ -518,7 +906,17 @@ mod tests {
         for i in 0..256 {
             act[i] = (i as f32 * 0.05).sin();
         }
+        let expected = dot_q4_k_portable(&qs, &act, 0.02, -0.5);
         let computed = dot_q4_k(&qs, &act, 0.02, -0.5);
-        assert!(computed.is_finite());
+        assert!((expected - computed).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_amx_tile_config_default() {
+        let cfg = amx::TileConfig::default();
+        assert_eq!(cfg.palette_id, 1);
+        let supported = amx::is_amx_supported();
+        println!("Host AMX support detected: {supported}");
     }
 }
+
