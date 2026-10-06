@@ -19,7 +19,10 @@
     clippy::cast_precision_loss
 )]
 
+pub mod kernels;
 pub mod ternary;
+
+pub use kernels::{CpuLlmKernels, CpuThreadPool};
 
 use oxide_core::error::Result;
 use oxide_core::traits::HardwareBackend;
@@ -35,6 +38,7 @@ pub struct CpuBackend {
     thread_id: usize,
     step_counter: u64,
     token_buffer: Vec<u32>,
+    thread_pool: CpuThreadPool,
 }
 
 impl fmt::Debug for CpuBackend {
@@ -43,6 +47,7 @@ impl fmt::Debug for CpuBackend {
             .field("thread_id", &self.thread_id)
             .field("step_counter", &self.step_counter)
             .field("token_buffer_len", &self.token_buffer.len())
+            .field("hardware_threads", &self.thread_pool.num_threads())
             .finish()
     }
 }
@@ -50,11 +55,20 @@ impl fmt::Debug for CpuBackend {
 impl CpuBackend {
     #[must_use]
     pub fn new(thread_id: usize, max_slots: usize) -> Self {
+        let pool = CpuThreadPool::new();
+        let _ = pool.pin_current_thread(thread_id);
+
         Self {
             thread_id,
             step_counter: 0,
             token_buffer: vec![0; max_slots],
+            thread_pool: pool,
         }
+    }
+
+    #[must_use]
+    pub const fn thread_pool(&self) -> &CpuThreadPool {
+        &self.thread_pool
     }
 }
 
@@ -68,19 +82,11 @@ impl HardwareBackend for CpuBackend {
         };
 
         let slot = cmd.slot_idx as usize;
-        if slot < self.token_buffer.len() {
-            let mut activations = [0.0f32; 128];
-            for (i, act) in activations.iter_mut().enumerate() {
-                *act = ((cmd.input_token as f32 * 0.05) + (i as f32 * 0.1)).sin();
-            }
-            let dummy_blocks = [oxide_quant::ptq1_0::TernaryBlock128 {
-                scale_fp16: 0x3c00, // 1.0 in FP16
-                packed_weights: [0x55; 32],
-            }];
-            let dot = ternary::ternary_gemv_cpu(&activations, &dummy_blocks);
-            let next_tok = (cmd.input_token.wrapping_add(1) + (dot.abs() as u32)).max(1);
-            self.token_buffer[slot] = next_tok;
-        }
+        CpuLlmKernels::dispatch_full_step_decode(
+            cmd.input_token,
+            slot,
+            &mut self.token_buffer,
+        )?;
 
         Ok(event)
     }
