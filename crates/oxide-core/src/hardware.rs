@@ -792,6 +792,42 @@ impl GpuDeviceProfile {
             });
         }
 
+        // AMD Ryzen 7000/9000 Desktop & Mobile Raphael/Granite Ridge iGPU (Zen 4/Zen 5 RDNA 2 gfx1036 2 CUs)
+        if n.contains("raphael")
+            || n.contains("7745hx")
+            || n.contains("7945hx")
+            || n.contains("7600x")
+            || n.contains("7700x")
+            || n.contains("7800x3d")
+            || n.contains("7900x")
+            || n.contains("7950x")
+            || n.contains("9950x")
+            || n.contains("9700x")
+        {
+            return Some(Self {
+                name: name.to_string(),
+                compute_capability: ComputeCapability::GFX_1030_RDNA2,
+                architecture: GpuArchitecture::Rdna2,
+                form_factor: HardwareFormFactor::ApuUnifiedMemoryWithNpu,
+                memory_tech: MemoryTechnology::Ddr5,
+                tensor_core_gen: TensorCoreGeneration::None,
+                sm_count: 2, // 2 CUs (128 Stream Processors)
+                vram_capacity_bytes: 16 * 1024 * 1024 * 1024, // Unified host system memory partition
+                memory_bus_width_bits: 128,
+                memory_bandwidth_gbps: 83.2, // Dual-channel DDR5-5200
+                l2_cache_bytes: 4 * 1024 * 1024,
+                smem_per_sm_bytes: 64 * 1024,
+                smem_per_block_bytes: 64 * 1024,
+                max_threads_per_sm: 1024,
+                supports_tma: false,
+                supports_fp8: false,
+                supports_nvfp4: false,
+                supports_async_copy: true,
+                supports_nvlink: false,
+                nvlink_bandwidth_gbps: 0.0,
+            });
+        }
+
         // ==========================================
         // 4. NVIDIA HARDWARE MATRICES
         // ==========================================
