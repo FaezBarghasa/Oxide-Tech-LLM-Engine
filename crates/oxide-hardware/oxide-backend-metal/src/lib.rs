@@ -19,10 +19,12 @@
 )]
 
 pub mod arch;
+pub mod kernels;
 pub mod mlx;
 
-use arch::MetalExecutionPlan;
-use mlx::{MetalCommandStream, MetalUnifiedBuffer};
+pub use arch::MetalExecutionPlan;
+pub use kernels::MetalLlmKernels;
+pub use mlx::{MetalCommandStream, MetalUnifiedBuffer};
 use oxide_core::error::Result;
 use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
@@ -122,9 +124,11 @@ impl HardwareBackend for MetalBackend {
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
         let cmd_id = self.command_stream.dispatch_simdgroup_encode();
         let slot = cmd.slot_idx as usize;
-
-        let sampled = cmd.input_token.wrapping_add(1);
-        let _ = self.unified_buffer.write_token(slot, sampled);
+        let _ = MetalLlmKernels::dispatch_metal_step_decode(
+            cmd.input_token,
+            slot,
+            &mut self.unified_buffer,
+        )?;
 
         Ok(MetalEventHandle {
             command_buffer_id: cmd_id,
