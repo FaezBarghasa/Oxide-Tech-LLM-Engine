@@ -19,8 +19,7 @@ impl CpuThreadPool {
     /// Initialize CPU thread pool with available hardware threads and core affinity.
     #[must_use]
     pub fn new() -> Self {
-        let available = std::thread::available_parallelism()
-            .map_or(1, std::num::NonZeroUsize::get);
+        let available = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
 
         Self {

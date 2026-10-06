@@ -1,17 +1,20 @@
 # Oxide-Tech-LLM-Engine (`oxide-engine`)
 
 [![Rust 2024](https://img.shields.io/badge/rust-2024%20Edition-orange.svg)](https://www.rust-lang.org)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
+[![Sponsor: GitHub](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-pink.svg)](SPONSORS.md)
+[![Open Collective](https://img.shields.io/badge/sponsor-Open%20Collective-blue.svg)](https://opencollective.com/oxide-tech)
 [![Safety: #![deny(unsafe_op_in_unsafe_fn)]](https://img.shields.io/badge/safety-%23!%5Bdeny(unsafe__op__in__unsafe__fn)%5D-brightgreen.svg)]()
 [![Hardware: Multi-Silicon](https://img.shields.io/badge/hardware-CUDA%20%7C%20ROCm%20%7C%20Metal%20%7C%20TPU%20%7C%20Intel%20%7C%20Snapdragon%20%7C%20RKNN%20%7C%20Hailo%20%7C%20CPU-blueviolet.svg)]()
 
-> **Oxide-Tech-LLM-Engine** is a bare-metal, high-throughput, deterministic inference runtime written in pure Rust. It eliminates the abstraction tax, scheduler jitter, and memory fragmentation inherent in generalized runtime frameworks while saturating heterogeneous silicon across NVIDIA GPUs, AMD CDNA/RDNA, Apple Silicon, Google TPUs, Intel Arc/Xeon, Qualcomm Snapdragon, Rockchip RKNN, and Raspberry Pi 5 AI HAT+ 2.
+> **Oxide-Tech-LLM-Engine** is a bare-metal, high-throughput, deterministic inference runtime written in pure Rust. It eliminates the abstraction tax, scheduler jitter, and memory fragmentation inherent in generalized runtime frameworks while saturating heterogeneous silicon across NVIDIA GPUs, AMD CDNA/RDNA/APUs, Apple Silicon, Google TPUs, Intel Arc/Xeon, Qualcomm Snapdragon, Rockchip RKNN, Raspberry Pi 5 AI HAT+ 2, and high-core AMD EPYC server CPUs (8 to 128 cores with pinned core affinity).
 
 ---
 
 ## Table of Contents
 
 - [Architectural Charter & Immutable Invariants](#architectural-charter--immutable-invariants)
+- [Performance Benchmarks & Comparative Evaluation](docs/benchmarks_and_performance.md)
 - [Dynamic ggml / llama.cpp Execution Architecture](#dynamic-ggml--llamacpp-execution-architecture)
 - [Academic Sampling Algorithms Suite](#academic-sampling-algorithms-suite)
 - [Universal Integer Quantization & GGUF Support](#universal-integer-quantization--gguf-support)
@@ -23,6 +26,7 @@
 - [Model Families, Decision Models & Domain Engines](#model-families-decision-models--domain-engines)
 - [CLI Quickstart & Server API](#cli-quickstart--server-api)
 - [Workspace Crate Structure](#workspace-crate-structure)
+- [Sponsoring & Commercial Partnerships](#sponsoring--commercial-partnerships)
 - [Building & Verification](#building--verification)
 
 ---
@@ -236,6 +240,21 @@ Oxide-Tech-LLM-Engine/
 
 ---
 
+## Sponsoring & Commercial Partnerships
+
+`Oxide-Tech-LLM-Engine` is independently engineered to provide an unencumbered, zero-allocation, multi-heterogeneous inference runtime across x86, ARM, RISC-V, NVIDIA, AMD, Intel, Apple, Qualcomm, Rockchip, Hailo, and Google hardware.
+
+Maintaining native hand-tuned SIMD/assembly and hardware accelerators across 10+ silicon backends requires ongoing hardware access, continuous benchmarking, and bare-metal testing jigs.
+
+### Sponsorship Channels
+
+- **GitHub Sponsors**: [github.com/sponsors/FaezBarghasa](https://github.com/sponsors/FaezBarghasa)
+- **Commercial & Silicon Inquiries**: `faez.barghasa.org@gmail.com`
+
+For complete tier descriptions, governance rules, and custom silicon co-development, refer to [SPONSORS.md](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/SPONSORS.md) and [docs/sponsorship_and_governance.md](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/docs/sponsorship_and_governance.md).
+
+---
+
 ## Building & Verification
 
 ```bash
@@ -250,4 +269,7 @@ oxide-embed index --device auto
 
 ## License
 
-Licensed under Apache-2.0 or MIT at your option.
+This project is licensed under the **Apache License, Version 2.0**.
+
+- See [LICENSE](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/LICENSE) and [LICENSE-APACHE](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/LICENSE-APACHE) for the full license text.
+- See [NOTICE](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/NOTICE) for copyright attribution and third-party notices.
