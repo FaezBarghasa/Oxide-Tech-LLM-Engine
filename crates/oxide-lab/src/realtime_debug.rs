@@ -41,10 +41,24 @@ pub struct ActivationTelemetry {
 /// Anomaly detected during live tensor debugging.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TensorAnomaly {
-    NanDetected { tensor_name: String, count: usize },
-    InfDetected { tensor_name: String, count: usize },
-    GradientExplosion { tensor_name: String, norm: f32, threshold: f32 },
-    GradientVanishing { tensor_name: String, norm: f32, threshold: f32 },
+    NanDetected {
+        tensor_name: String,
+        count: usize,
+    },
+    InfDetected {
+        tensor_name: String,
+        count: usize,
+    },
+    GradientExplosion {
+        tensor_name: String,
+        norm: f32,
+        threshold: f32,
+    },
+    GradientVanishing {
+        tensor_name: String,
+        norm: f32,
+        threshold: f32,
+    },
 }
 
 /// Real-Time Tensor Debugger & Live Observability Probe.
@@ -163,7 +177,11 @@ pub struct DriftDetector;
 impl DriftDetector {
     /// Compares two activation slices and computes numerical divergence metrics.
     #[must_use]
-    pub fn compare(tensor_name: impl Into<String>, golden: &[f32], candidate: &[f32]) -> DriftSummary {
+    pub fn compare(
+        tensor_name: impl Into<String>,
+        golden: &[f32],
+        candidate: &[f32],
+    ) -> DriftSummary {
         let name = tensor_name.into();
         let n = golden.len().min(candidate.len());
         if n == 0 {

@@ -1382,6 +1382,7 @@ dependencies = [
  "oxide-backend-tpu",
  "oxide-core",
  "oxide-engine",
+ "oxide-lab",
  "oxide-models",
  "oxide-quant",
  "oxide-server",

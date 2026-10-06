@@ -71,7 +71,11 @@ pub struct LossComputer;
 impl LossComputer {
     /// Computes numerically-stable Cross-Entropy Loss and analytical softmax gradients.
     #[must_use]
-    pub fn compute_cross_entropy(logits: &[f32], target_token: usize, label_smoothing: f32) -> (f32, Vec<f32>) {
+    pub fn compute_cross_entropy(
+        logits: &[f32],
+        target_token: usize,
+        label_smoothing: f32,
+    ) -> (f32, Vec<f32>) {
         let vocab = logits.len();
         if vocab == 0 {
             return (0.0, Vec::new());
@@ -254,7 +258,8 @@ impl LrScheduler {
             self.min_lr
         } else {
             // Cosine decay
-            let progress = (step - self.warmup_steps) as f32 / (self.total_steps - self.warmup_steps) as f32;
+            let progress =
+                (step - self.warmup_steps) as f32 / (self.total_steps - self.warmup_steps) as f32;
             let cos_decay = f32::midpoint(1.0, (std::f32::consts::PI * progress).cos());
             self.min_lr + (self.base_lr - self.min_lr) * cos_decay
         }
@@ -281,10 +286,20 @@ pub struct LoraFineTuner {
 
 impl LoraFineTuner {
     #[must_use]
-    pub fn new(in_dim: usize, out_dim: usize, rank_r: usize, alpha: f32, config: TrainingConfig) -> Self {
+    pub fn new(
+        in_dim: usize,
+        out_dim: usize,
+        rank_r: usize,
+        alpha: f32,
+        config: TrainingConfig,
+    ) -> Self {
         let size_a = rank_r * in_dim;
         let size_b = out_dim * rank_r;
-        let scheduler = LrScheduler::new(config.learning_rate, config.warmup_steps, config.total_steps);
+        let scheduler = LrScheduler::new(
+            config.learning_rate,
+            config.warmup_steps,
+            config.total_steps,
+        );
         let optimizer_a = AdamWOptimizer::new(size_a, &config);
         let optimizer_b = AdamWOptimizer::new(size_b, &config);
 

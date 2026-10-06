@@ -112,7 +112,9 @@ impl MultiModalLabEngine {
         let mut pixels = vec![0.0f32; total_pixels];
 
         // Seed deterministic latent noise based on prompt hash
-        let hash = prompt.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+        let hash = prompt
+            .bytes()
+            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
         let num_steps = steps.max(1);
 
         // Simulate iterative denoising schedule (Euler / DDIM)
@@ -121,9 +123,17 @@ impl MultiModalLabEngine {
             let sigma = t * 0.8;
 
             for i in 0..total_pixels {
-                let pseudo_noise = (((i as u64).wrapping_add(hash).wrapping_mul(1_103_515_245) % 1000) as f32 / 1000.0) * 2.0 - 1.0;
-                let signal = ((i % width) as f32 / width as f32) * 0.5 + ((i / width) as f32 / height as f32) * 0.5;
-                pixels[i] = (pixels[i] * (1.0 - sigma) + (signal + pseudo_noise * sigma * 0.2) * guidance_scale.clamp(1.0, 15.0) * 0.1)
+                let pseudo_noise = (((i as u64).wrapping_add(hash).wrapping_mul(1_103_515_245)
+                    % 1000) as f32
+                    / 1000.0)
+                    * 2.0
+                    - 1.0;
+                let signal = ((i % width) as f32 / width as f32) * 0.5
+                    + ((i / width) as f32 / height as f32) * 0.5;
+                pixels[i] = (pixels[i] * (1.0 - sigma)
+                    + (signal + pseudo_noise * sigma * 0.2)
+                        * guidance_scale.clamp(1.0, 15.0)
+                        * 0.1)
                     .clamp(0.0, 1.0);
             }
         }
@@ -156,7 +166,9 @@ impl MultiModalLabEngine {
         let total_elements = frame_pixels * frames_count;
         let mut frames = vec![0.0f32; total_elements];
 
-        let hash = prompt.bytes().fold(0u64, |acc, b| acc.wrapping_mul(37).wrapping_add(b as u64));
+        let hash = prompt
+            .bytes()
+            .fold(0u64, |acc, b| acc.wrapping_mul(37).wrapping_add(b as u64));
 
         // Synthesize coherent motion trajectory across frames
         for f in 0..frames_count {
@@ -166,7 +178,8 @@ impl MultiModalLabEngine {
             for p in 0..frame_pixels {
                 let x = (p % width) as f32 / width as f32;
                 let y = ((p / 3) / width) as f32 / height as f32;
-                let motion = (x * 4.0 + time_phase).sin() * 0.5 + (y * 4.0 + time_phase).cos() * 0.5;
+                let motion =
+                    (x * 4.0 + time_phase).sin() * 0.5 + (y * 4.0 + time_phase).cos() * 0.5;
                 let base_noise = (((p as u64).wrapping_add(hash) % 500) as f32 / 500.0) * 0.1;
 
                 frames[frame_offset + p] = (motion * 0.5 + 0.5 + base_noise).clamp(0.0, 1.0);

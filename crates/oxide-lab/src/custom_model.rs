@@ -28,13 +28,31 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayerType {
     Linear,
-    Attention { num_heads: usize, num_kv_heads: usize },
-    SwiGluMlp { intermediate_dim: usize },
-    RmsNorm { eps: u32 }, // Stored as u32 bits or exponent
-    Moe { num_experts: usize, top_k: usize, intermediate_dim: usize },
-    StateSpaceMamba { state_dim: usize },
-    LatentAttentionMla { latent_dim: usize, num_heads: usize },
-    DiffusionBlock { patch_size: usize },
+    Attention {
+        num_heads: usize,
+        num_kv_heads: usize,
+    },
+    SwiGluMlp {
+        intermediate_dim: usize,
+    },
+    RmsNorm {
+        eps: u32,
+    }, // Stored as u32 bits or exponent
+    Moe {
+        num_experts: usize,
+        top_k: usize,
+        intermediate_dim: usize,
+    },
+    StateSpaceMamba {
+        state_dim: usize,
+    },
+    LatentAttentionMla {
+        latent_dim: usize,
+        num_heads: usize,
+    },
+    DiffusionBlock {
+        patch_size: usize,
+    },
 }
 
 /// Specification for a single layer or subnetwork block.
@@ -82,12 +100,16 @@ pub struct CustomModel {
     pub config: ArchitectureConfig,
     pub embedding_weights: Vec<f32>, // [vocab_size, hidden_dim]
     pub layer_weights: Vec<Vec<f32>>,
-    pub head_weights: Vec<f32>,      // [hidden_dim, vocab_size]
+    pub head_weights: Vec<f32>, // [hidden_dim, vocab_size]
 }
 
 impl CustomModel {
     /// Executes forward pass for a sequence of token IDs, producing logits for the final token.
-    pub fn forward<'a>(&self, tokens: &[u32], scratch: &'a mut CustomModelScratch) -> Result<&'a [f32]> {
+    pub fn forward<'a>(
+        &self,
+        tokens: &[u32],
+        scratch: &'a mut CustomModelScratch,
+    ) -> Result<&'a [f32]> {
         if tokens.is_empty() {
             return Err(EngineError::ShapeMismatch);
         }
@@ -98,14 +120,19 @@ impl CustomModel {
         // 1. Embedding lookup
         let emb_offset = (last_token % self.config.vocab_size) * h;
         if emb_offset + h <= self.embedding_weights.len() {
-            scratch.hidden.copy_from_slice(&self.embedding_weights[emb_offset..emb_offset + h]);
+            scratch
+                .hidden
+                .copy_from_slice(&self.embedding_weights[emb_offset..emb_offset + h]);
         } else {
             scratch.hidden.fill(0.0);
         }
 
         // 2. Sequential layer pass
         for (idx, layer) in self.config.layers.iter().enumerate() {
-            let weights = self.layer_weights.get(idx).map_or(&[][..], |v| v.as_slice());
+            let weights = self
+                .layer_weights
+                .get(idx)
+                .map_or(&[][..], |v| v.as_slice());
             match &layer.layer_type {
                 LayerType::Linear => {
                     if !weights.is_empty() && layer.in_features == h && layer.out_features == h {
@@ -155,12 +182,15 @@ impl CustomModel {
                 LayerType::Attention { num_heads, .. } => {
                     let head_dim = h / (*num_heads).max(1);
                     for i in 0..h {
-                        let freq = 1.0 / (10000.0f32.powf(((i % head_dim) * 2) as f32 / head_dim as f32));
+                        let freq =
+                            1.0 / (10000.0f32.powf(((i % head_dim) * 2) as f32 / head_dim as f32));
                         let angle = tokens.len() as f32 * freq;
                         scratch.hidden[i] *= angle.cos();
                     }
                 }
-                LayerType::Moe { num_experts, top_k, .. } => {
+                LayerType::Moe {
+                    num_experts, top_k, ..
+                } => {
                     let top = (*top_k).min(*num_experts).max(1);
                     let scale = 1.0 / (top as f32);
                     for i in 0..h {
@@ -280,11 +310,19 @@ impl CustomModelBuilder {
         self
     }
 
-    pub fn add_attention(mut self, name: impl Into<String>, num_heads: usize, num_kv_heads: usize) -> Self {
+    pub fn add_attention(
+        mut self,
+        name: impl Into<String>,
+        num_heads: usize,
+        num_kv_heads: usize,
+    ) -> Self {
         let h = self.config.hidden_dim;
         self.config.layers.push(LayerSpec {
             name: name.into(),
-            layer_type: LayerType::Attention { num_heads, num_kv_heads },
+            layer_type: LayerType::Attention {
+                num_heads,
+                num_kv_heads,
+            },
             in_features: h,
             out_features: h,
         });
@@ -314,7 +352,11 @@ impl CustomModelBuilder {
         let h = self.config.hidden_dim;
         self.config.layers.push(LayerSpec {
             name: name.into(),
-            layer_type: LayerType::Moe { num_experts, top_k, intermediate_dim },
+            layer_type: LayerType::Moe {
+                num_experts,
+                top_k,
+                intermediate_dim,
+            },
             in_features: h,
             out_features: h,
         });
@@ -343,7 +385,10 @@ impl CustomModelBuilder {
         let h = self.config.hidden_dim;
         self.config.layers.push(LayerSpec {
             name: name.into(),
-            layer_type: LayerType::LatentAttentionMla { latent_dim, num_heads },
+            layer_type: LayerType::LatentAttentionMla {
+                latent_dim,
+                num_heads,
+            },
             in_features: h,
             out_features: h,
         });
@@ -351,7 +396,12 @@ impl CustomModelBuilder {
         self
     }
 
-    pub fn add_linear(mut self, name: impl Into<String>, in_features: usize, out_features: usize) -> Self {
+    pub fn add_linear(
+        mut self,
+        name: impl Into<String>,
+        in_features: usize,
+        out_features: usize,
+    ) -> Self {
         self.config.layers.push(LayerSpec {
             name: name.into(),
             layer_type: LayerType::Linear,

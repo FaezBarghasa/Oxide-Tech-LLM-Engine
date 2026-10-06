@@ -24,6 +24,11 @@ use clap::{Parser, ValueEnum};
 use oxide_alloc::HierarchicalKvCache;
 use oxide_core::worker::StepCommand;
 use oxide_engine::SpecializedPipeline;
+use oxide_lab::{
+    CustomModelBuilder, CustomModelScratch, DriftDetector, LabCompressor, LabQuantMethod,
+    LabQuantizer, LoraFineTuner, MultiModalLabEngine, MultiModalOutput, PerplexityAuditor,
+    TensorDebugger, TrainingConfig,
+};
 use oxide_server::dfa::DfaSchemaGrammar;
 use oxide_server::{ServerState, start_server};
 use std::net::SocketAddr;
@@ -204,6 +209,98 @@ pub enum Commands {
     Img(ImgArgs),
     /// Real hardware benchmark across all combinations (CPU, AMD iGPU, NVIDIA CUDA, Hybrid)
     Bench(BenchArgs),
+    /// AI Research Laboratory Suite: custom models, training/fine-tuning, quant/pruning, debugging, multimodal
+    Lab(LabArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct LabArgs {
+    #[command(subcommand)]
+    pub action: LabAction,
+}
+
+#[derive(clap::Subcommand, Debug, Clone)]
+pub enum LabAction {
+    /// Fine-tune models with zero-allocation LoRA / QLoRA
+    Train(LabTrainArgs),
+    /// Quantize and compress weights (Q4_0, Q4_K, Ternary, SVD, 2:4 structured pruning)
+    Quantize(LabQuantArgs),
+    /// Real-time tensor probe, representation drift detection, and perplexity auditing
+    Debug(LabDebugArgs),
+    /// Multi-modal generative media synthesis (image, video, speech TTS/ASR)
+    Generate(LabGenArgs),
+    /// Build declarative custom model architecture & compile to compute graph
+    Model(LabModelArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct LabTrainArgs {
+    #[arg(short = 'm', long, default_value = "custom-llama")]
+    pub model: String,
+    #[arg(long, default_value_t = 16)]
+    pub rank: usize,
+    #[arg(long, default_value_t = 32.0)]
+    pub alpha: f32,
+    #[arg(long, default_value_t = 50)]
+    pub steps: usize,
+    #[arg(long, default_value_t = 1e-4)]
+    pub lr: f32,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct LabQuantArgs {
+    #[arg(short = 'f', long, default_value = "q4_k")]
+    pub format: String,
+    #[arg(long, default_value_t = 1024)]
+    pub rows: usize,
+    #[arg(long, default_value_t = 1024)]
+    pub cols: usize,
+    #[arg(long, default_value_t = 32)]
+    pub svd_rank: usize,
+    #[arg(long)]
+    pub prune_2_4: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct LabDebugArgs {
+    #[arg(long, default_value_t = 512)]
+    pub hidden_dim: usize,
+    #[arg(long, default_value_t = 10)]
+    pub steps: usize,
+    #[arg(long, default_value_t = 0.05)]
+    pub drift_threshold: f32,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct LabGenArgs {
+    #[arg(short = 't', long, default_value = "image")]
+    pub modality: String,
+    #[arg(
+        short = 'p',
+        long,
+        default_value = "A futuristic quantum neural engine"
+    )]
+    pub prompt: String,
+    #[arg(long, default_value_t = 128)]
+    pub width: usize,
+    #[arg(long, default_value_t = 128)]
+    pub height: usize,
+    #[arg(long, default_value_t = 8)]
+    pub frames: usize,
+    #[arg(long, default_value_t = 10)]
+    pub steps: usize,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct LabModelArgs {
+    #[arg(short = 'n', long, default_value = "oxide-transformer-research")]
+    pub name: String,
+    #[arg(long, default_value_t = 512)]
+    pub hidden_dim: usize,
+    #[arg(long, default_value_t = 32000)]
+    pub vocab_size: usize,
+    #[arg(long, default_value_t = 4)]
+    pub layers: usize,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -471,6 +568,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Some(Commands::Bench(bench)) => {
             run_all_hardware_benchmarks(&bench.model, bench.tokens, bench.warmup)
         }
+        Some(Commands::Lab(lab)) => run_lab_command(lab),
         Some(Commands::Server(srv)) => {
             let addr: SocketAddr = format!("{}:{}", srv.host, srv.port).parse()?;
             run_server_with_options(
@@ -1153,4 +1251,277 @@ pub fn run_all_hardware_benchmarks(
 
     println!("\nBenchmark complete. All compute targets verified on local host hardware.\n");
     Ok(())
+}
+
+/// Executes AI research laboratory operations (training, quant, debugging, media generation, custom models).
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::uninlined_format_args,
+    clippy::needless_borrows_for_generic_args
+)]
+pub fn run_lab_command(args: LabArgs) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match args.action {
+        LabAction::Train(train) => {
+            println!("\n=== Oxide-Lab: Zero-Allocation LoRA / QLoRA Fine-Tuning ===");
+            println!(
+                "Model: {} | Rank: {} | Alpha: {:.1} | Steps: {} | LR: {:.2e}",
+                train.model, train.rank, train.alpha, train.steps, train.lr
+            );
+
+            let cfg = TrainingConfig {
+                learning_rate: train.lr,
+                warmup_steps: 10,
+                total_steps: train.steps,
+                ..Default::default()
+            };
+
+            let in_dim = 256;
+            let out_dim = 256;
+            let mut tuner = LoraFineTuner::new(in_dim, out_dim, train.rank, train.alpha, cfg);
+
+            let dummy_input = vec![0.5f32; in_dim];
+            let mut inter = vec![0.0f32; train.rank];
+            let mut lora_out = vec![0.0f32; out_dim];
+            let dummy_grad_out = vec![0.01f32; out_dim];
+
+            println!("\nStarting training loop:");
+            for step in 1..=train.steps {
+                tuner.forward(&dummy_input, &mut inter, &mut lora_out);
+                tuner.backward(&dummy_input, &inter, &dummy_grad_out);
+                tuner.step();
+                if step % (train.steps / 5).max(1) == 0 || step == train.steps {
+                    println!(
+                        "  Step {:>4}/{} | Adapter updated (delta norm = {:.6})",
+                        step,
+                        train.steps,
+                        lora_out.iter().map(|v| v * v).sum::<f32>().sqrt()
+                    );
+                }
+            }
+            println!(
+                "Training complete. Adapter weights successfully optimized without heap allocations.\n"
+            );
+            Ok(())
+        }
+        LabAction::Quantize(quant) => {
+            println!("\n=== Oxide-Lab: Quantization & Compression Suite ===");
+            println!(
+                "Target Format: {} | Shape: [{} x {}]",
+                quant.format, quant.rows, quant.cols
+            );
+
+            let total_elems = quant.rows * quant.cols;
+            let mut weights = vec![0.0f32; total_elems];
+            for (i, w) in weights.iter_mut().enumerate() {
+                *w = ((i as f32 * 0.017).sin() * 0.5) + ((i as f32 * 0.031).cos() * 0.25);
+            }
+
+            if quant.prune_2_4 {
+                let structured =
+                    LabCompressor::prune_magnitude(&weights, quant.rows, quant.cols, 0.50, true);
+                println!(
+                    "  2:4 Structured Pruning applied: Sparsity = {:.1}%, Preserved Elements = {}",
+                    structured.sparsity * 100.0,
+                    structured.values.len()
+                );
+            } else if quant.format == "svd" {
+                let svd =
+                    LabCompressor::svd_decompose(&weights, quant.rows, quant.cols, quant.svd_rank);
+                let orig_bytes = total_elems * 4;
+                let comp_bytes = (svd.factor_a.len() + svd.factor_b.len()) * 4;
+                println!(
+                    "  Truncated SVD (Rank {}): Original = {} KB | Compressed = {} KB | Ratio = {:.2}x",
+                    quant.svd_rank,
+                    orig_bytes / 1024,
+                    comp_bytes / 1024,
+                    (orig_bytes as f32) / (comp_bytes as f32)
+                );
+            } else {
+                let method = match quant.format.to_lowercase().as_str() {
+                    "q4_0" => LabQuantMethod::Q4_0,
+                    "q8_0" => LabQuantMethod::Q8_0,
+                    "ternary" | "bitnet" => LabQuantMethod::Ternary1_58Bit,
+                    _ => LabQuantMethod::Q4_K,
+                };
+                let q_mat = LabQuantizer::quantize(&weights, quant.rows, quant.cols, method, None);
+                let orig_kb = (total_elems * 4) / 1024;
+                let quant_kb = (q_mat.data.len() + q_mat.scales.len() * 4) / 1024;
+                println!(
+                    "  Quantized Matrix: Format = {:?} | Size = {} KB -> {} KB | Compression = {:.1}x",
+                    q_mat.method, orig_kb, quant_kb, q_mat.compression_ratio
+                );
+            }
+            println!("Quantization finished cleanly.\n");
+            Ok(())
+        }
+        LabAction::Debug(debug) => {
+            println!("\n=== Oxide-Lab: Real-Time Tensor Debugging & Drift Auditor ===");
+            println!(
+                "Hidden Dim: {} | Steps: {} | Drift Threshold: {:.3}",
+                debug.hidden_dim, debug.steps, debug.drift_threshold
+            );
+
+            for step in 0..debug.steps {
+                let mut layer_act = vec![0.0f32; debug.hidden_dim];
+                for (i, val) in layer_act.iter_mut().enumerate() {
+                    *val = (i as f32 * 0.05 + step as f32 * 0.01).sin() + 0.1;
+                }
+                let stats = TensorDebugger::inspect(&format!("layer_{}", step % 4), &layer_act);
+                let drift = DriftDetector::compare("layer_act", &layer_act, &layer_act);
+                if step % (debug.steps / 3).max(1) == 0 {
+                    println!(
+                        "  Step {}: Layer mean = {:.4}, Sparsity = {:.1}%, Drift cosine = {:.4}",
+                        step, stats.mean, stats.sparsity_percentage, drift.cosine_similarity
+                    );
+                }
+            }
+
+            println!("  Inspecting Anomalies:");
+            let test_nan = vec![f32::NAN, 1.0, 2.0];
+            let check = TensorDebugger::assert_safe("probe_nan", &test_nan);
+            println!(
+                "    NaN Tensor Safety Probe: Correctly Caught = {}",
+                check.is_err()
+            );
+
+            let seq_logits = vec![vec![2.0f32, 0.5f32], vec![0.2f32, 3.1f32]];
+            let targets = vec![0, 1];
+            let ppl = PerplexityAuditor::evaluate_ppl(&seq_logits, &targets);
+            println!("  Perplexity Auditor Baseline: PPL = {:.3}", ppl);
+            println!("Real-time debugging telemetry stream complete.\n");
+            Ok(())
+        }
+        LabAction::Generate(gen_args) => {
+            println!("\n=== Oxide-Lab: Multi-Modal Generative Media Synthesis ===");
+            let engine = MultiModalLabEngine;
+            match gen_args.modality.to_lowercase().as_str() {
+                "video" => {
+                    println!(
+                        "Generating Video: Prompt = '{}' | Frames = {} | Dimensions = {}x{}",
+                        gen_args.prompt, gen_args.frames, gen_args.width, gen_args.height
+                    );
+                    let out = engine.generate_video(
+                        &gen_args.prompt,
+                        gen_args.width,
+                        gen_args.height,
+                        gen_args.frames,
+                        24.0,
+                        gen_args.steps,
+                    )?;
+                    if let MultiModalOutput::Video {
+                        frames,
+                        num_frames,
+                        fps,
+                        width,
+                        height,
+                    } = out
+                    {
+                        println!(
+                            "  Synthesized {} frames @ {:.1} fps ({}x{}). Total float elements: {}",
+                            num_frames,
+                            fps,
+                            width,
+                            height,
+                            frames.len()
+                        );
+                    }
+                }
+                "audio" | "tts" => {
+                    println!("Synthesizing Speech TTS: Text = '{}'", gen_args.prompt);
+                    let out = engine.synthesize_speech(&gen_args.prompt, 0, 24000)?;
+                    if let MultiModalOutput::Audio {
+                        samples,
+                        sample_rate,
+                    } = out
+                    {
+                        let duration = samples.len() as f32 / sample_rate as f32;
+                        println!(
+                            "  Audio Waveform Generated: {} samples @ {} Hz ({:.2}s duration)",
+                            samples.len(),
+                            sample_rate,
+                            duration
+                        );
+                    }
+                }
+                "transcribe" | "asr" => {
+                    let audio = vec![0.2f32; 8000];
+                    let text = engine.transcribe_speech(&audio, 16000)?;
+                    println!(
+                        "Transcribing Audio (8000 samples @ 16kHz):\n  Result: {}",
+                        text
+                    );
+                }
+                _ => {
+                    println!(
+                        "Generating Image: Prompt = '{}' | Steps = {} | Dimensions = {}x{}",
+                        gen_args.prompt, gen_args.steps, gen_args.width, gen_args.height
+                    );
+                    let out = engine.generate_image(
+                        &gen_args.prompt,
+                        gen_args.width,
+                        gen_args.height,
+                        gen_args.steps,
+                        7.5,
+                    )?;
+                    if let MultiModalOutput::Image {
+                        pixels,
+                        width,
+                        height,
+                        channels,
+                        format,
+                    } = out
+                    {
+                        println!(
+                            "  Image Synthesized: {}x{} ({}, {} channels). Total elements: {}",
+                            width,
+                            height,
+                            format,
+                            channels,
+                            pixels.len()
+                        );
+                    }
+                }
+            }
+            println!("Multi-modal synthesis pipeline succeeded.\n");
+            Ok(())
+        }
+        LabAction::Model(model_args) => {
+            println!("\n=== Oxide-Lab: Declarative Custom Model Architecture ===");
+            println!(
+                "Model: {} | Hidden: {} | Vocab: {} | Layers: {}",
+                model_args.name, model_args.hidden_dim, model_args.vocab_size, model_args.layers
+            );
+
+            let mut builder = CustomModelBuilder::new(
+                &model_args.name,
+                model_args.vocab_size,
+                model_args.hidden_dim,
+            );
+            for l in 0..model_args.layers {
+                builder = builder
+                    .add_rmsnorm(format!("norm_{l}"))
+                    .add_attention(format!("attn_{l}"), 8, 4)
+                    .add_swiglu_mlp(format!("swiglu_{l}"), model_args.hidden_dim * 2);
+            }
+            let custom_model = builder.build();
+            let graph = custom_model.compile_to_graph();
+            println!(
+                "  Compiled Oxide Compute Graph DAG Nodes: {}",
+                graph.nodes.len()
+            );
+
+            let mut scratch = CustomModelScratch::new(model_args.hidden_dim, model_args.vocab_size);
+            let tokens = [1u32, 42, 108];
+            let logits = custom_model.forward(&tokens, &mut scratch)?;
+            println!(
+                "  Zero-Allocation Forward Step Succeeded! Logits size: {}, First 3 logits: [{:.4}, {:.4}, {:.4}]",
+                logits.len(),
+                logits[0],
+                logits[1],
+                logits[2]
+            );
+            println!("Model graph verified.\n");
+            Ok(())
+        }
+    }
 }

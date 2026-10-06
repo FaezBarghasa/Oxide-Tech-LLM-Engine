@@ -32,6 +32,7 @@ oxide-models.workspace = true
 oxide-quant.workspace = true
 oxide-engine.workspace = true
 oxide-server.workspace = true
+oxide-lab.workspace = true
 clap.workspace = true
 memmap2.workspace = true
 tokio.workspace = true

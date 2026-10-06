@@ -406,7 +406,8 @@ impl LabCompressor {
         }
 
         let evictable_tokens = total_tokens - (sink_tokens + local_window_size);
-        let retained_h2o = ((evictable_tokens as f32) * heavy_hitter_ratio.clamp(0.0, 1.0)) as usize;
+        let retained_h2o =
+            ((evictable_tokens as f32) * heavy_hitter_ratio.clamp(0.0, 1.0)) as usize;
         let retained_total = sink_tokens + local_window_size + retained_h2o;
         let reduction_ratio = (total_tokens as f32) / (retained_total as f32).max(1.0);
 

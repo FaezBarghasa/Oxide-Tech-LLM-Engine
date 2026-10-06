@@ -153,10 +153,7 @@ fn test_realtime_debug_and_drift_suite() {
     assert!(drift.mean_squared_error < 0.001);
 
     // Perplexity Evaluation
-    let seq_logits = vec![
-        vec![5.0, 1.0, 0.0],
-        vec![1.0, 6.0, 0.0],
-    ];
+    let seq_logits = vec![vec![5.0, 1.0, 0.0], vec![1.0, 6.0, 0.0]];
     let targets = vec![0, 1];
     let ppl = PerplexityAuditor::evaluate_ppl(&seq_logits, &targets);
     assert!(ppl >= 1.0);
@@ -167,9 +164,17 @@ fn test_multimodal_generation_and_inputs() {
     let engine = MultiModalLabEngine;
 
     // 1. Text-to-Image Generation
-    let img_out = engine.generate_image("A futuristic quantum computer in Rust", 64, 64, 5, 7.5).unwrap();
+    let img_out = engine
+        .generate_image("A futuristic quantum computer in Rust", 64, 64, 5, 7.5)
+        .unwrap();
     match img_out {
-        MultiModalOutput::Image { pixels, width, height, channels, format } => {
+        MultiModalOutput::Image {
+            pixels,
+            width,
+            height,
+            channels,
+            format,
+        } => {
             assert_eq!(width, 64);
             assert_eq!(height, 64);
             assert_eq!(channels, 3);
@@ -180,9 +185,17 @@ fn test_multimodal_generation_and_inputs() {
     }
 
     // 2. Text-to-Video Generation
-    let vid_out = engine.generate_video("Turbulent fluid flow simulation", 32, 32, 4, 24.0, 5).unwrap();
+    let vid_out = engine
+        .generate_video("Turbulent fluid flow simulation", 32, 32, 4, 24.0, 5)
+        .unwrap();
     match vid_out {
-        MultiModalOutput::Video { frames, width, height, num_frames, fps } => {
+        MultiModalOutput::Video {
+            frames,
+            width,
+            height,
+            num_frames,
+            fps,
+        } => {
             assert_eq!(width, 32);
             assert_eq!(height, 32);
             assert_eq!(num_frames, 4);
@@ -193,9 +206,14 @@ fn test_multimodal_generation_and_inputs() {
     }
 
     // 3. Neural Speech Synthesis (TTS)
-    let speech_out = engine.synthesize_speech("Oxide Tech LLM Engine online.", 0, 16000).unwrap();
+    let speech_out = engine
+        .synthesize_speech("Oxide Tech LLM Engine online.", 0, 16000)
+        .unwrap();
     match speech_out {
-        MultiModalOutput::Audio { samples, sample_rate } => {
+        MultiModalOutput::Audio {
+            samples,
+            sample_rate,
+        } => {
             assert_eq!(sample_rate, 16000);
             assert!(!samples.is_empty());
         }
