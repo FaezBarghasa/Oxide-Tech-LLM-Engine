@@ -1,5 +1,11 @@
 //! Rust FFI bindings and dispatch abstractions for custom CUDA LLM kernels.
 
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop
+)]
+
 use oxide_core::error::Result;
 
 /// Host wrapper for launching CUDA LLM execution kernels.
@@ -25,7 +31,7 @@ impl CudaLlmKernels {
             for &x in in_slice {
                 sum_sq += x * x;
             }
-            let inv_rms = 1.0 / ((sum_sq / hidden_dim as f32) + eps).sqrt();
+            let inv_rms = 1.0 / ((sum_sq / (hidden_dim as f32)) + eps).sqrt();
             for i in 0..hidden_dim {
                 out_slice[i] = in_slice[i] * inv_rms * weights[i];
             }
@@ -112,8 +118,8 @@ impl CudaLlmKernels {
 
             if sum_exp > 0.0 {
                 let inv_sum = 1.0 / sum_exp;
-                for d in 0..head_dim {
-                    out_head[d] *= inv_sum;
+                for item in out_head.iter_mut().take(head_dim) {
+                    *item *= inv_sum;
                 }
             }
         }

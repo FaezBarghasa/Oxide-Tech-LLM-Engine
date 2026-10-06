@@ -1,6 +1,8 @@
 //! RKNN Toolkit & Arm Cortex/Mali NPU execution kernels.
 //! Optimizes zero-copy DMABUF batch dispatch and Vela micro-scheduler loops.
 
+#![allow(clippy::cast_precision_loss, clippy::cast_lossless)]
+
 use oxide_core::error::Result;
 
 /// Host runtime for launching Rockchip RKNN and ARM Ethos/Vela NPU inference kernels.
@@ -25,10 +27,10 @@ impl RknnLlmKernels {
                 let w_chunk = &w_row[b * 32..(b + 1) * 32];
                 let a_chunk = &activations[b * 32..(b + 1) * 32];
                 for i in 0..32 {
-                    row_acc += (w_chunk[i] as i32) * (a_chunk[i] as i32);
+                    row_acc += i32::from(w_chunk[i]) * i32::from(a_chunk[i]);
                 }
             }
-            output[row] = row_acc as f32 * scale;
+            output[row] = (row_acc as f32) * scale;
         }
         Ok(())
     }

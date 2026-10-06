@@ -1,5 +1,7 @@
 //! Custom ROCm/HIP and Taconite APU kernel dispatch for AMD GPUs and APUs (CPU + iGPU + NPU).
 
+#![allow(clippy::cast_precision_loss)]
+
 use oxide_core::error::Result;
 
 /// Host wrapper for launching custom AMD ROCm / Taconite kernels.
@@ -25,7 +27,7 @@ impl RocmLlmKernels {
             for &x in in_slice {
                 sum_sq += x * x;
             }
-            let inv_rms = 1.0 / ((sum_sq / hidden_dim as f32) + eps).sqrt();
+            let inv_rms = 1.0 / ((sum_sq / (hidden_dim as f32)) + eps).sqrt();
             for i in 0..hidden_dim {
                 out_slice[i] = in_slice[i] * inv_rms * weights[i];
             }

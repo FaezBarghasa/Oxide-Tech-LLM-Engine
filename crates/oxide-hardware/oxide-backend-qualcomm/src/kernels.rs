@@ -1,5 +1,7 @@
 //! FastRPC, Mesa Teflon, Qualcomm QNN/HTP & Vulkan kernels for Snapdragon / Adreno architectures.
 
+#![allow(clippy::cast_precision_loss, clippy::many_single_char_names)]
+
 use oxide_core::error::Result;
 
 /// Host runtime for launching FastRPC, Mesa Teflon, and Vulkan LLM kernels on Qualcomm architectures.
@@ -30,27 +32,27 @@ impl QualcommLlmKernels {
         let _ = weights_mapped_fd;
         for (i, logit) in output_logits.iter_mut().enumerate() {
             let tok = input_tokens.first().copied().unwrap_or(0);
-            *logit = ((tok as f32 * 0.01) + (i as f32 * 0.05)).sin();
+            *logit = (((tok as f32) * 0.01) + ((i as f32) * 0.05)).sin();
         }
         Ok(())
     }
 
     /// SPIR-V / Vulkan Compute shader dispatch for Adreno GPU matrix multiplication.
     pub fn vulkan_adreno_gemm(
-        m: usize,
-        n: usize,
-        k: usize,
-        a: &[f32],
-        b: &[f32],
-        c: &mut [f32],
+        dim_m: usize,
+        dim_n: usize,
+        dim_k: usize,
+        mat_a: &[f32],
+        mat_b: &[f32],
+        mat_c: &mut [f32],
     ) -> Result<()> {
-        for row in 0..m {
-            for col in 0..n {
+        for row in 0..dim_m {
+            for col in 0..dim_n {
                 let mut acc = 0.0f32;
-                for p in 0..k {
-                    acc += a[row * k + p] * b[p * n + col];
+                for p in 0..dim_k {
+                    acc += mat_a[row * dim_k + p] * mat_b[p * dim_n + col];
                 }
-                c[row * n + col] = acc;
+                mat_c[row * dim_n + col] = acc;
             }
         }
         Ok(())
