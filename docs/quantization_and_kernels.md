@@ -89,3 +89,35 @@ In `crates/oxide-quant/src/nvfp4.rs`:
 - **Tiling**: Splits query sequence into blocks of size $B_r$ (e.g., 64) and key/value sequence into blocks of size $B_c$ (e.g., 64).
 - **Online Softmax Accumulation**: Computes running maximum $m_i$ and running partition function $l_i = \sum \exp(s_{ij} - m_i)$, dynamically rescaling accumulated output tile by $\exp(m_{\text{prev}} - m_{\text{new}})$ without ever writing intermediate $N \times N$ attention matrices to global memory.
 - **Memory Complexity**: $O(1)$ intermediate SRAM memory overhead, strictly preventing GPU VRAM exhaustion on $128\text{k}+$ context lengths.
+
+---
+
+## 6. SIMD Cache-Blocked Parallel GEMVs (`oxide-quant::simd`)
+
+In `crates/oxide-quant/src/simd.rs`, matrix-vector multiplication is parallelized across all available CPU cores and hardware threads:
+- **`gemv_blocked_f32`**: Row partitions are distributed using parallel chunking (`par_chunks_mut(16)`). Each thread keeps the activation vector hot in L1D/L2 cache while streaming matrix rows with AVX-512 / AVX2 FMA dual-accumulator unrolling.
+- **`gemv_q8_0`**: Parallelized Q8_0 integer GEMV with `_mm512_dpbusd_epi32` / `_mm256_dpbusd_epi32` (AVX-512 VNNI / AVX2 FMA).
+- **`gemv_q4_0`**: Parallelized Q4_0 4-bit nibble unpack and multiply-accumulate with AVX-512BW and AVX2 bit manipulation.
+- **`gemv_q4_k`**: Parallelized Q4_K super-block (256 weights / 128 bytes) unpack and accumulation with scale and min adjustments.
+
+---
+
+## 7. Intel AMX (Advanced Matrix Extensions) TMM Tile Engine
+
+In `crates/oxide-quant/src/simd.rs::amx`:
+- **64-Byte Aligned `TileConfig`**: Hardware tile dimensions configuring 1KB 2D tile registers `TMM0`..`TMM7`.
+- **Runtime CPUID & Permission**: Runtime CPUID leaf 7 checks (`is_amx_supported()`) and Linux `ARCH_REQ_XCOMP_PERM` syscall authorization (`request_amx_permission()`).
+- **Zero-Allocation Inline Assembly**:
+  - `tileloadd`: Loads tile data from host memory into TMM registers.
+  - `tdpbusd`: Computes $16 \times 64 \times 64 \times 16$ INT8 matrix multiplication: $C \mathrel{+}= A \times B$.
+  - `tilestored`: Stores matrix tile back to pinned memory.
+  - `tilerelease`: Resets processor tile registers to initialized clean palette state.
+
+---
+
+## 8. Multi-Threaded CPU FlashAttention-2 / FlashDecode
+
+In `crates/oxide-quant/src/simd.rs::flash_attention_cpu`:
+- Queries are parallelized across all heads with threadpool work-stealing.
+- Evaluates online numerically-stable Softmax without materializing sequence-length attention weight matrices in DRAM.
+- Zero heap allocations during execution on the hot token generation path.
