@@ -839,7 +839,6 @@ pub fn gemv_blocked_f32(matrix: &[f32], vector: &[f32], m: usize, n: usize, outp
             output[row] = dot_f32(row_slice, vector);
         }
     } else {
-        use rayon::prelude::*;
         output[..m]
             .par_chunks_mut(16)
             .enumerate()
@@ -863,7 +862,7 @@ pub fn gemv_q8_0(
     n: usize,
     output: &mut [f32],
 ) {
-    assert!(n % 32 == 0, "n must be a multiple of 32 for Q8_0");
+    assert!(n.is_multiple_of(32), "n must be a multiple of 32 for Q8_0");
     let blocks_per_row = n / 32;
     assert!(
         matrix.len() >= m * blocks_per_row,
@@ -886,7 +885,6 @@ pub fn gemv_q8_0(
             output[row] = acc;
         }
     } else {
-        use rayon::prelude::*;
         output[..m]
             .par_chunks_mut(16)
             .enumerate()
@@ -917,7 +915,7 @@ pub fn gemv_q4_0(
     n: usize,
     output: &mut [f32],
 ) {
-    assert!(n % 32 == 0, "n must be a multiple of 32 for Q4_0");
+    assert!(n.is_multiple_of(32), "n must be a multiple of 32 for Q4_0");
     let blocks_per_row = n / 32;
     assert!(
         matrix.len() >= m * blocks_per_row,
@@ -940,7 +938,6 @@ pub fn gemv_q4_0(
             output[row] = acc;
         }
     } else {
-        use rayon::prelude::*;
         output[..m]
             .par_chunks_mut(16)
             .enumerate()
@@ -971,7 +968,10 @@ pub fn gemv_q4_k(
     n: usize,
     output: &mut [f32],
 ) {
-    assert!(n % 256 == 0, "n must be a multiple of 256 for Q4_K");
+    assert!(
+        n.is_multiple_of(256),
+        "n must be a multiple of 256 for Q4_K"
+    );
     let blocks_per_row = n / 256;
     assert!(
         matrix.len() >= m * blocks_per_row,
@@ -994,7 +994,6 @@ pub fn gemv_q4_k(
             output[row] = acc;
         }
     } else {
-        use rayon::prelude::*;
         output[..m]
             .par_chunks_mut(16)
             .enumerate()
@@ -1057,6 +1056,7 @@ pub fn rope_f32(x: &mut [f32], head_dim: usize, position: usize, theta: f32) {
 
 /// High-performance multi-threaded CPU FlashAttention-2 / FlashDecode step.
 /// Computes attention across all query heads in parallel using all CPU cores and threads.
+#[allow(clippy::too_many_arguments)]
 pub fn flash_attention_cpu(
     q: &[f32],
     k: &[f32],
@@ -1075,7 +1075,6 @@ pub fn flash_attention_cpu(
     let kv_group_size = num_heads / num_kv_heads.max(1);
     let scale = 1.0 / (head_dim as f32).sqrt();
 
-    use rayon::prelude::*;
     out[..num_heads * head_dim]
         .par_chunks_mut(head_dim)
         .enumerate()
