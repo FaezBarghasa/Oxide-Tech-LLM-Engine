@@ -120,27 +120,73 @@
 
 ---
 
-## 11. Heterogeneous Hardware Combination Matrix
+---
 
-`Oxide-Tech-LLM-Engine` provides native topology construction and pipeline orchestration for arbitrary combinations of silicon:
+## 11. Heterogeneous Hardware Combination Matrix & Co-Processing Architecture
 
-| Hardware Combination | Topology Constructor | Execution Mechanism |
-| :--- | :--- | :--- |
-| **CPU + NVIDIA GPUs** | `multi_vendor_gpu_partition(L, N, 0, 0, C)` | CUDA Tensor Cores + CPU SIMD offloading |
-| **CPU + AMD GPUs** | `multi_vendor_gpu_partition(L, 0, A, 0, C)` | ROCm MFMA Matrix Cores + CPU SIMD offloading |
-| **CPU + Intel GPUs** | `multi_vendor_gpu_partition(L, 0, 0, I, C)` | Intel Xe2/Xe1 XMX matrix engines + CPU SIMD |
-| **CPU + Google TPU** | `HybridDeviceTopology` (`DeviceRole::Tpu`) | Cloud/Edge TPU systolic MXU + Host prefill |
-| **CPU + NPU** | `HybridDeviceTopology` (`DeviceRole::Npu`) | Intel NPU / AMD XDNA tile systolic array |
-| **CPU + NVIDIA + AMD + Intel** | `multi_vendor_gpu_partition(L, N, A, I, C)` | Triple-vendor dGPU array with AllReduce reduction |
-| **CPU + AMD + Intel** | `multi_vendor_gpu_partition(L, 0, A, I, C)` | ROCm + Xe multi-vendor dGPU co-processing |
-| **CPU + NVIDIA + Intel** | `multi_vendor_gpu_partition(L, N, 0, I, C)` | CUDA + Xe multi-vendor dGPU co-processing |
-| **CPU + NVIDIA + AMD** | `multi_vendor_gpu_partition(L, N, A, 0, C)` | CUDA + ROCm cross-vendor dGPU co-processing |
-| **CPU + iGPU + NPU (APU)** | `amd_apu_full_partition(L, true)` | Coherent 3-way unified DDR5 zero-copy memory |
-| **CPU + iGPU + TPU** | `HybridDeviceTopology` (`Igpu` + `Tpu` + `Cpu`) | Integrated GPU attention + TPU systolic GEMM |
-| **CPU + iGPU + NPU + NVIDIA** | `HybridDeviceTopology` (`Igpu` + `Npu` + `NvidiaGpu`) | APU local layers + discrete NVIDIA CUDA offload |
-| **CPU + iGPU + NPU + AMD dGPU**| `HybridDeviceTopology` (`Igpu` + `Npu` + `AmdGpu`) | APU local layers + discrete AMD Radeon/Instinct |
-| **ARM CPU + Integrated NPU + HAT** | `arm_npu_hat_partition(L, true)` | SoC NPU (Apple/RKNN/HTP) + PCIe/USB NPU HAT (Hailo/Coral) |
-| **ARM CPU + Integrated NPU** | `arm_npu_hat_partition(L, false)` | Direct ARM SoC NPU + Neon SIMD offloading |
-| **AMD EPYC (8 to 128 cores)** | `epyc_server_partition(L, sockets, &[])` | 12-channel DDR5 multi-socket AVX-512 VNNI scaling |
-| **AMD EPYC + Any GPUs** | `epyc_server_partition(L, sockets, gpus)` | High-memory bandwidth server CPU + arbitrary dGPUs |
+`Oxide-Tech-LLM-Engine` provides dedicated topology constructors, zero-allocation memory buffers, and closed-dispatch pipeline orchestration for all combinations of compute silicon:
+
+| Hardware Combination | Topology Constructor | CLI Flag / Alias | Microarchitectural Execution Mechanism |
+| :--- | :--- | :--- | :--- |
+| **CPU + NVIDIA GPUs** | `cpu_nvidia_partition(L, N, C)` | `--backend cpu_nvidia` | Tensor Cores (Blackwell/Hopper/Ada) + AVX-512 CPU offload |
+| **CPU + AMD GPUs** | `cpu_amd_partition(L, A, C)` | `--backend cpu_amd` | ROCm MFMA Matrix Cores (CDNA3/RDNA3) + CPU SIMD |
+| **CPU + Intel GPUs** | `cpu_intel_partition(L, I, C)` | `--backend cpu_intel` | Intel Xe2/Xe1 XMX systolic engines + CPU SIMD |
+| **CPU + Google TPU** | `cpu_tpu_partition(L, T, C)` | `--backend cpu_tpu` | TPU v5e/v6e systolic array MXU + Host CPU prefill |
+| **CPU + NPU** | `cpu_npu_partition(L, ratio)` | `--backend cpu_npu` | Dedicated NPU systolic grid + Zen/Intel CPU offload |
+| **CPU + NVIDIA + AMD + Intel** | `cpu_nvidia_amd_intel_partition(L, N, A, I, C)` | `--backend cpu_nvidia_amd_intel` | Triple-vendor dGPU array with non-blocking AllReduce |
+| **CPU + AMD + Intel** | `cpu_amd_intel_partition(L, A, I, C)` | `--backend cpu_amd_intel` | Cross-vendor ROCm + Xe dGPU co-processing |
+| **CPU + NVIDIA + Intel** | `cpu_nvidia_intel_partition(L, N, I, C)` | `--backend cpu_nvidia_intel` | Cross-vendor CUDA + Xe dGPU co-processing |
+| **CPU + NVIDIA + AMD** | `cpu_nvidia_amd_partition(L, N, A, C)` | `--backend cpu_nvidia_amd` | Cross-vendor CUDA + ROCm dGPU co-processing |
+| **CPU + iGPU + NPU (APU)** | `cpu_igpu_npu_partition(L)` | `--backend apu` / `cpu_igpu_npu` | 3-way coherent DDR5 zero-copy memory (Zen + RDNA + XDNA) |
+| **CPU + iGPU + TPU** | `cpu_igpu_tpu_partition(L, T)` | `--backend cpu_igpu_tpu` | Integrated GPU attention + TPU systolic GEMM |
+| **CPU + iGPU + NPU + NVIDIA** | `cpu_igpu_npu_nvidia_partition(L, N)` | `--backend cpu_igpu_npu_nvidia` | APU local layers (40%) + discrete NVIDIA CUDA offload (60%) |
+| **CPU + iGPU + NPU + AMD dGPU**| `cpu_igpu_npu_amd_partition(L, A)` | `--backend cpu_igpu_npu_amd` | APU local layers (40%) + discrete Radeon/Instinct (60%) |
+| **ARM CPU + NPU + HAT** | `arm_npu_external_hat_partition(L)` | `--backend arm_npu_hat` | SoC NPU (35%) + PCIe/USB NPU HAT (45%) + ARM Neon (20%) |
+| **ARM CPU + Integrated NPU** | `arm_integrated_npu_partition(L)` | `--backend arm_integrated_npu` | Direct SoC NPU (60%) + ARM Neon SIMD offload (40%) |
+| **AMD EPYC (8 to 128 cores)** | `epyc_server_standalone_partition(L, S)` | `--backend epyc_server` | 12-channel DDR5 multi-socket AVX-512 VNNI NUMA scaling |
+| **AMD EPYC + Multi-GPU** | `epyc_server_gpu_partition(L, S, gpus)` | `--backend epyc_gpu` | High-bandwidth server CPU (20%) + arbitrary dGPUs (80%) |
+| **Apple Silicon UMA** | `apple_silicon_uma_partition(L)` | `--backend apple_silicon` | Metal GPU (65%) + Apple Neural Engine ANE (25%) + CPU (10%) |
+| **Qualcomm Snapdragon** | `qualcomm_snapdragon_partition(L)` | `--backend qualcomm_snapdragon`| Hexagon NPU (50%) + Adreno GPU (35%) + Oryon CPU (15%) |
+| **Intel Core Ultra** | `intel_core_ultra_partition(L, D)` | `--backend intel_core_ultra` | Xe iGPU (30%) + Intel NPU (50%) + optional Arc dGPU |
+| **Rockchip RK3588** | `rockchip_rknn_partition(L)` | `--backend rockchip_rknn` | Tri-core 6 TOPS RKNN NPU + Mali GPU + Cortex-A76 CPU |
+| **Raspberry Pi 5 + Hailo-8** | `raspberry_pi_hailo_partition(L)` | `--backend raspberry_pi_hailo` | Hailo-8 AI HAT+ (70%) + Cortex-A76 CPU SIMD (30%) |
+| **Distributed Multi-Node** | `distributed_cluster_partition(L, nodes)` | `--backend hybrid` | Multi-node cluster across NVLink / InfiniBand / RoCEv2 |
+
+---
+
+## 12. Microarchitectural Dataflow & Interconnect Specifications
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                       HETEROGENEOUS SCHEDULER & ZERO-COPY PIPELINE                              │
+├────────────────────────────────┬────────────────────────────────┬───────────────────────────────┤
+│ APU Coherent DDR5 (AMD/Intel)   │ Discrete GPU Mesh (NV/AMD/Xe)  │ Edge SoC & Accelerator HAT    │
+├────────────────────────────────┼────────────────────────────────┼───────────────────────────────┤
+│  ┌───────────┐ ┌─────────────┐ │  ┌───────────┐ ┌─────────────┐ │  ┌───────────┐ ┌────────────┐ │
+│  │ Zen4/5 CPU│ │ RDNA iGPU   │ │  │ NVIDIA dGPU││ AMD dGPU   │ │  │ ARM Cortex│ │ Hailo/Coral│ │
+│  └─────┬─────┘ └──────┬──────┘ │  └─────┬─────┘ └──────┬──────┘ │  └─────┬─────┘ └─────┬──────┘ │
+│        │              │        │        │              │        │        │             │        │
+│        ▼              ▼        │        ▼              ▼        │        ▼             ▼        │
+│  ┌───────────────────────────┐ │  ┌───────────────────────────┐ │  ┌──────────────────────────┐ │
+│  │ Unified Coherent DDR5 UMA │ │  │  PCIe 5.0 / NVLink Mesh   │ │  │ PCIe Gen2/3 Ringbuffer   │ │
+│  │  Zero-Copy DevicePtr<T>   │ │  │  Non-Blocking AllReduce   │ │  │ Zero-Copy Shared DMA-BUF │ │
+│  └─────────────┬─────────────┘ │  └─────────────┬─────────────┘ │  └────────────┬─────────────┘ │
+│                │               │                │               │               │               │
+│                ▼               │                ▼               │               ▼               │
+│          ┌───────────┐         │          ┌───────────┐         │         ┌───────────┐         │
+│          │ XDNA NPU  │         │          │ Intel dGPU│         │         │ RKNN/HTP  │         │
+│          └───────────┘         │          └───────────┘         │         └───────────┘         │
+└────────────────────────────────┴────────────────────────────────┴───────────────────────────────┘
+```
+
+### Microarchitectural Invariants:
+1. **Zero Intermediate Memory Copies**: When passing activations between pipeline partition boundaries, activations reside in pre-allocated staging buffers (`staging_buffer_elements = 4096`).
+2. **Unified Memory Coherence**: On APU architectures (AMD Strix Point / Ryzen 7000/8000/9000, Intel Lunar Lake, Apple Silicon), pointers are exchanged with zero PCIe bus serialization.
+3. **Hardware-Specific Tile Dimensions**:
+   - Intel AMX: 16x64 byte tiles (`TMM0`..`TMM7`)
+   - NVIDIA Tensor Cores: 16x16x16 WMMA / MMA PTX fragments
+   - AMD Matrix Cores: 32x32x8 / 16x16x16 MFMA CDNA instructions
+   - Google TPU: 128x128 / 256x256 systolic matrix multiplication units (MXU)
+   - ARM Neon: 128-bit SIMD registers with `vdotq_s32` dot products
+
 

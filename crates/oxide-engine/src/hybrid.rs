@@ -963,7 +963,6 @@ impl HybridDeviceTopology {
         }
         let hailo_layers = ((total_layers as f32) * 0.70).round() as usize;
         let hailo_layers = hailo_layers.clamp(1, total_layers.saturating_sub(1));
-        let cpu_layers = total_layers - hailo_layers;
 
         let partitions = vec![
             LayerPartition {

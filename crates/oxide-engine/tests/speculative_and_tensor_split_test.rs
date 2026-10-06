@@ -98,26 +98,38 @@ fn test_all_hardware_heterogeneous_topologies() {
     use oxide_engine::hybrid::{DeviceRole, HybridDeviceTopology};
 
     // 1. CPU + NVIDIA GPUs
-    let top_cpu_nv = HybridDeviceTopology::multi_vendor_gpu_partition(32, 2, 0, 0, 4);
+    let top_cpu_nv = HybridDeviceTopology::cpu_nvidia_partition(32, 2, 4);
     assert_eq!(top_cpu_nv.partitions.len(), 3); // 2 NVIDIA + 1 CPU
     assert_eq!(top_cpu_nv.partitions[0].device, DeviceRole::NvidiaGpu(0));
     assert_eq!(top_cpu_nv.partitions[1].device, DeviceRole::NvidiaGpu(1));
     assert_eq!(top_cpu_nv.partitions[2].device, DeviceRole::Cpu);
 
     // 2. CPU + AMD GPUs
-    let top_cpu_amd = HybridDeviceTopology::multi_vendor_gpu_partition(32, 0, 2, 0, 4);
+    let top_cpu_amd = HybridDeviceTopology::cpu_amd_partition(32, 2, 4);
     assert_eq!(top_cpu_amd.partitions.len(), 3); // 2 AMD + 1 CPU
     assert_eq!(top_cpu_amd.partitions[0].device, DeviceRole::AmdGpu(0));
     assert_eq!(top_cpu_amd.partitions[2].device, DeviceRole::Cpu);
 
     // 3. CPU + Intel GPUs
-    let top_cpu_intel = HybridDeviceTopology::multi_vendor_gpu_partition(32, 0, 0, 2, 4);
+    let top_cpu_intel = HybridDeviceTopology::cpu_intel_partition(32, 2, 4);
     assert_eq!(top_cpu_intel.partitions.len(), 3); // 2 Intel + 1 CPU
     assert_eq!(top_cpu_intel.partitions[0].device, DeviceRole::IntelGpu(0));
     assert_eq!(top_cpu_intel.partitions[2].device, DeviceRole::Cpu);
 
-    // 4. Triple Multi-Vendor GPU Array: CPU + NVIDIA + AMD + Intel GPUs
-    let top_triple_gpu = HybridDeviceTopology::multi_vendor_gpu_partition(32, 1, 1, 1, 5);
+    // 4. CPU + Google TPU
+    let top_cpu_tpu = HybridDeviceTopology::cpu_tpu_partition(32, 4, 4);
+    assert_eq!(top_cpu_tpu.partitions.len(), 5); // 4 TPU + 1 CPU
+    assert_eq!(top_cpu_tpu.partitions[0].device, DeviceRole::Tpu(0));
+    assert_eq!(top_cpu_tpu.partitions[4].device, DeviceRole::Cpu);
+
+    // 5. CPU + NPU
+    let top_cpu_npu = HybridDeviceTopology::cpu_npu_partition(32, 0.65);
+    assert_eq!(top_cpu_npu.partitions.len(), 2);
+    assert_eq!(top_cpu_npu.partitions[0].device, DeviceRole::Npu);
+    assert_eq!(top_cpu_npu.partitions[1].device, DeviceRole::Cpu);
+
+    // 6. CPU + NVIDIA + AMD + Intel GPUs (Triple-Vendor Array)
+    let top_triple_gpu = HybridDeviceTopology::cpu_nvidia_amd_intel_partition(32, 1, 1, 1, 5);
     assert_eq!(top_triple_gpu.partitions.len(), 4); // 1 NV + 1 AMD + 1 Intel + 1 CPU
     assert_eq!(
         top_triple_gpu.partitions[0].device,
@@ -126,17 +138,60 @@ fn test_all_hardware_heterogeneous_topologies() {
     assert_eq!(top_triple_gpu.partitions[1].device, DeviceRole::AmdGpu(0));
     assert_eq!(top_triple_gpu.partitions[2].device, DeviceRole::IntelGpu(0));
     assert_eq!(top_triple_gpu.partitions[3].device, DeviceRole::Cpu);
-    assert_eq!(top_triple_gpu.partitions[3].end_layer, 32);
 
-    // 5. AMD APU Tri-Compute: CPU + iGPU + XDNA NPU
-    let top_apu = HybridDeviceTopology::amd_apu_full_partition(32, true);
+    // 7. CPU + AMD + Intel GPUs
+    let top_amd_intel = HybridDeviceTopology::cpu_amd_intel_partition(32, 1, 1, 4);
+    assert_eq!(top_amd_intel.partitions.len(), 3);
+    assert_eq!(top_amd_intel.partitions[0].device, DeviceRole::AmdGpu(0));
+    assert_eq!(top_amd_intel.partitions[1].device, DeviceRole::IntelGpu(0));
+    assert_eq!(top_amd_intel.partitions[2].device, DeviceRole::Cpu);
+
+    // 8. CPU + NVIDIA + Intel GPUs
+    let top_nv_intel = HybridDeviceTopology::cpu_nvidia_intel_partition(32, 1, 1, 4);
+    assert_eq!(top_nv_intel.partitions.len(), 3);
+    assert_eq!(top_nv_intel.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(top_nv_intel.partitions[1].device, DeviceRole::IntelGpu(0));
+    assert_eq!(top_nv_intel.partitions[2].device, DeviceRole::Cpu);
+
+    // 9. CPU + NVIDIA + AMD GPUs
+    let top_nv_amd = HybridDeviceTopology::cpu_nvidia_amd_partition(32, 1, 1, 4);
+    assert_eq!(top_nv_amd.partitions.len(), 3);
+    assert_eq!(top_nv_amd.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(top_nv_amd.partitions[1].device, DeviceRole::AmdGpu(0));
+    assert_eq!(top_nv_amd.partitions[2].device, DeviceRole::Cpu);
+
+    // 10. CPU + iGPU + NPU (AMD APU Tri-Compute)
+    let top_apu = HybridDeviceTopology::cpu_igpu_npu_partition(32);
     assert_eq!(top_apu.partitions.len(), 3);
     assert_eq!(top_apu.partitions[0].device, DeviceRole::Cpu);
     assert_eq!(top_apu.partitions[1].device, DeviceRole::Igpu);
     assert_eq!(top_apu.partitions[2].device, DeviceRole::Npu);
 
-    // 6. ARM SoC + Integrated NPU + External NPU HAT (e.g. Raspberry Pi 5 + Hailo-8)
-    let top_arm_hat = HybridDeviceTopology::arm_npu_hat_partition(32, true);
+    // 11. CPU + iGPU + TPU
+    let top_igpu_tpu = HybridDeviceTopology::cpu_igpu_tpu_partition(32, 2);
+    assert_eq!(top_igpu_tpu.partitions.len(), 4); // 2 TPU + 1 iGPU + 1 CPU
+    assert_eq!(top_igpu_tpu.partitions[0].device, DeviceRole::Tpu(0));
+    assert_eq!(top_igpu_tpu.partitions[2].device, DeviceRole::Igpu);
+    assert_eq!(top_igpu_tpu.partitions[3].device, DeviceRole::Cpu);
+
+    // 12. CPU + iGPU + NPU + NVIDIA GPUs
+    let top_apu_nv = HybridDeviceTopology::cpu_igpu_npu_nvidia_partition(32, 1);
+    assert_eq!(top_apu_nv.partitions.len(), 4); // NVIDIA + NPU + iGPU + CPU
+    assert_eq!(top_apu_nv.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(top_apu_nv.partitions[1].device, DeviceRole::Npu);
+    assert_eq!(top_apu_nv.partitions[2].device, DeviceRole::Igpu);
+    assert_eq!(top_apu_nv.partitions[3].device, DeviceRole::Cpu);
+
+    // 13. CPU + iGPU + NPU + AMD GPUs
+    let top_apu_amd = HybridDeviceTopology::cpu_igpu_npu_amd_partition(32, 1);
+    assert_eq!(top_apu_amd.partitions.len(), 4); // AMD + NPU + iGPU + CPU
+    assert_eq!(top_apu_amd.partitions[0].device, DeviceRole::AmdGpu(0));
+    assert_eq!(top_apu_amd.partitions[1].device, DeviceRole::Npu);
+    assert_eq!(top_apu_amd.partitions[2].device, DeviceRole::Igpu);
+    assert_eq!(top_apu_amd.partitions[3].device, DeviceRole::Cpu);
+
+    // 14. ARM CPU + Integrated NPU + External NPU HAT (e.g. Raspberry Pi 5 + Hailo-8)
+    let top_arm_hat = HybridDeviceTopology::arm_npu_external_hat_partition(32);
     assert_eq!(top_arm_hat.partitions.len(), 3);
     assert_eq!(top_arm_hat.partitions[0].device, DeviceRole::ExternalNpuHat);
     assert_eq!(
@@ -145,8 +200,8 @@ fn test_all_hardware_heterogeneous_topologies() {
     );
     assert_eq!(top_arm_hat.partitions[2].device, DeviceRole::Cpu);
 
-    // 7. ARM SoC + Integrated NPU (no external HAT)
-    let top_arm_npu = HybridDeviceTopology::arm_npu_hat_partition(32, false);
+    // 15. ARM CPU + Integrated NPU (no external HAT)
+    let top_arm_npu = HybridDeviceTopology::arm_integrated_npu_partition(32);
     assert_eq!(top_arm_npu.partitions.len(), 2);
     assert_eq!(
         top_arm_npu.partitions[0].device,
@@ -154,21 +209,21 @@ fn test_all_hardware_heterogeneous_topologies() {
     );
     assert_eq!(top_arm_npu.partitions[1].device, DeviceRole::Cpu);
 
-    // 8. AMD EPYC Server CPU (8 to 128 cores per socket, pure CPU cluster)
-    let top_epyc = HybridDeviceTopology::epyc_server_partition(64, 2, &[]);
-    assert_eq!(top_epyc.partitions.len(), 2); // 2 sockets
+    // 16. AMD EPYC Server CPU (8 to 128 cores per socket, pure CPU cluster)
+    let top_epyc = HybridDeviceTopology::epyc_server_standalone_partition(64, 4);
+    assert_eq!(top_epyc.partitions.len(), 4); // 4 sockets
     assert_eq!(top_epyc.partitions[0].device, DeviceRole::EpycServer(0));
-    assert_eq!(top_epyc.partitions[1].device, DeviceRole::EpycServer(1));
-    assert_eq!(top_epyc.partitions[1].end_layer, 64);
+    assert_eq!(top_epyc.partitions[3].device, DeviceRole::EpycServer(3));
+    assert_eq!(top_epyc.partitions[3].end_layer, 64);
 
-    // 9. AMD EPYC Server CPU + Multi-GPU (e.g. Dual EPYC + 4 NVIDIA GPUs)
+    // 17. AMD EPYC Server CPU + Multi-GPU (e.g. Dual EPYC + 4 NVIDIA GPUs)
     let gpus = vec![
         DeviceRole::NvidiaGpu(0),
         DeviceRole::NvidiaGpu(1),
         DeviceRole::NvidiaGpu(2),
         DeviceRole::NvidiaGpu(3),
     ];
-    let top_epyc_gpu = HybridDeviceTopology::epyc_server_partition(80, 2, &gpus);
+    let top_epyc_gpu = HybridDeviceTopology::epyc_server_gpu_partition(80, 2, &gpus);
     assert_eq!(top_epyc_gpu.partitions.len(), 6); // 4 GPUs + 2 EPYC sockets
     assert_eq!(top_epyc_gpu.partitions[0].device, DeviceRole::NvidiaGpu(0));
     assert_eq!(top_epyc_gpu.partitions[3].device, DeviceRole::NvidiaGpu(3));
@@ -176,12 +231,89 @@ fn test_all_hardware_heterogeneous_topologies() {
     assert_eq!(top_epyc_gpu.partitions[5].device, DeviceRole::EpycServer(1));
     assert_eq!(top_epyc_gpu.partitions[5].end_layer, 80);
 
-    // 10. Execution step test over complex hybrid topology
-    let mut pipeline = oxide_engine::hybrid::HybridMultiDevicePipeline::new(top_triple_gpu, 128);
-    let cmd = oxide_core::worker::StepCommand::new(505, 12, 0, false);
-    let comp = pipeline.step_hybrid(&cmd).unwrap();
-    assert_eq!(comp.sequence_id, 505);
-    assert_eq!(comp.sampled_token, 13);
+    // 18. Apple Silicon UMA (CPU + Metal GPU + Apple Neural Engine ANE)
+    let top_apple = HybridDeviceTopology::apple_silicon_uma_partition(32);
+    assert_eq!(top_apple.partitions.len(), 3);
+    assert_eq!(top_apple.partitions[0].device, DeviceRole::Igpu);
+    assert_eq!(top_apple.partitions[1].device, DeviceRole::ArmIntegratedNpu);
+    assert_eq!(top_apple.partitions[2].device, DeviceRole::Cpu);
+
+    // 19. Qualcomm Snapdragon (CPU + Adreno GPU + Hexagon HTP NPU)
+    let top_snap = HybridDeviceTopology::qualcomm_snapdragon_partition(32);
+    assert_eq!(top_snap.partitions.len(), 3);
+    assert_eq!(top_snap.partitions[0].device, DeviceRole::ArmIntegratedNpu);
+    assert_eq!(top_snap.partitions[1].device, DeviceRole::Igpu);
+    assert_eq!(top_snap.partitions[2].device, DeviceRole::Cpu);
+
+    // 20. Intel Core Ultra (CPU + Xe iGPU + Intel NPU + Arc dGPU)
+    let top_intel_ultra = HybridDeviceTopology::intel_core_ultra_partition(32, 1);
+    assert_eq!(top_intel_ultra.partitions.len(), 4);
+    assert_eq!(top_intel_ultra.partitions[0].device, DeviceRole::IntelGpu(0));
+    assert_eq!(top_intel_ultra.partitions[1].device, DeviceRole::Npu);
+    assert_eq!(top_intel_ultra.partitions[2].device, DeviceRole::Igpu);
+    assert_eq!(top_intel_ultra.partitions[3].device, DeviceRole::Cpu);
+
+    // 21. Raspberry Pi 5 + Hailo AI HAT+
+    let top_rpi_hailo = HybridDeviceTopology::raspberry_pi_hailo_partition(32);
+    assert_eq!(top_rpi_hailo.partitions.len(), 2);
+    assert_eq!(top_rpi_hailo.partitions[0].device, DeviceRole::ExternalNpuHat);
+    assert_eq!(top_rpi_hailo.partitions[1].device, DeviceRole::Cpu);
+
+    // 22. Distributed Multi-Node Cluster
+    let cluster_nodes = [
+        DeviceRole::NvidiaGpu(0),
+        DeviceRole::AmdGpu(0),
+        DeviceRole::Tpu(0),
+        DeviceRole::EpycServer(0),
+    ];
+    let top_cluster = HybridDeviceTopology::distributed_cluster_partition(64, &cluster_nodes);
+    assert_eq!(top_cluster.partitions.len(), 4);
+    assert_eq!(top_cluster.partitions[0].device, DeviceRole::NvidiaGpu(0));
+    assert_eq!(top_cluster.partitions[1].device, DeviceRole::AmdGpu(0));
+    assert_eq!(top_cluster.partitions[2].device, DeviceRole::Tpu(0));
+    assert_eq!(top_cluster.partitions[3].device, DeviceRole::EpycServer(0));
+    assert_eq!(top_cluster.partitions[3].end_layer, 64);
+
+    // Verify contiguity and complete coverage for all topologies
+    let all_topologies = [
+        &top_cpu_nv,
+        &top_cpu_amd,
+        &top_cpu_intel,
+        &top_cpu_tpu,
+        &top_cpu_npu,
+        &top_triple_gpu,
+        &top_amd_intel,
+        &top_nv_intel,
+        &top_nv_amd,
+        &top_apu,
+        &top_igpu_tpu,
+        &top_apu_nv,
+        &top_apu_amd,
+        &top_arm_hat,
+        &top_arm_npu,
+        &top_epyc,
+        &top_epyc_gpu,
+        &top_apple,
+        &top_snap,
+        &top_intel_ultra,
+        &top_rpi_hailo,
+        &top_cluster,
+    ];
+
+    for top in all_topologies {
+        assert_eq!(top.partitions[0].start_layer, 0);
+        assert_eq!(top.partitions.last().unwrap().end_layer, top.total_layers);
+        for i in 0..top.partitions.len() - 1 {
+            assert_eq!(top.partitions[i].end_layer, top.partitions[i + 1].start_layer);
+        }
+
+        // Test forward step execution on each topology
+        let mut pipeline = oxide_engine::hybrid::HybridMultiDevicePipeline::new((*top).clone(), 128);
+        let cmd = oxide_core::worker::StepCommand::new(505, 12, 0, false);
+        let comp = pipeline.step_hybrid(&cmd).unwrap();
+        assert_eq!(comp.sequence_id, 505);
+        assert_eq!(comp.sampled_token, 13);
+    }
 }
 
 #[test]
