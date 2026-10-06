@@ -10,6 +10,21 @@
 #[inline(always)]
 #[must_use]
 pub fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Feature detected and bounds handled internally.
+            unsafe {
+                return dot_f32_avx2(a, b);
+            }
+        }
+    }
+
+    dot_f32_portable(a, b)
+}
+
+#[inline(always)]
+fn dot_f32_portable(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len().min(b.len());
     let chunks = len / 8;
     let remainder = len % 8;
@@ -43,6 +58,54 @@ pub fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     }
 
     sum
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_f32_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use core::arch::x86_64::{
+        _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    let len = a.len().min(b.len());
+    let chunks = len / 16;
+
+    // SAFETY: Verified AVX2/FMA features and all slices are validated against len.
+    unsafe {
+        let mut sum0 = _mm256_setzero_ps();
+        let mut sum1 = _mm256_setzero_ps();
+
+        let a_ptr = a.as_ptr();
+        let b_ptr = b.as_ptr();
+
+        for i in 0..chunks {
+            let offset = i * 16;
+            let va0 = _mm256_loadu_ps(a_ptr.add(offset));
+            let vb0 = _mm256_loadu_ps(b_ptr.add(offset));
+            sum0 = _mm256_fmadd_ps(va0, vb0, sum0);
+
+            let va1 = _mm256_loadu_ps(a_ptr.add(offset + 8));
+            let vb1 = _mm256_loadu_ps(b_ptr.add(offset + 8));
+            sum1 = _mm256_fmadd_ps(va1, vb1, sum1);
+        }
+
+        let mut buf0 = [0.0f32; 8];
+        let mut buf1 = [0.0f32; 8];
+        _mm256_storeu_ps(buf0.as_mut_ptr(), sum0);
+        _mm256_storeu_ps(buf1.as_mut_ptr(), sum1);
+
+        let mut total = (buf0[0] + buf0[1] + buf0[2] + buf0[3])
+            + (buf0[4] + buf0[5] + buf0[6] + buf0[7])
+            + (buf1[0] + buf1[1] + buf1[2] + buf1[3])
+            + (buf1[4] + buf1[5] + buf1[6] + buf1[7]);
+
+        let rem_start = chunks * 16;
+        for i in rem_start..len {
+            total += *a.get_unchecked(i) * *b.get_unchecked(i);
+        }
+
+        total
+    }
 }
 
 /// Compute dot product between a Q8_0 block (32 int8 weights) and 32 f32 activations.

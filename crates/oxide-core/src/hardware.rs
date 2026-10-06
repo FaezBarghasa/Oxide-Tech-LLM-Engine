@@ -809,8 +809,8 @@ impl GpuDeviceProfile {
                 compute_capability: ComputeCapability::GFX_1030_RDNA2,
                 architecture: GpuArchitecture::Rdna2,
                 form_factor: HardwareFormFactor::ApuUnifiedMemoryWithNpu,
-                memory_tech: MemoryTechnology::Ddr5,
-                tensor_core_gen: TensorCoreGeneration::None,
+                memory_tech: MemoryTechnology::UnifiedDdr5Coherent,
+                tensor_core_gen: TensorCoreGeneration::AmdRdnaWmma,
                 sm_count: 2, // 2 CUs (128 Stream Processors)
                 vram_capacity_bytes: 16 * 1024 * 1024 * 1024, // Unified host system memory partition
                 memory_bus_width_bits: 128,
@@ -2223,5 +2223,56 @@ impl GpuDeviceProfile {
             | GpuArchitecture::Rdna1
             | GpuArchitecture::Rdna2 => 64, // 2 warps / 64x64 Edge Systolic
         }
+    }
+
+    /// Autonomously inspects the host system to identify AMD APUs featuring integrated graphics (e.g. Raphael, Phoenix, Strix Point).
+    /// Returns `(cpu_model_name, igpu_profile)` if an AMD CPU with integrated graphics is found.
+    #[must_use]
+    pub fn detect_amd_cpu_and_igpu() -> Option<(String, Self)> {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+                let is_amd = cpuinfo.contains("AuthenticAMD");
+                if is_amd {
+                    let mut model_name = String::new();
+                    for line in cpuinfo.lines() {
+                        if line.starts_with("model name") {
+                            if let Some((_, val)) = line.split_once(':') {
+                                model_name = val.trim().to_string();
+                                break;
+                            }
+                        }
+                    }
+
+                    // Check if model name mentions Radeon Graphics or matches known APU families
+                    let lower = model_name.to_lowercase();
+                    let has_igpu_hint = lower.contains("radeon")
+                        || lower.contains("7745hx")
+                        || lower.contains("7945hx")
+                        || lower.contains("7840")
+                        || lower.contains("8840")
+                        || lower.contains("ai 9")
+                        || lower.contains("strix")
+                        || lower.contains("phoenix")
+                        || lower.contains("raphael");
+
+                    // Check /dev/dri render devices
+                    let has_dri = std::path::Path::new("/dev/dri/renderD128").exists()
+                        || std::path::Path::new("/dev/dri/card0").exists();
+
+                    if has_igpu_hint || has_dri {
+                        let query = if lower.is_empty() { "raphael" } else { &lower };
+                        if let Some(profile) = Self::from_known_device_name(query) {
+                            return Some((model_name, profile));
+                        }
+                        // Default to Raphael Zen4 RDNA2 iGPU if AMD APU detected
+                        if let Some(profile) = Self::from_known_device_name("raphael") {
+                            return Some((model_name, profile));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 }
