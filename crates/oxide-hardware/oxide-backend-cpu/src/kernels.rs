@@ -156,12 +156,7 @@ impl CpuLlmKernels {
         }
 
         // 1. RMSNorm vectorized reduction
-        Self::dispatch_cpu_rmsnorm(
-            &mut norm_activations,
-            &activations,
-            &weights,
-            1e-5,
-        );
+        Self::dispatch_cpu_rmsnorm(&mut norm_activations, &activations, &weights, 1e-5);
 
         // 2. Multi-threaded Q8_0 quantized GEMV projection
         let dummy_blocks = [oxide_quant::int_quant::BlockQ8_0 {

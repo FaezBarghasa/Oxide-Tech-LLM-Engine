@@ -82,11 +82,7 @@ impl HardwareBackend for CpuBackend {
         };
 
         let slot = cmd.slot_idx as usize;
-        CpuLlmKernels::dispatch_full_step_decode(
-            cmd.input_token,
-            slot,
-            &mut self.token_buffer,
-        )?;
+        CpuLlmKernels::dispatch_full_step_decode(cmd.input_token, slot, &mut self.token_buffer)?;
 
         Ok(event)
     }

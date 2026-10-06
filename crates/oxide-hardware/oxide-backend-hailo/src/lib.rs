@@ -124,11 +124,8 @@ impl HardwareBackend for HailoBackend {
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
         let event_id = self.vstream.dispatch_vstream();
         let slot = cmd.slot_idx as usize;
-        let _ = HailoLlmKernels::dispatch_hailo_step_decode(
-            cmd.input_token,
-            slot,
-            &mut self.buffer,
-        )?;
+        let _ =
+            HailoLlmKernels::dispatch_hailo_step_decode(cmd.input_token, slot, &mut self.buffer)?;
 
         Ok(HailoEventHandle {
             vstream_event_id: event_id,

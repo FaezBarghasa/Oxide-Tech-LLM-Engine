@@ -5,6 +5,7 @@
 //! - `Q4_0` (32 INT4 nibbles * 32 F32 activations)
 //! - `Q4_K` (256 INT4 nibbles * 256 F32 activations)
 //! - Continuous `f32` dot product with 8 independent accumulators to saturate dual FMA ports.
+use rayon::prelude::*;
 
 /// Continuous F32 dot product with dynamic microarchitecture feature detection (AVX-512, AVX2/FMA, AVX, or 8-way unrolled portable).
 #[inline(always)]
@@ -864,7 +865,10 @@ pub fn gemv_q8_0(
 ) {
     assert!(n % 32 == 0, "n must be a multiple of 32 for Q8_0");
     let blocks_per_row = n / 32;
-    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q8_0 blocks");
+    assert!(
+        matrix.len() >= m * blocks_per_row,
+        "Insufficient Q8_0 blocks"
+    );
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
@@ -915,7 +919,10 @@ pub fn gemv_q4_0(
 ) {
     assert!(n % 32 == 0, "n must be a multiple of 32 for Q4_0");
     let blocks_per_row = n / 32;
-    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q4_0 blocks");
+    assert!(
+        matrix.len() >= m * blocks_per_row,
+        "Insufficient Q4_0 blocks"
+    );
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
@@ -966,7 +973,10 @@ pub fn gemv_q4_k(
 ) {
     assert!(n % 256 == 0, "n must be a multiple of 256 for Q4_K");
     let blocks_per_row = n / 256;
-    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q4_K blocks");
+    assert!(
+        matrix.len() >= m * blocks_per_row,
+        "Insufficient Q4_K blocks"
+    );
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
@@ -1010,7 +1020,10 @@ pub fn gemv_q4_k(
 /// Vectorized RMSNorm kernel with AVX-512 / AVX2 FMA dot-product reduction.
 pub fn rmsnorm_f32(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) {
     let len = input.len();
-    assert!(weight.len() >= len && output.len() >= len, "Buffer dimension mismatch");
+    assert!(
+        weight.len() >= len && output.len() >= len,
+        "Buffer dimension mismatch"
+    );
     let sum_sq = dot_f32(input, input);
     let mean_sq = sum_sq / (len as f32);
     let inv_rms = 1.0 / (mean_sq + eps).sqrt();

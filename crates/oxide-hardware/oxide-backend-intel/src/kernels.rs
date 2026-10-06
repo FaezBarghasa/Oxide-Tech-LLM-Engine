@@ -65,12 +65,7 @@ impl IntelLlmKernels {
     }
 
     /// Dispatches Intel ESIMD vectorized RMSNorm kernel.
-    pub fn dispatch_intel_esimd_rmsnorm(
-        out: &mut [f32],
-        input: &[f32],
-        weight: &[f32],
-        eps: f32,
-    ) {
+    pub fn dispatch_intel_esimd_rmsnorm(out: &mut [f32], input: &[f32], weight: &[f32], eps: f32) {
         oxide_quant::simd::rmsnorm_f32(input, weight, out, eps);
     }
 
