@@ -642,7 +642,14 @@ impl Llama3Model {
             layer_cache.append_kv(&scratch.k, &scratch.v);
         }
 
-        // Attention Output Projection
+        let context_len = position + 1;
+        let (k_buf, v_buf) = if let Some(layer_cache) = kv_cache.get(layer_idx) {
+            (&layer_cache.k[..], &layer_cache.v[..])
+        } else {
+            (&scratch.k[..], &scratch.v[..])
+        };
+
+        // Attention Output Projection with GQA over full historical KV context
         for head in 0..self.config.num_heads {
             let q_start = head * self.config.head_dim;
             let q_slice = &scratch.q[q_start..q_start + self.config.head_dim];
@@ -650,12 +657,16 @@ impl Llama3Model {
 
             // Grouped-Query Attention head mapping
             let kv_head = head / (self.config.num_heads / self.config.num_kv_heads);
-            let k_start = kv_head * self.config.head_dim;
-            let k_slice = &scratch.k[k_start..k_start + self.config.head_dim];
-            let v_slice = &scratch.v[k_start..k_start + self.config.head_dim];
 
-            self.flash_attn
-                .forward_head(q_slice, k_slice, v_slice, 1, 1, out_slice);
+            self.flash_attn.forward_decode_gqa(
+                q_slice,
+                k_buf,
+                v_buf,
+                kv_head,
+                self.config.num_kv_heads,
+                context_len,
+                out_slice,
+            );
         }
 
         Self::gemv(

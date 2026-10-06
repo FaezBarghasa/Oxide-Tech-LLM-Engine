@@ -184,4 +184,68 @@ impl FlashAttentionEngine {
             }
         }
     }
+
+    /// Computes incremental single-token decoding attention against historical KV cache.
+    /// `q_head`: Query vector for this head `[head_dim]`
+    /// `k_cache`: All cached keys across layers/tokens `[seq_len, num_kv_heads * head_dim]`
+    /// `v_cache`: All cached values across layers/tokens `[seq_len, num_kv_heads * head_dim]`
+    /// `kv_head_idx`: Index of the assigned KV head (for GQA)
+    /// `num_kv_heads`: Total KV heads in model
+    /// `context_len`: Total tokens in cache including current token
+    /// `output`: Destination slice for this head `[head_dim]`
+    pub fn forward_decode_gqa(
+        &self,
+        q_head: &[f32],
+        k_cache: &[f32],
+        v_cache: &[f32],
+        kv_head_idx: usize,
+        num_kv_heads: usize,
+        context_len: usize,
+        output: &mut [f32],
+    ) {
+        let head_dim = self.config.head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        let kv_head_offset = kv_head_idx * head_dim;
+
+        output.fill(0.0);
+        if context_len == 0 {
+            return;
+        }
+
+        let mut max_score = f32::NEG_INFINITY;
+        let mut sum_exp = 0.0f32;
+
+        for t in 0..context_len {
+            let t_offset = t * kv_dim + kv_head_offset;
+            if t_offset + head_dim > k_cache.len() || t_offset + head_dim > v_cache.len() {
+                break;
+            }
+            let k_vec = &k_cache[t_offset..t_offset + head_dim];
+            let v_vec = &v_cache[t_offset..t_offset + head_dim];
+
+            let mut dot = 0.0f32;
+            for d in 0..head_dim {
+                dot += q_head[d] * k_vec[d];
+            }
+            let score = dot * self.config.softmax_scale;
+
+            let new_max = max_score.max(score);
+            let alpha = (max_score - new_max).exp();
+            let beta = (score - new_max).exp();
+
+            max_score = new_max;
+            sum_exp = sum_exp * alpha + beta;
+
+            for d in 0..head_dim {
+                output[d] = output[d] * alpha + beta * v_vec[d];
+            }
+        }
+
+        if sum_exp > 0.0 {
+            let inv_sum = 1.0 / sum_exp;
+            for val in output.iter_mut() {
+                *val *= inv_sum;
+            }
+        }
+    }
 }
