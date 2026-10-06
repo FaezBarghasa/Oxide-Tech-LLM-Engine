@@ -19,9 +19,11 @@
 )]
 
 pub mod arch;
+pub mod kernels;
 pub mod level_zero;
 
 pub use arch::IntelExecutionPlan;
+pub use kernels::IntelLlmKernels;
 pub use level_zero::LevelZeroCommunicator;
 
 use oxide_core::error::Result;
@@ -114,9 +116,11 @@ impl HardwareBackend for IntelBackend {
         };
 
         let slot = cmd.slot_idx as usize;
-        if slot < self.host_token_buffer.len() {
-            self.host_token_buffer[slot] = cmd.input_token.wrapping_add(1);
-        }
+        IntelLlmKernels::dispatch_intel_step_decode(
+            cmd.input_token,
+            slot,
+            &mut self.host_token_buffer,
+        )?;
 
         Ok(event)
     }

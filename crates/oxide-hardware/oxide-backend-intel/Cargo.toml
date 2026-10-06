@@ -9,5 +9,6 @@ license.workspace = true
 oxide-core.workspace = true
 oxide-alloc.workspace = true
 oxide-quant.workspace = true
+half.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
