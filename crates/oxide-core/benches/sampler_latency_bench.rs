@@ -1,7 +1,8 @@
 //! Microbenchmarks comparing host CPU logit QuickSort vs. GPU Fused Radix-Select.
 //! Accurately demonstrates the eradication of the 2.8ms CPU bottleneck.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 fn cpu_scalar_quicksort_sampler(logits: &mut [f32], top_p: f32) -> u32 {
     let mut indexed: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();

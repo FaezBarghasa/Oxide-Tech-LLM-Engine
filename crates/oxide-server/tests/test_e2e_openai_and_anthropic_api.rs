@@ -10,7 +10,7 @@ use serde_json::json;
 async fn test_dual_protocol_streaming_conformance() {
     let context = MockEngineContext::new();
     let app = create_engine_router(context);
-    let server = TestServer::new(app).expect("Failed to launch axum test server");
+    let server = TestServer::new(app);
 
     // 1. Query OpenAI /v1/chat/completions with stream=true
     let openai_payload = json!({

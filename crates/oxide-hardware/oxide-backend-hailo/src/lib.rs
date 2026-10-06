@@ -20,9 +20,11 @@
 
 pub mod arch;
 pub mod hailort;
+pub mod kernels;
 
-use arch::HailoExecutionPlan;
-use hailort::{HailoVStreamBuffer, HailoVirtualStream};
+pub use arch::HailoExecutionPlan;
+pub use hailort::{HailoVStreamBuffer, HailoVirtualStream};
+pub use kernels::HailoLlmKernels;
 use oxide_core::error::Result;
 use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
@@ -122,9 +124,11 @@ impl HardwareBackend for HailoBackend {
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
         let event_id = self.vstream.dispatch_vstream();
         let slot = cmd.slot_idx as usize;
-
-        let sampled = cmd.input_token.wrapping_add(1);
-        let _ = self.buffer.write_token(slot, sampled);
+        let _ = HailoLlmKernels::dispatch_hailo_step_decode(
+            cmd.input_token,
+            slot,
+            &mut self.buffer,
+        )?;
 
         Ok(HailoEventHandle {
             vstream_event_id: event_id,
