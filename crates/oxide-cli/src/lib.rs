@@ -69,6 +69,7 @@ pub enum BackendArg {
     Rknn,
     Hailo,
     Cpu,
+    CpuIgpu,
 }
 
 impl BackendArg {
@@ -84,9 +85,11 @@ impl BackendArg {
             Self::Rknn => "rknn",
             Self::Hailo => "hailo",
             Self::Cpu => "cpu",
+            Self::CpuIgpu => "cpu_igpu",
         }
     }
 }
+
 
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum Commands {

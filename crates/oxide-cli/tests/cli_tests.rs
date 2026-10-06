@@ -90,6 +90,7 @@ fn test_cli_all_backend_enums() {
         ("rknn", BackendArg::Rknn),
         ("hailo", BackendArg::Hailo),
         ("cpu", BackendArg::Cpu),
+        ("cpu_igpu", BackendArg::CpuIgpu),
     ];
     for (name, expected) in backends {
         let args = ["oxide-engine", "--backend", name];
