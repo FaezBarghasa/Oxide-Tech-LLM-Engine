@@ -370,9 +370,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             );
             Ok(())
         }
-        Some(Commands::Bench(bench)) => {
-            run_all_hardware_benchmarks(bench.tokens, bench.warmup)
-        }
+        Some(Commands::Bench(bench)) => run_all_hardware_benchmarks(bench.tokens, bench.warmup),
         Some(Commands::Server(srv)) => {
             let addr: SocketAddr = format!("{}:{}", srv.host, srv.port).parse()?;
             run_server_with_options(
@@ -727,21 +725,14 @@ async fn run_server_with_options(
 /// - AMD Radeon 610M (Raw iGPU: RDNA 2, unified coherent DDR5)
 /// - NVIDIA GeForce RTX 4060 Laptop (Raw dGPU: Ada Lovelace, FP8, Tensor Cores)
 /// - Hybrid Collaborative (CPU + AMD iGPU + NVIDIA CUDA)
+///
 /// Computes real latency, decode tokens/sec, and compares against vLLM, llama.cpp, and SGLang.
+#[allow(clippy::cast_precision_loss)]
 pub fn run_all_hardware_benchmarks(
     tokens: usize,
     warmup: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use std::time::Instant;
-
-    println!("\n╔═══════════════════════════════════════════════════════════════════════════════════════╗");
-    println!("║       OXIDE-TECH-LLM-ENGINE: ZERO-ALLOCATION HARDWARE BENCHMARK & COMPARISON          ║");
-    println!("╠═══════════════════════════════════════════════════════════════════════════════════════╣");
-    println!("║ Host CPU:  AMD Ryzen 7 7745HX (8C/16T, Zen 4, AVX2, AVX-512)                         ║");
-    println!("║ Host iGPU: AMD Radeon 610M (Raphael RDNA 2, Unified Coherent DDR5)                    ║");
-    println!("║ Host dGPU: NVIDIA GeForce RTX 4060 Laptop GPU (8GB VRAM, sm_89 Ada Lovelace)          ║");
-    println!("║ Workload:  Decode {} tokens (Warmup: {} iterations)                                  ║", tokens, warmup);
-    println!("╚═══════════════════════════════════════════════════════════════════════════════════════╝\n");
 
     struct TargetConfig {
         name: &'static str,
@@ -751,6 +742,31 @@ pub fn run_all_hardware_benchmarks(
         llamacpp_baseline: f64,
         sglang_baseline: f64,
     }
+
+    println!(
+        "\n╔═══════════════════════════════════════════════════════════════════════════════════════╗"
+    );
+    println!(
+        "║       OXIDE-TECH-LLM-ENGINE: ZERO-ALLOCATION HARDWARE BENCHMARK & COMPARISON          ║"
+    );
+    println!(
+        "╠═══════════════════════════════════════════════════════════════════════════════════════╣"
+    );
+    println!(
+        "║ Host CPU:  AMD Ryzen 7 7745HX (8C/16T, Zen 4, AVX2, AVX-512)                         ║"
+    );
+    println!(
+        "║ Host iGPU: AMD Radeon 610M (Raphael RDNA 2, Unified Coherent DDR5)                    ║"
+    );
+    println!(
+        "║ Host dGPU: NVIDIA GeForce RTX 4060 Laptop GPU (8GB VRAM, sm_89 Ada Lovelace)          ║"
+    );
+    println!(
+        "║ Workload:  Decode {tokens} tokens (Warmup: {warmup} iterations)                       ║"
+    );
+    println!(
+        "╚═══════════════════════════════════════════════════════════════════════════════════════╝\n"
+    );
 
     let targets = [
         TargetConfig {
@@ -773,24 +789,31 @@ pub fn run_all_hardware_benchmarks(
             name: "Raw NVIDIA dGPU (RTX 4060 Ada Lovelace FP8)",
             backend_name: "cuda",
             target_device: Some("NVIDIA GeForce RTX 4060 Laptop"),
-            vllm_baseline: 104.0,     // vLLM CUDA v0.7+ (tokens/sec)
-            llamacpp_baseline: 88.0,  // llama.cpp CUDA cuBLAS (tokens/sec)
-            sglang_baseline: 112.0,   // SGLang FlashInfer (tokens/sec)
+            vllm_baseline: 104.0,    // vLLM CUDA v0.7+ (tokens/sec)
+            llamacpp_baseline: 88.0, // llama.cpp CUDA cuBLAS (tokens/sec)
+            sglang_baseline: 112.0,  // SGLang FlashInfer (tokens/sec)
         },
         TargetConfig {
             name: "Hybrid Collaborative (CPU + AMD iGPU + NVIDIA dGPU)",
             backend_name: "hybrid",
             target_device: Some("Heterogeneous Multi-Device"),
-            vllm_baseline: 95.0,     // vLLM does not support heterogeneous concurrent offload
+            vllm_baseline: 95.0, // vLLM does not support heterogeneous concurrent offload
             llamacpp_baseline: 92.0, // llama.cpp -ngl partial offload (high PCI-e latency)
-            sglang_baseline: 100.0,  // SGLang homogeneous only
+            sglang_baseline: 100.0, // SGLang homogeneous only
         },
     ];
 
-    println!("{:<48} | {:<10} | {:<12} | {:<10} | {:<10} | {:<10}",
-        "Hardware Target & Architecture", "TTFT (µs)", "Oxide tok/s", "vs llama", "vs vLLM", "vs SGLang"
+    println!(
+        "{:<48} | {:<10} | {:<12} | {:<10} | {:<10} | {:<10}",
+        "Hardware Target & Architecture",
+        "TTFT (µs)",
+        "Oxide tok/s",
+        "vs llama",
+        "vs vLLM",
+        "vs SGLang"
     );
-    println!("{:-<48}-+-{:-<10}-+-{:-<12}-+-{:-<10}-+-{:-<10}-+-{:-<10}",
+    println!(
+        "{:-<48}-+-{:-<10}-+-{:-<12}-+-{:-<10}-+-{:-<10}-+-{:-<10}",
         "", "", "", "", "", ""
     );
 
