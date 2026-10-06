@@ -1656,7 +1656,7 @@ impl GpuDeviceProfile {
                 vram_capacity_bytes: vram_gb * 1024 * 1024 * 1024,
                 memory_bus_width_bits: 768, // 12-channel DDR5-4800/6000
                 memory_bandwidth_gbps: 460.8, // Up to 460.8 GB/s on 12-channel DDR5
-                l2_cache_bytes: (cores as u64) * 1024 * 1024,
+                l2_cache_bytes: cores * 1024 * 1024,
                 smem_per_sm_bytes: 64 * 1024,
                 smem_per_block_bytes: 64 * 1024,
                 max_threads_per_sm: 1024,
