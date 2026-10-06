@@ -69,6 +69,7 @@ pub enum BackendArg {
     Rknn,
     Hailo,
     Cpu,
+    #[value(name = "cpu_igpu", alias = "cpu-igpu")]
     CpuIgpu,
     Apu,
 }

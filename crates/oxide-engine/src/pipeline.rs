@@ -393,7 +393,7 @@ impl SpecializedPipeline {
         if is_apu || is_cpu_igpu || auto_apu {
             let has_npu = is_apu
                 || oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
-                    .map_or(false, |(_, _, npu)| npu);
+                    .is_some_and(|(_, _, npu)| npu);
             let topology = crate::hybrid::HybridDeviceTopology::amd_apu_full_partition(
                 model.config.num_layers,
                 has_npu,

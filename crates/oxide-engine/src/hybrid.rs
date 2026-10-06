@@ -121,10 +121,7 @@ impl HybridDeviceTopology {
     /// Creates an optimal heterogeneous 3-way partition across CPU + iGPU + XDNA NPU for AMD APUs.
     /// Distributes transformer layers according to microarchitectural compute ratios across coherent DDR5/LPDDR5X memory.
     #[must_use]
-    pub fn amd_apu_full_partition(
-        total_layers: usize,
-        has_npu: bool,
-    ) -> Self {
+    pub fn amd_apu_full_partition(total_layers: usize, has_npu: bool) -> Self {
         if !has_npu || total_layers < 3 {
             return Self::amd_apu_partition(total_layers, 0.35);
         }
