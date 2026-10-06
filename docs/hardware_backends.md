@@ -87,14 +87,25 @@
 
 ---
 
-## 9. Vectorized CPU Backend (`oxide-backend-cpu`)
+## 9. Vectorized & Multithreaded CPU Backend (`oxide-backend-cpu` & `oxide-quant::simd`)
 
-- **x86_64 AVX-512 & AVX2**:
-  - `vpdpbusd` integer vector dot products for branchless ternary matrix-vector multiplication.
-  - AVX2 FMA & AVX-512 FMA parallel float conversion.
+- **Full Core & Thread Saturation (8 to 128 Cores)**:
+  - `CpuThreadPool`: NUMA-aware, core-pinned worker thread pool using `core_affinity` to bind threads directly to physical hardware CPU cores and logical hardware threads.
+  - Multi-threaded Cache-Blocked GEMV (`gemv_blocked_f32`): Partitions matrix rows across all available CPU cores and threads. Each thread executes vector dot products keeping the activation vector resident in L1D/L2 cache while streaming matrix rows.
+  - Multi-threaded Quantized GEMVs: Parallelized execution for `gemv_q8_0` (AVX-512 VNNI / AVX2 FMA), `gemv_q4_0` (AVX-512BW nibble unpacking), and `gemv_q4_k` (AVX-512 / AVX2 super-block accumulation).
+  - Multi-threaded CPU FlashAttention-2 / FlashDecode (`flash_attention_cpu`): Parallelizes query head computation across all threads with online, numerically-stable Softmax (Dao et al. / Milakov & Gimelshein).
+- **Intel AMX (Advanced Matrix Extensions)**:
+  - Hardware 1KB 2D tile registers (`TMM0`..`TMM7`) on Intel Xeon Sapphire Rapids, Emerald Rapids, and Granite Rapids.
+  - OS XTILE context initialization via Linux `arch_prctl(ARCH_REQ_XCOMP_PERM)`.
+  - Zero-allocation direct inline assembly instructions: `tileloadd`, `tdpbusd` (INT8 matrix multiplication), `tilestored`, and `tilerelease`.
+- **x86_64 AVX-512 & AVX2 / FMA**:
+  - `_mm512_dpbusd_epi32` and `_mm256_dpbusd_epi32` integer vector dot products for branchless quantized inference.
+  - AVX2 FMA & AVX-512 FMA parallel float conversions with dual-accumulator unrolling.
+  - Vectorized RMSNorm (`rmsnorm_f32`) and Rotary Position Embedding (`rope_f32`).
 - **ARM Neon / SVE2**:
   - `vdotq_s32` vector dot products on ARM64 processors.
-- **Cacheline Isolation**: Thread context structures aligned to 64 bytes (`#[repr(C, align(64))]`) to prevent L1/L2 cacheline bouncing across CPU cores.
+- **Cacheline Isolation**:
+  - Thread context structures aligned to 64 bytes (`#[repr(C, align(64))]`) to prevent false sharing and L1/L2 cacheline bouncing across CPU cores.
 
 ---
 

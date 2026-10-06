@@ -1,0 +1,9 @@
+# GitHub Sponsors and Community Funding Configuration for Oxide-Tech LLM Engine
+
+github: [FaezBarghasa]
+open_collective: oxide-tech
+ko_fi: faezbarghasa
+patreon: oxide_tech
+custom:
+  - https://github.com/FaezBarghasa/Oxide-Tech-LLM-Engine/blob/main/SPONSORS.md
+  - "faez.barghasa.org@gmail.com"
