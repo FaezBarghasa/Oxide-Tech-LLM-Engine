@@ -1222,7 +1222,7 @@ mod tests {
         let blocks_per_row = n / 32;
         let mut blocks = vec![crate::int_quant::BlockQ8_0::default(); m * blocks_per_row];
         for blk in &mut blocks {
-            blk.scale = half::f16::from_f32(0.01);
+            blk.scale = crate::int_quant::f16::from_f32(0.01);
             for i in 0..32 {
                 blk.qs[i] = ((i as i32 * 3) % 127) as i8;
             }
@@ -1246,9 +1246,9 @@ mod tests {
         let blocks_per_row = n / 32;
         let mut blocks = vec![crate::int_quant::BlockQ4_0::default(); m * blocks_per_row];
         for blk in &mut blocks {
-            blk.scale = half::f16::from_f32(0.02);
+            blk.scale = crate::int_quant::f16::from_f32(0.02);
             for i in 0..16 {
-                blk.qs[i] = ((i as u8 * 17) % 255);
+                blk.qs[i] = (i as u8 * 17) % 255;
             }
         }
         let mut vector = vec![0.0f32; n];
@@ -1269,8 +1269,8 @@ mod tests {
         let n = 256;
         let mut blocks = vec![crate::gguf_quants::BlockQ4_K::default(); m];
         for blk in &mut blocks {
-            blk.d = half::f16::from_f32(0.02);
-            blk.dmin = half::f16::from_f32(-0.5);
+            blk.d = crate::int_quant::f16::from_f32(0.02);
+            blk.dmin = crate::int_quant::f16::from_f32(-0.5);
             for i in 0..128 {
                 blk.qs[i] = ((i * 11) % 256) as u8;
             }
