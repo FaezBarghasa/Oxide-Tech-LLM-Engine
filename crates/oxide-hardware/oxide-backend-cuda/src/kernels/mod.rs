@@ -87,8 +87,10 @@ impl CudaLlmKernels {
             out_head.fill(0.0);
 
             for t in 0..num_kv_tokens {
-                let k_tok = &k_cache[(t * num_heads + h) * head_dim..(t * num_heads + h + 1) * head_dim];
-                let v_tok = &v_cache[(t * num_heads + h) * head_dim..(t * num_heads + h + 1) * head_dim];
+                let k_tok =
+                    &k_cache[(t * num_heads + h) * head_dim..(t * num_heads + h + 1) * head_dim];
+                let v_tok =
+                    &v_cache[(t * num_heads + h) * head_dim..(t * num_heads + h + 1) * head_dim];
 
                 let mut score = 0.0f32;
                 for d in 0..head_dim {

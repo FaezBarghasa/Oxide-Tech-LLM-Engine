@@ -19,9 +19,11 @@
 )]
 
 pub mod arch;
+pub mod kernels;
 pub mod rccl;
 
 pub use arch::RocmExecutionPlan;
+pub use kernels::RocmLlmKernels;
 
 use oxide_core::error::Result;
 use oxide_core::hardware::GpuDeviceProfile;

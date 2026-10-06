@@ -19,9 +19,11 @@
 )]
 
 pub mod arch;
+pub mod kernels;
 pub mod rknn;
 
-use arch::RknnExecutionPlan;
+pub use arch::RknnExecutionPlan;
+pub use kernels::RknnLlmKernels;
 use oxide_core::error::Result;
 use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
