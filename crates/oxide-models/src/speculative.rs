@@ -95,7 +95,12 @@ impl SpeculativeDecodingEngine {
         let mut verif_tok = current_token;
 
         for &candidate in &draft_candidates {
-            target_model.forward_step_with_scratch(verif_tok, verif_pos, target_kv, target_scratch)?;
+            target_model.forward_step_with_scratch(
+                verif_tok,
+                verif_pos,
+                target_kv,
+                target_scratch,
+            )?;
             let target_pred = sample_greedy(&target_scratch.logits);
 
             // Rejection / Acceptance check
@@ -114,7 +119,12 @@ impl SpeculativeDecodingEngine {
 
         // If all drafts accepted, sample one bonus token from final target logits
         if accepted_tokens.len() == self.gamma {
-            target_model.forward_step_with_scratch(verif_tok, verif_pos, target_kv, target_scratch)?;
+            target_model.forward_step_with_scratch(
+                verif_tok,
+                verif_pos,
+                target_kv,
+                target_scratch,
+            )?;
             let bonus_token = sample_greedy(&target_scratch.logits);
             accepted_tokens.push(bonus_token);
         }

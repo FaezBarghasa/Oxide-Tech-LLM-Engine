@@ -539,7 +539,9 @@ impl Llama3Model {
         // 1. Embedding lookup
         let emb_offset = tok_idx * h;
         if emb_offset + h <= self.token_embedding.len() {
-            scratch.hidden.copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
+            scratch
+                .hidden
+                .copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
         } else {
             scratch.hidden.fill(0.0);
         }
@@ -550,12 +552,35 @@ impl Llama3Model {
 
         // 2. Transformer Decoder Layers
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            Self::rms_norm(&scratch.hidden, &layer.attn_norm, &mut scratch.norm_hidden, eps);
+            Self::rms_norm(
+                &scratch.hidden,
+                &layer.attn_norm,
+                &mut scratch.norm_hidden,
+                eps,
+            );
 
             // Q, K, V Projections via SIMD GEMV
-            Self::gemv(&layer.q_proj, &scratch.norm_hidden, q_dim, h, &mut scratch.q);
-            Self::gemv(&layer.k_proj, &scratch.norm_hidden, kv_dim, h, &mut scratch.k);
-            Self::gemv(&layer.v_proj, &scratch.norm_hidden, kv_dim, h, &mut scratch.v);
+            Self::gemv(
+                &layer.q_proj,
+                &scratch.norm_hidden,
+                q_dim,
+                h,
+                &mut scratch.q,
+            );
+            Self::gemv(
+                &layer.k_proj,
+                &scratch.norm_hidden,
+                kv_dim,
+                h,
+                &mut scratch.k,
+            );
+            Self::gemv(
+                &layer.v_proj,
+                &scratch.norm_hidden,
+                kv_dim,
+                h,
+                &mut scratch.v,
+            );
 
             // RoPE Rotary Embedding
             for head_idx in 0..self.config.num_heads {
@@ -592,7 +617,13 @@ impl Llama3Model {
                     .forward_head(q_slice, k_slice, v_slice, 1, 1, out_slice);
             }
 
-            Self::gemv(&layer.o_proj, &scratch.attn_out, h, q_dim, &mut scratch.o_proj_out);
+            Self::gemv(
+                &layer.o_proj,
+                &scratch.attn_out,
+                h,
+                q_dim,
+                &mut scratch.o_proj_out,
+            );
 
             // Residual 1
             for i in 0..h {
@@ -600,11 +631,28 @@ impl Llama3Model {
             }
 
             // FFN RMSNorm & SwiGLU MLP
-            Self::rms_norm(&scratch.hidden, &layer.ffn_norm, &mut scratch.ffn_norm_hidden, eps);
+            Self::rms_norm(
+                &scratch.hidden,
+                &layer.ffn_norm,
+                &mut scratch.ffn_norm_hidden,
+                eps,
+            );
 
             let inter_dim = self.config.intermediate_dim;
-            Self::gemv(&layer.gate_proj, &scratch.ffn_norm_hidden, inter_dim, h, &mut scratch.gate);
-            Self::gemv(&layer.up_proj, &scratch.ffn_norm_hidden, inter_dim, h, &mut scratch.up);
+            Self::gemv(
+                &layer.gate_proj,
+                &scratch.ffn_norm_hidden,
+                inter_dim,
+                h,
+                &mut scratch.gate,
+            );
+            Self::gemv(
+                &layer.up_proj,
+                &scratch.ffn_norm_hidden,
+                inter_dim,
+                h,
+                &mut scratch.up,
+            );
 
             // SwiGLU: down_proj(silu(gate) * up)
             for i in 0..inter_dim {
@@ -613,7 +661,13 @@ impl Llama3Model {
                 scratch.activated[i] = silu_g * scratch.up[i];
             }
 
-            Self::gemv(&layer.down_proj, &scratch.activated, h, inter_dim, &mut scratch.mlp_out);
+            Self::gemv(
+                &layer.down_proj,
+                &scratch.activated,
+                h,
+                inter_dim,
+                &mut scratch.mlp_out,
+            );
 
             // Residual 2
             for i in 0..h {
@@ -622,11 +676,22 @@ impl Llama3Model {
         }
 
         // 3. Final RMSNorm
-        Self::rms_norm(&scratch.hidden, &self.output_norm, &mut scratch.final_norm, eps);
+        Self::rms_norm(
+            &scratch.hidden,
+            &self.output_norm,
+            &mut scratch.final_norm,
+            eps,
+        );
 
         // 4. LM Head projection to vocabulary logits
         let v = self.config.vocab_size;
-        Self::gemv(&self.lm_head, &scratch.final_norm, v, h, &mut scratch.logits);
+        Self::gemv(
+            &self.lm_head,
+            &scratch.final_norm,
+            v,
+            h,
+            &mut scratch.logits,
+        );
 
         Ok(())
     }

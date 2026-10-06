@@ -76,13 +76,12 @@ impl CudaGraphManager {
 
     /// Replays a captured CUDA execution graph in a single driver call.
     pub fn replay_graph(&mut self, handle: CudaGraphExecHandle) -> Result<()> {
-        let graph = self
-            .graphs
-            .get_mut(&handle.graph_id)
-            .ok_or_else(|| oxide_core::error::EngineError::BackendError(format!(
+        let graph = self.graphs.get_mut(&handle.graph_id).ok_or_else(|| {
+            oxide_core::error::EngineError::BackendError(format!(
                 "CUDA Graph ID {} not found",
                 handle.graph_id
-            )))?;
+            ))
+        })?;
 
         graph.execution_count += 1;
         self.total_replays += 1;
@@ -107,7 +106,9 @@ mod tests {
     #[test]
     fn test_cuda_graph_capture_and_replay() {
         let mut manager = CudaGraphManager::new();
-        let handle = manager.capture_decode_graph("llama3-8b-decode", 32, 1).unwrap();
+        let handle = manager
+            .capture_decode_graph("llama3-8b-decode", 32, 1)
+            .unwrap();
         assert_eq!(handle.node_count, 32 * 7 + 2);
 
         manager.replay_graph(handle).unwrap();

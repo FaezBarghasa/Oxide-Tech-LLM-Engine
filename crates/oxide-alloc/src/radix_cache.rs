@@ -142,11 +142,7 @@ impl RadixPrefixCache {
                 self.total_tokens += remaining_tokens.len();
                 curr.children.insert(
                     first,
-                    RadixNode::new(
-                        remaining_tokens.to_vec(),
-                        remaining_blocks.to_vec(),
-                        now,
-                    ),
+                    RadixNode::new(remaining_tokens.to_vec(), remaining_blocks.to_vec(), now),
                 );
                 return;
             }

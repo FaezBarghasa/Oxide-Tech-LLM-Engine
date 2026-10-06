@@ -84,8 +84,8 @@ fn dot_q8_0_portable(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
 #[target_feature(enable = "avx2", enable = "fma")]
 unsafe fn dot_q8_0_avx2(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
     use core::arch::x86_64::{
-        _mm256_cvtepi32_ps, _mm256_cvtepi8_epi32, _mm256_fmadd_ps, _mm256_loadu_ps,
-        _mm256_setzero_ps, _mm256_storeu_ps, _mm_loadu_si128, _mm_srli_si128,
+        _mm_loadu_si128, _mm_srli_si128, _mm256_cvtepi8_epi32, _mm256_cvtepi32_ps, _mm256_fmadd_ps,
+        _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
     // SAFETY: We have verified AVX2 and FMA support and all pointers are within the 32-element arrays.
@@ -211,7 +211,7 @@ mod tests {
         let mut qs = [0u8; 16];
         let mut act = [0.0f32; 32];
         for i in 0..16 {
-            qs[i] = ((i as u8 * 17) % 255) as u8;
+            qs[i] = (i as u8 * 17) % 255;
         }
         for i in 0..32 {
             act[i] = (i as f32 * 0.1).cos();

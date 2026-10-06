@@ -56,7 +56,9 @@ pub use model_manager::DynamicModelManager;
 pub use moe_gemm::{CuTeLayout, FusedMoeGateEngine, MoERouteChoice};
 pub use multi_lora::{LoraAdapterWeights, MultiLoraManager};
 pub use pipeline::SpecializedPipeline;
-pub use slot_manager::{ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState};
+pub use slot_manager::{
+    ChunkedBatchItem, ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState,
+};
 pub use speculative::{
     SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeStrategy, SpeculativeVerificationResult,
 };
