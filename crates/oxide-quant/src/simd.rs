@@ -831,12 +831,278 @@ pub fn gemv_blocked_f32(matrix: &[f32], vector: &[f32], m: usize, n: usize, outp
     assert!(vector.len() >= n, "Vector length insufficient");
     assert!(output.len() >= m, "Output buffer size insufficient");
 
-    // Sequential fallback / micro-blocked kernel
-    for row in 0..m {
-        let offset = row * n;
-        let row_slice = &matrix[offset..offset + n];
-        output[row] = dot_f32(row_slice, vector);
+    if m <= 8 {
+        for row in 0..m {
+            let offset = row * n;
+            let row_slice = &matrix[offset..offset + n];
+            output[row] = dot_f32(row_slice, vector);
+        }
+    } else {
+        use rayon::prelude::*;
+        output[..m]
+            .par_chunks_mut(16)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * 16;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    let row = base_row + i;
+                    let offset = row * n;
+                    let row_slice = &matrix[offset..offset + n];
+                    *out_val = dot_f32(row_slice, vector);
+                }
+            });
     }
+}
+
+/// Multithreaded Q8_0 Matrix-Vector Multiplication across all CPU cores and threads.
+pub fn gemv_q8_0(
+    matrix: &[crate::int_quant::BlockQ8_0],
+    vector: &[f32],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    assert!(n % 32 == 0, "n must be a multiple of 32 for Q8_0");
+    let blocks_per_row = n / 32;
+    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q8_0 blocks");
+    assert!(vector.len() >= n, "Insufficient vector length");
+    assert!(output.len() >= m, "Insufficient output length");
+
+    if m <= 8 {
+        for row in 0..m {
+            let row_offset = row * blocks_per_row;
+            let mut acc = 0.0f32;
+            for b in 0..blocks_per_row {
+                let blk = &matrix[row_offset + b];
+                let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                    .try_into()
+                    .expect("slice length 32");
+                acc += dot_q8_0(&blk.qs, act_chunk, blk.scale.to_f32());
+            }
+            output[row] = acc;
+        }
+    } else {
+        use rayon::prelude::*;
+        output[..m]
+            .par_chunks_mut(16)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * 16;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    let row = base_row + i;
+                    let row_offset = row * blocks_per_row;
+                    let mut acc = 0.0f32;
+                    for b in 0..blocks_per_row {
+                        let blk = &matrix[row_offset + b];
+                        let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                            .try_into()
+                            .expect("slice length 32");
+                        acc += dot_q8_0(&blk.qs, act_chunk, blk.scale.to_f32());
+                    }
+                    *out_val = acc;
+                }
+            });
+    }
+}
+
+/// Multithreaded Q4_0 Matrix-Vector Multiplication across all CPU cores and threads.
+pub fn gemv_q4_0(
+    matrix: &[crate::int_quant::BlockQ4_0],
+    vector: &[f32],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    assert!(n % 32 == 0, "n must be a multiple of 32 for Q4_0");
+    let blocks_per_row = n / 32;
+    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q4_0 blocks");
+    assert!(vector.len() >= n, "Insufficient vector length");
+    assert!(output.len() >= m, "Insufficient output length");
+
+    if m <= 8 {
+        for row in 0..m {
+            let row_offset = row * blocks_per_row;
+            let mut acc = 0.0f32;
+            for b in 0..blocks_per_row {
+                let blk = &matrix[row_offset + b];
+                let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                    .try_into()
+                    .expect("slice length 32");
+                acc += dot_q4_0(&blk.qs, act_chunk, blk.scale.to_f32());
+            }
+            output[row] = acc;
+        }
+    } else {
+        use rayon::prelude::*;
+        output[..m]
+            .par_chunks_mut(16)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * 16;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    let row = base_row + i;
+                    let row_offset = row * blocks_per_row;
+                    let mut acc = 0.0f32;
+                    for b in 0..blocks_per_row {
+                        let blk = &matrix[row_offset + b];
+                        let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                            .try_into()
+                            .expect("slice length 32");
+                        acc += dot_q4_0(&blk.qs, act_chunk, blk.scale.to_f32());
+                    }
+                    *out_val = acc;
+                }
+            });
+    }
+}
+
+/// Multithreaded Q4_K Matrix-Vector Multiplication across all CPU cores and threads.
+pub fn gemv_q4_k(
+    matrix: &[crate::gguf_quants::BlockQ4_K],
+    vector: &[f32],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    assert!(n % 256 == 0, "n must be a multiple of 256 for Q4_K");
+    let blocks_per_row = n / 256;
+    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q4_K blocks");
+    assert!(vector.len() >= n, "Insufficient vector length");
+    assert!(output.len() >= m, "Insufficient output length");
+
+    if m <= 8 {
+        for row in 0..m {
+            let row_offset = row * blocks_per_row;
+            let mut acc = 0.0f32;
+            for b in 0..blocks_per_row {
+                let blk = &matrix[row_offset + b];
+                let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+                    .try_into()
+                    .expect("slice length 256");
+                acc += dot_q4_k(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
+            }
+            output[row] = acc;
+        }
+    } else {
+        use rayon::prelude::*;
+        output[..m]
+            .par_chunks_mut(16)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * 16;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    let row = base_row + i;
+                    let row_offset = row * blocks_per_row;
+                    let mut acc = 0.0f32;
+                    for b in 0..blocks_per_row {
+                        let blk = &matrix[row_offset + b];
+                        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+                            .try_into()
+                            .expect("slice length 256");
+                        acc += dot_q4_k(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
+                    }
+                    *out_val = acc;
+                }
+            });
+    }
+}
+
+/// Vectorized RMSNorm kernel with AVX-512 / AVX2 FMA dot-product reduction.
+pub fn rmsnorm_f32(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) {
+    let len = input.len();
+    assert!(weight.len() >= len && output.len() >= len, "Buffer dimension mismatch");
+    let sum_sq = dot_f32(input, input);
+    let mean_sq = sum_sq / (len as f32);
+    let inv_rms = 1.0 / (mean_sq + eps).sqrt();
+
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let base = i * 8;
+        for j in 0..8 {
+            output[base + j] = input[base + j] * inv_rms * weight[base + j];
+        }
+    }
+    for i in (chunks * 8)..len {
+        output[i] = input[i] * inv_rms * weight[i];
+    }
+}
+
+/// Vectorized Rotary Position Embedding (RoPE) kernel.
+pub fn rope_f32(x: &mut [f32], head_dim: usize, position: usize, theta: f32) {
+    let half_dim = head_dim / 2;
+    for i in 0..half_dim {
+        let freq = 1.0 / theta.powf((2 * i) as f32 / head_dim as f32);
+        let val = position as f32 * freq;
+        let (sin, cos) = val.sin_cos();
+
+        let x0 = x[i];
+        let x1 = x[i + half_dim];
+        x[i] = x0 * cos - x1 * sin;
+        x[i + half_dim] = x0 * sin + x1 * cos;
+    }
+}
+
+/// High-performance multi-threaded CPU FlashAttention-2 / FlashDecode step.
+/// Computes attention across all query heads in parallel using all CPU cores and threads.
+pub fn flash_attention_cpu(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    seq_len: usize,
+    head_dim: usize,
+    num_heads: usize,
+    num_kv_heads: usize,
+    out: &mut [f32],
+) {
+    assert!(q.len() >= num_heads * head_dim);
+    assert!(k.len() >= seq_len * num_kv_heads * head_dim);
+    assert!(v.len() >= seq_len * num_kv_heads * head_dim);
+    assert!(out.len() >= num_heads * head_dim);
+
+    let kv_group_size = num_heads / num_kv_heads.max(1);
+    let scale = 1.0 / (head_dim as f32).sqrt();
+
+    use rayon::prelude::*;
+    out[..num_heads * head_dim]
+        .par_chunks_mut(head_dim)
+        .enumerate()
+        .for_each(|(head_idx, head_out)| {
+            let kv_head = head_idx / kv_group_size.max(1);
+            let q_slice = &q[head_idx * head_dim..(head_idx + 1) * head_dim];
+
+            let mut max_score = f32::NEG_INFINITY;
+            let mut sum_exp = 0.0f32;
+            head_out.fill(0.0f32);
+
+            for pos in 0..seq_len {
+                let kv_offset = (pos * num_kv_heads + kv_head) * head_dim;
+                let k_slice = &k[kv_offset..kv_offset + head_dim];
+                let v_slice = &v[kv_offset..kv_offset + head_dim];
+
+                let score = dot_f32(q_slice, k_slice) * scale;
+                if score > max_score {
+                    let exp_shift = (max_score - score).exp();
+                    max_score = score;
+                    sum_exp = sum_exp * exp_shift + 1.0;
+                    for d in 0..head_dim {
+                        head_out[d] = head_out[d] * exp_shift + v_slice[d];
+                    }
+                } else {
+                    let exp_val = (score - max_score).exp();
+                    sum_exp += exp_val;
+                    for d in 0..head_dim {
+                        head_out[d] += exp_val * v_slice[d];
+                    }
+                }
+            }
+
+            if sum_exp > 0.0 {
+                let inv_sum = 1.0 / sum_exp;
+                for d in 0..head_dim {
+                    head_out[d] *= inv_sum;
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -917,5 +1183,138 @@ mod tests {
         assert_eq!(cfg.palette_id, 1);
         let supported = amx::is_amx_supported();
         println!("Host AMX support detected: {supported}");
+    }
+
+    #[test]
+    fn test_gemv_blocked_f32_multithreaded() {
+        let m = 64;
+        let n = 128;
+        let mut matrix = vec![0.0f32; m * n];
+        let mut vector = vec![0.0f32; n];
+        for i in 0..matrix.len() {
+            matrix[i] = ((i as f32 * 0.01).sin()).clamp(-1.0, 1.0);
+        }
+        for j in 0..n {
+            vector[j] = ((j as f32 * 0.05).cos()).clamp(-1.0, 1.0);
+        }
+        let mut output = vec![0.0f32; m];
+        gemv_blocked_f32(&matrix, &vector, m, n, &mut output);
+
+        for row in 0..m {
+            let offset = row * n;
+            let expected: f32 = matrix[offset..offset + n]
+                .iter()
+                .zip(vector.iter())
+                .map(|(a, b)| a * b)
+                .sum();
+            assert!(
+                (output[row] - expected).abs() < 1e-3,
+                "Mismatch at row {row}: computed {}, expected {expected}",
+                output[row]
+            );
+        }
+    }
+
+    #[test]
+    fn test_gemv_q8_0_multithreaded() {
+        let m = 32;
+        let n = 64; // 2 blocks per row
+        let blocks_per_row = n / 32;
+        let mut blocks = vec![crate::int_quant::BlockQ8_0::default(); m * blocks_per_row];
+        for blk in &mut blocks {
+            blk.scale = half::f16::from_f32(0.01);
+            for i in 0..32 {
+                blk.qs[i] = ((i as i32 * 3) % 127) as i8;
+            }
+        }
+        let mut vector = vec![0.0f32; n];
+        for (i, v) in vector.iter_mut().enumerate() {
+            *v = (i as f32 * 0.1).sin();
+        }
+        let mut output = vec![0.0f32; m];
+        gemv_q8_0(&blocks, &vector, m, n, &mut output);
+        assert_eq!(output.len(), m);
+        for &val in &output {
+            assert!(val.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_gemv_q4_0_multithreaded() {
+        let m = 32;
+        let n = 64;
+        let blocks_per_row = n / 32;
+        let mut blocks = vec![crate::int_quant::BlockQ4_0::default(); m * blocks_per_row];
+        for blk in &mut blocks {
+            blk.scale = half::f16::from_f32(0.02);
+            for i in 0..16 {
+                blk.qs[i] = ((i as u8 * 17) % 255);
+            }
+        }
+        let mut vector = vec![0.0f32; n];
+        for (i, v) in vector.iter_mut().enumerate() {
+            *v = (i as f32 * 0.05).cos();
+        }
+        let mut output = vec![0.0f32; m];
+        gemv_q4_0(&blocks, &vector, m, n, &mut output);
+        assert_eq!(output.len(), m);
+        for &val in &output {
+            assert!(val.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_gemv_q4_k_multithreaded() {
+        let m = 16;
+        let n = 256;
+        let mut blocks = vec![crate::gguf_quants::BlockQ4_K::default(); m];
+        for blk in &mut blocks {
+            blk.d = half::f16::from_f32(0.02);
+            blk.dmin = half::f16::from_f32(-0.5);
+            for i in 0..128 {
+                blk.qs[i] = ((i * 11) % 256) as u8;
+            }
+        }
+        let mut vector = vec![0.0f32; n];
+        for (i, v) in vector.iter_mut().enumerate() {
+            *v = (i as f32 * 0.05).sin();
+        }
+        let mut output = vec![0.0f32; m];
+        gemv_q4_k(&blocks, &vector, m, n, &mut output);
+        assert_eq!(output.len(), m);
+        for &val in &output {
+            assert!(val.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_rmsnorm_f32_parity() {
+        let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let weight = [1.0f32; 8];
+        let mut output = [0.0f32; 8];
+        rmsnorm_f32(&input, &weight, &mut output, 1e-5);
+        let sum_sq: f32 = output.iter().map(|x| x * x).sum();
+        let rms = (sum_sq / 8.0).sqrt();
+        assert!((rms - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_rope_f32_rot() {
+        let mut x = [1.0f32, 2.0, 3.0, 4.0];
+        rope_f32(&mut x, 4, 1, 10000.0);
+        assert!(x[0].is_finite());
+        assert!(x[1].is_finite());
+    }
+
+    #[test]
+    fn test_flash_attention_cpu_basic() {
+        let q = vec![1.0f32; 64];
+        let k = vec![1.0f32; 64];
+        let v = vec![2.0f32; 64];
+        let mut out = vec![0.0f32; 64];
+        flash_attention_cpu(&q, &k, &v, 1, 64, 1, 1, &mut out);
+        for &val in &out {
+            assert!((val - 2.0).abs() < 1e-4);
+        }
     }
 }
