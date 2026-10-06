@@ -117,6 +117,65 @@ impl HybridDeviceTopology {
             staging_buffer_elements: 4096,
         }
     }
+
+    /// Creates an optimal heterogeneous 3-way partition across CPU + iGPU + XDNA NPU for AMD APUs.
+    /// Distributes transformer layers according to microarchitectural compute ratios across coherent DDR5/LPDDR5X memory.
+    #[must_use]
+    pub fn amd_apu_full_partition(
+        total_layers: usize,
+        has_npu: bool,
+    ) -> Self {
+        if !has_npu || total_layers < 3 {
+            return Self::amd_apu_partition(total_layers, 0.35);
+        }
+
+        // 3-way APU partition:
+        // - NPU takes ~30% (dense systolic GEMM / MLP layers)
+        // - iGPU takes ~35% (matrix multiply / attention projections)
+        // - CPU takes remaining ~35% (AVX2 SIMD prefill / final heads)
+        let npu_layers = ((total_layers as f32) * 0.30).round() as usize;
+        let npu_layers = npu_layers.clamp(1, total_layers.saturating_sub(2));
+
+        let igpu_layers = ((total_layers as f32) * 0.35).round() as usize;
+        let igpu_layers = igpu_layers.clamp(1, total_layers.saturating_sub(npu_layers + 1));
+
+        let cpu_layers = total_layers - (npu_layers + igpu_layers);
+
+        let mut partitions = Vec::new();
+        let mut cur = 0;
+
+        if cpu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Cpu,
+                start_layer: cur,
+                end_layer: cur + cpu_layers,
+            });
+            cur += cpu_layers;
+        }
+
+        if igpu_layers > 0 {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Igpu,
+                start_layer: cur,
+                end_layer: cur + igpu_layers,
+            });
+            cur += igpu_layers;
+        }
+
+        if cur < total_layers {
+            partitions.push(LayerPartition {
+                device: DeviceRole::Npu,
+                start_layer: cur,
+                end_layer: total_layers,
+            });
+        }
+
+        Self {
+            total_layers,
+            partitions,
+            staging_buffer_elements: 4096,
+        }
+    }
 }
 
 /// CPU+GPU Multi-Device Hybrid Execution Pipeline.

@@ -2276,4 +2276,25 @@ impl GpuDeviceProfile {
         }
         None
     }
+
+    /// Autonomously inspects host AMD APU capabilities, returning:
+    /// `(cpu_model_name, igpu_profile, has_xdna_npu)`.
+    #[must_use]
+    pub fn detect_amd_apu_full() -> Option<(String, Self, bool)> {
+        let (cpu_name, igpu) = Self::detect_amd_cpu_and_igpu()?;
+        let lower = cpu_name.to_lowercase();
+        // XDNA NPU is embedded in Phoenix (7040), Hawk Point (8040), Strix Point (AI 300), and Strix Halo (AI Max 300)
+        let has_npu = lower.contains("7040")
+            || lower.contains("8040")
+            || lower.contains("7840")
+            || lower.contains("8840")
+            || lower.contains("ai 9")
+            || lower.contains("ai max")
+            || lower.contains("strix")
+            || lower.contains("phoenix")
+            || lower.contains("hawk point")
+            || std::path::Path::new("/dev/accel/accel0").exists();
+
+        Some((cpu_name, igpu, has_npu))
+    }
 }

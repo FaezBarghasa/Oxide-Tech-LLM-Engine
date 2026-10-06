@@ -304,14 +304,18 @@ impl SpecializedPipeline {
                 .collect();
             let scratch = Box::new(model.create_scratch());
 
+            let is_apu = backend_name.eq_ignore_ascii_case("apu");
             let is_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu_igpu");
-            let is_auto_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu")
+            let auto_apu = backend_name.eq_ignore_ascii_case("cpu")
                 && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some();
 
-            if is_cpu_igpu || is_auto_cpu_igpu {
-                let topology = crate::hybrid::HybridDeviceTopology::amd_apu_partition(
+            if is_apu || is_cpu_igpu || auto_apu {
+                let has_npu = is_apu
+                    || oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
+                        .is_some_and(|(_, _, npu)| npu);
+                let topology = crate::hybrid::HybridDeviceTopology::amd_apu_full_partition(
                     model.config.num_layers,
-                    0.35, // 35% iGPU compute, 65% CPU AVX2 threads
+                    has_npu,
                 );
                 return Ok(Self::Llama3AmdApuCpuIgpu {
                     model,
@@ -381,14 +385,18 @@ impl SpecializedPipeline {
 
         let scratch = Box::new(model.create_scratch());
 
+        let is_apu = backend_name.eq_ignore_ascii_case("apu");
         let is_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu_igpu");
-        let is_auto_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu")
+        let auto_apu = backend_name.eq_ignore_ascii_case("cpu")
             && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some();
 
-        if is_cpu_igpu || is_auto_cpu_igpu {
-            let topology = crate::hybrid::HybridDeviceTopology::amd_apu_partition(
+        if is_apu || is_cpu_igpu || auto_apu {
+            let has_npu = is_apu
+                || oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
+                    .map_or(false, |(_, _, npu)| npu);
+            let topology = crate::hybrid::HybridDeviceTopology::amd_apu_full_partition(
                 model.config.num_layers,
-                0.35,
+                has_npu,
             );
             return Ok(Self::Llama3AmdApuCpuIgpu {
                 model,
