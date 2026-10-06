@@ -604,14 +604,32 @@ fn run_chat_session(
 
         let tokens = tokenizer.encode(trimmed);
         let mut cur_token = tokens.last().copied().unwrap_or(1);
-        print!("Assistant: ");
+        print!("\x1b[32mAssistant\x1b[0m: ");
         let _ = std::io::Write::flush(&mut std::io::stdout());
 
-        for _ in 0..64 {
+        // Reverse prompt stop markers (e.g. User:, \n\nUser, <|eot_id|>)
+        let reverse_prompts = ["User:", "User", "Human:", "\n\nUser", "<|eot_id|>"];
+        let mut generated_accum = String::new();
+
+        for _ in 0..256 {
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
             cur_token = step_res.sampled_token;
             let text = tokenizer.decode_token(cur_token);
+
+            // Check reverse prompt triggers
+            generated_accum.push_str(&text);
+            let mut triggered_reverse = false;
+            for rp in &reverse_prompts {
+                if generated_accum.ends_with(rp) {
+                    triggered_reverse = true;
+                    break;
+                }
+            }
+            if triggered_reverse {
+                break;
+            }
+
             print!("{text}");
             let _ = std::io::Write::flush(&mut std::io::stdout());
             if step_res.is_terminal {

@@ -461,6 +461,15 @@ async fn chat_completions_handler(
                     let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
                     *logit = phase * 2.0;
                 }
+
+                // Hook up Grammar Engine & DFA Logit Masking if requested
+                if payload.json_schema.unwrap_or(false) {
+                    let vocab_bytes: Vec<Vec<u8>> = (0..logits.len())
+                        .map(|id| tokenizer.decode_token(id as u32).into_bytes())
+                        .collect();
+                    state.dfa_grammar.apply_dfa_mask(0, &vocab_bytes, &mut logits);
+                }
+
                 cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
                 let token_str = tokenizer.decode_token(cur_token);
                 let is_last = i == max_tokens - 1 || completion.is_terminal;
@@ -510,6 +519,17 @@ async fn chat_completions_handler(
                     ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
                 *logit = phase * 2.0;
             }
+
+            // Hook up Grammar Engine & DFA Logit Masking if requested
+            if payload.json_schema.unwrap_or(false) {
+                let vocab_bytes: Vec<Vec<u8>> = (0..logits.len())
+                    .map(|id| tokenizer.decode_token(id as u32).into_bytes())
+                    .collect();
+                state
+                    .dfa_grammar
+                    .apply_dfa_mask(0, &vocab_bytes, &mut logits);
+            }
+
             cur_token = sampler
                 .sample_token(&mut logits, &mut sampler_state, 10)
                 .unwrap_or(completion.sampled_token);
