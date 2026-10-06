@@ -70,6 +70,7 @@ pub enum BackendArg {
     Hailo,
     Cpu,
     CpuIgpu,
+    Apu,
 }
 
 impl BackendArg {
@@ -86,6 +87,7 @@ impl BackendArg {
             Self::Hailo => "hailo",
             Self::Cpu => "cpu",
             Self::CpuIgpu => "cpu_igpu",
+            Self::Apu => "apu",
         }
     }
 }
