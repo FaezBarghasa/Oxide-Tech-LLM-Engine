@@ -49,6 +49,17 @@ impl Default for SpeculativeDecodingEngine {
     }
 }
 
+/// Bundled reference pair for draft and target models in speculative decoding.
+#[derive(Debug)]
+pub struct SpeculativeModelPair<'a> {
+    pub draft_model: &'a Llama3Model,
+    pub draft_kv: &'a mut [Llama3KvCacheLayer],
+    pub draft_scratch: &'a mut Llama3ScratchBuffers,
+    pub target_model: &'a Llama3Model,
+    pub target_kv: &'a mut [Llama3KvCacheLayer],
+    pub target_scratch: &'a mut Llama3ScratchBuffers,
+}
+
 impl SpeculativeDecodingEngine {
     #[must_use]
     pub fn new(gamma: usize) -> Self {
@@ -64,44 +75,41 @@ impl SpeculativeDecodingEngine {
         &mut self,
         current_token: u32,
         current_pos: usize,
-        draft_model: &Llama3Model,
-        draft_kv: &mut [Llama3KvCacheLayer],
-        draft_scratch: &mut Llama3ScratchBuffers,
-        target_model: &Llama3Model,
-        target_kv: &mut [Llama3KvCacheLayer],
-        target_scratch: &mut Llama3ScratchBuffers,
+        pair: &mut SpeculativeModelPair<'_>,
     ) -> Result<Vec<u32>> {
         let mut accepted_tokens = Vec::new();
         let mut draft_candidates = Vec::with_capacity(self.gamma);
 
         // 1. Generate gamma draft tokens from small draft model
         let mut tok = current_token;
-        let mut pos = current_pos;
 
-        for _ in 0..self.gamma {
-            draft_model.forward_step_with_scratch(tok, pos, draft_kv, draft_scratch)?;
-            let next_tok = sample_greedy(&draft_scratch.logits);
+        for pos in (current_pos..).take(self.gamma) {
+            pair.draft_model.forward_step_with_scratch(
+                tok,
+                pos,
+                pair.draft_kv,
+                pair.draft_scratch,
+            )?;
+            let next_tok = sample_greedy(&pair.draft_scratch.logits);
             draft_candidates.push(next_tok);
             tok = next_tok;
-            pos += 1;
         }
 
         self.stats.total_drafted_tokens += draft_candidates.len();
         self.stats.verification_steps += 1;
 
         // 2. Target model verification
-        // Target model evaluates current token + accepted drafts
         let mut verif_pos = current_pos;
         let mut verif_tok = current_token;
 
         for &candidate in &draft_candidates {
-            target_model.forward_step_with_scratch(
+            pair.target_model.forward_step_with_scratch(
                 verif_tok,
                 verif_pos,
-                target_kv,
-                target_scratch,
+                pair.target_kv,
+                pair.target_scratch,
             )?;
-            let target_pred = sample_greedy(&target_scratch.logits);
+            let target_pred = sample_greedy(&pair.target_scratch.logits);
 
             // Rejection / Acceptance check
             if target_pred == candidate {
@@ -119,13 +127,13 @@ impl SpeculativeDecodingEngine {
 
         // If all drafts accepted, sample one bonus token from final target logits
         if accepted_tokens.len() == self.gamma {
-            target_model.forward_step_with_scratch(
+            pair.target_model.forward_step_with_scratch(
                 verif_tok,
                 verif_pos,
-                target_kv,
-                target_scratch,
+                pair.target_kv,
+                pair.target_scratch,
             )?;
-            let bonus_token = sample_greedy(&target_scratch.logits);
+            let bonus_token = sample_greedy(&pair.target_scratch.logits);
             accepted_tokens.push(bonus_token);
         }
 
@@ -154,8 +162,8 @@ mod tests {
     #[test]
     fn test_speculative_decoding_step() {
         let cfg = Llama3Config::tiny_test_config();
-        let draft_model = Llama3Model::new(cfg.clone());
-        let target_model = Llama3Model::new(cfg.clone());
+        let draft_model = Llama3Model::new(cfg);
+        let target_model = Llama3Model::new(cfg);
 
         let mut draft_kv: Vec<_> = (0..cfg.num_layers)
             .map(|_| Llama3KvCacheLayer::default())
@@ -168,18 +176,15 @@ mod tests {
         let mut target_scratch = target_model.create_scratch();
 
         let mut engine = SpeculativeDecodingEngine::new(3);
-        let tokens = engine
-            .speculative_step(
-                1,
-                0,
-                &draft_model,
-                &mut draft_kv,
-                &mut draft_scratch,
-                &target_model,
-                &mut target_kv,
-                &mut target_scratch,
-            )
-            .unwrap();
+        let mut pair = SpeculativeModelPair {
+            draft_model: &draft_model,
+            draft_kv: &mut draft_kv,
+            draft_scratch: &mut draft_scratch,
+            target_model: &target_model,
+            target_kv: &mut target_kv,
+            target_scratch: &mut target_scratch,
+        };
+        let tokens = engine.speculative_step(1, 0, &mut pair).unwrap();
 
         assert!(!tokens.is_empty());
         assert!(engine.stats.total_drafted_tokens > 0);

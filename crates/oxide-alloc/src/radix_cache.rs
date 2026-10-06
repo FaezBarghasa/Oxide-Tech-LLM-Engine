@@ -8,25 +8,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A node in the KV-cache Radix Tree representing a contiguous sequence of tokens.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RadixNode {
     pub tokens: Vec<u32>,
     pub block_ids: Vec<u32>,
     pub children: HashMap<u32, RadixNode>,
     pub access_count: u64,
     pub last_accessed: u64,
-}
-
-impl Default for RadixNode {
-    fn default() -> Self {
-        Self {
-            tokens: Vec::new(),
-            block_ids: Vec::new(),
-            children: HashMap::new(),
-            access_count: 0,
-            last_accessed: 0,
-        }
-    }
 }
 
 impl RadixNode {
@@ -137,13 +125,14 @@ impl RadixPrefixCache {
         while !remaining_tokens.is_empty() {
             let first = remaining_tokens[0];
 
-            if !curr.children.contains_key(&first) {
+            if let std::collections::hash_map::Entry::Vacant(e) = curr.children.entry(first) {
                 // No branch exists: insert remaining tokens as new leaf
                 self.total_tokens += remaining_tokens.len();
-                curr.children.insert(
-                    first,
-                    RadixNode::new(remaining_tokens.to_vec(), remaining_blocks.to_vec(), now),
-                );
+                e.insert(RadixNode::new(
+                    remaining_tokens.to_vec(),
+                    remaining_blocks.to_vec(),
+                    now,
+                ));
                 return;
             }
 
