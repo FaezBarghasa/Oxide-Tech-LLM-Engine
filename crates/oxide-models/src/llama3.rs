@@ -777,31 +777,12 @@ impl Llama3Model {
 
     #[inline(always)]
     fn rms_norm(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) {
-        let mean_sq = oxide_quant::simd::dot_f32(input, input) / input.len().max(1) as f32;
-        let inv_rms = 1.0 / (mean_sq + eps).sqrt();
-        let chunks = input.len() / 8;
-        let remainder = input.len() % 8;
-        for i in 0..chunks {
-            let base = i * 8;
-            for j in 0..8 {
-                output[base + j] = input[base + j] * inv_rms * weight[base + j];
-            }
-        }
-        let rem_start = chunks * 8;
-        for j in 0..remainder {
-            output[rem_start + j] = input[rem_start + j] * inv_rms * weight[rem_start + j];
-        }
+        oxide_quant::simd::rmsnorm_f32(input, weight, output, eps);
     }
 
     #[inline(always)]
     fn gemv(matrix: &[f32], vector: &[f32], out_dim: usize, in_dim: usize, output: &mut [f32]) {
-        for i in 0..out_dim {
-            let offset = i * in_dim;
-            if offset + in_dim <= matrix.len() {
-                let row = &matrix[offset..offset + in_dim];
-                output[i] = oxide_quant::simd::dot_f32(row, vector);
-            }
-        }
+        oxide_quant::simd::gemv_blocked_f32(matrix, vector, out_dim, in_dim, output);
     }
 }
 

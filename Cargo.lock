@@ -1355,6 +1355,7 @@ dependencies = [
 name = "oxide-backend-tpu"
 version = "0.1.0"
 dependencies = [
+ "half",
  "oxide-alloc",
  "oxide-core",
  "oxide-quant",

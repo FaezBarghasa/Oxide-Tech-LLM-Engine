@@ -20,9 +20,11 @@
 
 pub mod arch;
 pub mod ici;
+pub mod kernels;
 
 pub use arch::TpuExecutionPlan;
 pub use ici::TpuIciCommunicator;
+pub use kernels::TpuLlmKernels;
 
 use oxide_core::error::Result;
 use oxide_core::hardware::GpuDeviceProfile;
@@ -114,9 +116,11 @@ impl HardwareBackend for TpuBackend {
         };
 
         let slot = cmd.slot_idx as usize;
-        if slot < self.host_token_buffer.len() {
-            self.host_token_buffer[slot] = cmd.input_token.wrapping_add(1);
-        }
+        TpuLlmKernels::dispatch_tpu_step_decode(
+            cmd.input_token,
+            slot,
+            &mut self.host_token_buffer,
+        )?;
 
         Ok(event)
     }

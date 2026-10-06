@@ -164,7 +164,6 @@ impl CpuLlmKernels {
         );
 
         // 2. Multi-threaded Q8_0 quantized GEMV projection
-        let blocks_per_row = HIDDEN_DIM / 32;
         let dummy_blocks = [oxide_quant::int_quant::BlockQ8_0 {
             scale: oxide_quant::int_quant::f16::from_f32(0.01),
             qs: [55i8; 32],
@@ -186,5 +185,22 @@ impl CpuLlmKernels {
         }
 
         Ok(next_token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cpu_thread_pool_and_dispatch() {
+        let pool = CpuThreadPool::new();
+        assert!(pool.num_threads() >= 1);
+        let _ = pool.pin_current_thread(0);
+
+        let mut token_buf = vec![0u32; 4];
+        let tok = CpuLlmKernels::dispatch_full_step_decode(42, 0, &mut token_buf).unwrap();
+        assert!(tok >= 1);
+        assert_eq!(token_buf[0], tok);
     }
 }
