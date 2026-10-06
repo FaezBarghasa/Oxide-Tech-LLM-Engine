@@ -100,7 +100,8 @@ impl LossComputer {
         let target_prob = probs[target_idx].max(1e-12);
         let smooth = label_smoothing.clamp(0.0, 0.5);
 
-        let loss = -(1.0 - smooth) * target_prob.ln() - (smooth / vocab as f32) * sum_exp.ln();
+        let sum_log_probs: f32 = probs.iter().map(|&p| p.max(1e-12).ln()).sum();
+        let loss = -(1.0 - smooth) * target_prob.ln() - (smooth / vocab as f32) * sum_log_probs;
 
         // Analytical gradient: dL / dLogit = p_i - y_i
         let mut grad = probs;

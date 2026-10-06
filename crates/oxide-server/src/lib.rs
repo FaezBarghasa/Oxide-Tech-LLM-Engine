@@ -433,12 +433,6 @@ async fn chat_completions_handler(
             .into_response();
     };
 
-    let sampling_config = SamplingConfig {
-        temperature: payload.temperature.unwrap_or(0.7),
-        top_p: payload.top_p.unwrap_or(0.9),
-        ..SamplingConfig::default()
-    };
-    let sampler = AcademicSamplerEngine::new(sampling_config);
     let target_pipeline = state.resolve_pipeline(&payload.model).await;
     let tokenizer = Arc::clone(&state.tokenizer);
     let initial_token = prompt_tokens.last().copied().unwrap_or(1);
@@ -447,30 +441,21 @@ async fn chat_completions_handler(
         let stream = async_stream::stream! {
             let guard = slot_guard;
             let mut cur_token: u32 = initial_token;
-            let mut sampler_state = SamplerState::new(5.0);
 
             for i in 0..max_tokens {
                 let cmd = StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
-                let completion = {
+                let completion = match {
                     let mut pipeline = target_pipeline.lock().await;
-                    pipeline.step(&cmd).unwrap()
+                    pipeline.step(&cmd)
+                } {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Inference pipeline step failed: {e}");
+                        break;
+                    }
                 };
 
-                let mut logits = vec![0.0f32; 1024];
-                for (idx, logit) in logits.iter_mut().enumerate() {
-                    let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
-                    *logit = phase * 2.0;
-                }
-
-                // Hook up Grammar Engine & DFA Logit Masking if requested
-                if payload.json_schema.unwrap_or(false) {
-                    let vocab_bytes: Vec<Vec<u8>> = (0..logits.len())
-                        .map(|id| tokenizer.decode_token(id as u32).into_bytes())
-                        .collect();
-                    state.dfa_grammar.apply_dfa_mask(0, &vocab_bytes, &mut logits);
-                }
-
-                cur_token = sampler.sample_token(&mut logits, &mut sampler_state, 10).unwrap_or(completion.sampled_token);
+                cur_token = completion.sampled_token;
                 let token_str = tokenizer.decode_token(cur_token);
                 let is_last = i == max_tokens - 1 || completion.is_terminal;
 
@@ -504,35 +489,21 @@ async fn chat_completions_handler(
         let mut generated_text = String::new();
         let mut cur_token: u32 = initial_token;
         let mut completion_tokens = 0;
-        let mut sampler_state = SamplerState::new(5.0);
 
         for i in 0..max_tokens {
             let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
-            let completion = {
+            let completion = match {
                 let mut pipeline = target_pipeline.lock().await;
-                pipeline.step(&cmd).unwrap()
+                pipeline.step(&cmd)
+            } {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Inference pipeline step failed: {e}");
+                    break;
+                }
             };
 
-            let mut logits = vec![0.0f32; 1024];
-            for (idx, logit) in logits.iter_mut().enumerate() {
-                let phase =
-                    ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
-                *logit = phase * 2.0;
-            }
-
-            // Hook up Grammar Engine & DFA Logit Masking if requested
-            if payload.json_schema.unwrap_or(false) {
-                let vocab_bytes: Vec<Vec<u8>> = (0..logits.len())
-                    .map(|id| tokenizer.decode_token(id as u32).into_bytes())
-                    .collect();
-                state
-                    .dfa_grammar
-                    .apply_dfa_mask(0, &vocab_bytes, &mut logits);
-            }
-
-            cur_token = sampler
-                .sample_token(&mut logits, &mut sampler_state, 10)
-                .unwrap_or(completion.sampled_token);
+            cur_token = completion.sampled_token;
             generated_text.push_str(&tokenizer.decode_token(cur_token));
             completion_tokens += 1;
 

@@ -42,6 +42,7 @@ pub struct AnthropicMessagesRequest {
     pub max_tokens: usize,
     pub system: Option<String>,
     pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
     pub stream: Option<bool>,
 }
 
@@ -91,8 +92,35 @@ pub async fn messages_handler(
     let target_pipeline = state.resolve_pipeline(&model_name).await;
     let tokenizer = Arc::clone(&state.tokenizer);
 
+    let slot_request = crate::SlotRequest {
+        request_id: "anthropic-msg-req".to_string(),
+        prompt_tokens: if prompt_tokens.is_empty() {
+            vec![1]
+        } else {
+            prompt_tokens.clone()
+        },
+        max_tokens,
+        temperature: payload.temperature.unwrap_or(0.7),
+        top_p: payload.top_p.unwrap_or(0.9),
+        stream: stream_mode,
+    };
+
+    let Some(slot_guard) = crate::LeasedSlotGuard::lease(&state.slot_manager, slot_request).await else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "type": "error",
+                    "message": "All inference slots busy"
+                }
+            })),
+        )
+            .into_response();
+    };
+
     if stream_mode {
         let stream = async_stream::stream! {
+            let guard = slot_guard;
             let msg_id = "msg_oxide_01".to_string();
 
             // 1. message_start event
@@ -121,10 +149,16 @@ pub async fn messages_handler(
             let mut out_tokens = 0;
 
             for i in 0..max_tokens {
-                let cmd = oxide_core::StepCommand::new(1001, cur_token, 0, false);
-                let completion = {
+                let cmd = oxide_core::StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
+                let completion = match {
                     let mut pipeline = target_pipeline.lock().await;
-                    pipeline.step(&cmd).unwrap()
+                    pipeline.step(&cmd)
+                } {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Anthropic inference step failed: {e}");
+                        break;
+                    }
                 };
                 cur_token = completion.sampled_token;
                 let token_str = tokenizer.decode_token(cur_token);
@@ -169,10 +203,16 @@ pub async fn messages_handler(
     let mut out_tokens = 0;
 
     for i in 0..max_tokens {
-        let cmd = oxide_core::StepCommand::new(1001, cur_token, 0, false);
-        let completion = {
+        let cmd = oxide_core::StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
+        let completion = match {
             let mut pipeline = target_pipeline.lock().await;
-            pipeline.step(&cmd).unwrap()
+            pipeline.step(&cmd)
+        } {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Anthropic inference step failed: {e}");
+                break;
+            }
         };
         cur_token = completion.sampled_token;
         generated_text.push_str(&tokenizer.decode_token(cur_token));
