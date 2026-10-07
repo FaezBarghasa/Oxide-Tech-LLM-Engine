@@ -150,10 +150,11 @@ pub async fn messages_handler(
 
             for i in 0..max_tokens {
                 let cmd = oxide_core::StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
-                let completion = match {
+                let res = {
                     let mut pipeline = target_pipeline.lock().await;
                     pipeline.step(&cmd)
-                } {
+                };
+                let completion = match res {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!("Anthropic inference step failed: {e}");
@@ -204,10 +205,11 @@ pub async fn messages_handler(
 
     for i in 0..max_tokens {
         let cmd = oxide_core::StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
-        let completion = match {
+        let res = {
             let mut pipeline = target_pipeline.lock().await;
             pipeline.step(&cmd)
-        } {
+        };
+        let completion = match res {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("Anthropic inference step failed: {e}");

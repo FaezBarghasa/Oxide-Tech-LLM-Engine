@@ -42,6 +42,7 @@ impl MockEngineContext {
         let state = ServerState {
             pipeline: Arc::new(Mutex::new(pipeline)),
             model_manager: None,
+            batch_engine: None,
             dfa_grammar,
             slot_manager,
             kv_cache,

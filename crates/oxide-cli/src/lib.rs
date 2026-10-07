@@ -925,6 +925,7 @@ async fn run_server_with_options(
     let state = ServerState {
         pipeline: default_pipeline,
         model_manager: Some(model_manager),
+        batch_engine: None,
         dfa_grammar,
         slot_manager,
         kv_cache,

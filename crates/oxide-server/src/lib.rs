@@ -253,6 +253,7 @@ impl Drop for LeasedSlotGuard {
 pub struct ServerState {
     pub pipeline: Arc<Mutex<SpecializedPipeline>>,
     pub model_manager: Option<Arc<Mutex<oxide_engine::DynamicModelManager>>>,
+    pub batch_engine: Option<oxide_engine::EngineHandle>,
     pub dfa_grammar: Arc<DfaSchemaGrammar>,
     pub slot_manager: Arc<Mutex<ContinuousBatchingSlotManager>>,
     pub kv_cache: Arc<Mutex<HierarchicalKvCache>>,
@@ -270,6 +271,7 @@ impl ServerState {
         Self {
             pipeline,
             model_manager,
+            batch_engine: None,
             dfa_grammar,
             slot_manager,
             kv_cache,
@@ -279,6 +281,11 @@ impl ServerState {
 
     pub fn with_tokenizer(mut self, tokenizer: oxide_models::GgufTokenizer) -> Self {
         self.tokenizer = Arc::new(tokenizer);
+        self
+    }
+
+    pub fn with_batch_engine(mut self, engine: oxide_engine::EngineHandle) -> Self {
+        self.batch_engine = Some(engine);
         self
     }
 
@@ -419,7 +426,7 @@ async fn chat_completions_handler(
     };
 
     // Acquire RAII slot lease
-    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request).await else {
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await else {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -437,6 +444,89 @@ async fn chat_completions_handler(
     let tokenizer = Arc::clone(&state.tokenizer);
     let initial_token = prompt_tokens.last().copied().unwrap_or(1);
 
+    // High-throughput Continuous Batching path (zero lock contention on hot loop)
+    if let Some(engine) = &state.batch_engine {
+        match engine.generate_stream(
+            req_id.clone(),
+            slot_request.prompt_tokens.clone(),
+            max_tokens,
+            slot_request.temperature,
+            slot_request.top_p,
+        ).await {
+            Ok(mut token_rx) => {
+                if stream_mode {
+                    let stream = async_stream::stream! {
+                        let _guard = slot_guard;
+                        let mut first = true;
+
+                        while let Some(event) = token_rx.recv().await {
+                            let token_str = tokenizer.decode_token(event.token_id);
+                            let chunk = ChatCompletionChunk {
+                                id: req_id.clone(),
+                                object: "chat.completion.chunk".to_string(),
+                                created: 1_728_000_000,
+                                model: payload.model.clone(),
+                                choices: vec![ChatCompletionChunkChoice {
+                                    index: 0,
+                                    delta: ChatCompletionChunkDelta {
+                                        content: Some(token_str),
+                                        role: if first { Some("assistant".to_string()) } else { None },
+                                    },
+                                    finish_reason: event.finish_reason.clone(),
+                                }],
+                            };
+
+                            first = false;
+                            let json_data = serde_json::to_string(&chunk).unwrap_or_default();
+                            yield Ok::<Event, Infallible>(Event::default().data(json_data));
+
+                            if event.is_terminal {
+                                break;
+                            }
+                        }
+                        yield Ok::<Event, Infallible>(Event::default().data("[DONE]"));
+                    };
+                    return Sse::new(stream).into_response();
+                }
+
+                let mut generated_text = String::new();
+                let mut completion_tokens = 0;
+
+                while let Some(event) = token_rx.recv().await {
+                    generated_text.push_str(&tokenizer.decode_token(event.token_id));
+                    completion_tokens += 1;
+                    if event.is_terminal {
+                        break;
+                    }
+                }
+
+                let response = ChatCompletionResponse {
+                    id: req_id,
+                    object: "chat.completion".to_string(),
+                    created: 1_728_000_000,
+                    model: payload.model,
+                    choices: vec![ChatCompletionChoice {
+                        index: 0,
+                        message: ChatCompletionChoiceMessage {
+                            role: "assistant".to_string(),
+                            content: generated_text,
+                        },
+                        finish_reason: "stop".to_string(),
+                    }],
+                    usage: UsageStatistics {
+                        prompt_tokens: prompt_len,
+                        completion_tokens,
+                        total_tokens: prompt_len + completion_tokens,
+                    },
+                };
+                return Json(response).into_response();
+            }
+            Err(e) => {
+                tracing::warn!("ContinuousBatchingEngine enqueue rejected: {e}. Falling back to pipeline.");
+            }
+        }
+    }
+
     if stream_mode {
         let stream = async_stream::stream! {
             let guard = slot_guard;
@@ -444,10 +534,11 @@ async fn chat_completions_handler(
 
             for i in 0..max_tokens {
                 let cmd = StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
-                let completion = match {
+                let res = {
                     let mut pipeline = target_pipeline.lock().await;
                     pipeline.step(&cmd)
-                } {
+                };
+                let completion = match res {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!("Inference pipeline step failed: {e}");
@@ -492,10 +583,11 @@ async fn chat_completions_handler(
 
         for i in 0..max_tokens {
             let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
-            let completion = match {
+            let res = {
                 let mut pipeline = target_pipeline.lock().await;
                 pipeline.step(&cmd)
-            } {
+            };
+            let completion = match res {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("Inference pipeline step failed: {e}");

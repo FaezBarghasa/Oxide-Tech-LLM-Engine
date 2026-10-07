@@ -26,6 +26,7 @@
 )]
 
 pub mod arena;
+pub mod continuous_batching;
 pub mod decoding;
 pub mod distributed;
 pub mod engine;
@@ -41,6 +42,9 @@ pub mod speculative;
 pub mod tensor_split;
 
 pub use arena::GraphArena;
+pub use continuous_batching::{
+    ContinuousBatchingEngine, EngineCommand, EngineHandle, TokenEvent,
+};
 pub use decoding::{
     BeamHypothesis, BeamSearchConfig, BeamSearchEngine, ParallelSampleCandidate,
     ParallelSamplingEngine,

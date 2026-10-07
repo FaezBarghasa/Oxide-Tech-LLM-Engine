@@ -727,6 +727,225 @@ impl Llama3Model {
         }
     }
 
+    /// Forward pass through a single transformer decoder layer using Paged KV-Cache Arena.
+    /// Performs ZERO heap allocations during decode step.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_layer_paged(
+        &self,
+        layer_idx: usize,
+        layer: &Llama3LayerWeights,
+        position: usize,
+        paged_arena: &mut oxide_alloc::PagedKvArena,
+        block_table: &[u32],
+        token_offset_in_current_block: usize,
+        current_block_id: u32,
+        scratch: &mut Llama3ScratchBuffers,
+        eps: f32,
+        h: usize,
+        q_dim: usize,
+        kv_dim: usize,
+    ) {
+        Self::rms_norm(
+            &scratch.hidden,
+            &layer.attn_norm,
+            &mut scratch.norm_hidden,
+            eps,
+        );
+
+        // Q, K, V Projections via SIMD GEMV
+        Self::gemv(
+            &layer.q_proj,
+            &scratch.norm_hidden,
+            q_dim,
+            h,
+            &mut scratch.q,
+        );
+        Self::gemv(
+            &layer.k_proj,
+            &scratch.norm_hidden,
+            kv_dim,
+            h,
+            &mut scratch.k,
+        );
+        Self::gemv(
+            &layer.v_proj,
+            &scratch.norm_hidden,
+            kv_dim,
+            h,
+            &mut scratch.v,
+        );
+
+        // RoPE Rotary Embedding
+        for head_idx in 0..self.config.num_heads {
+            let start = head_idx * self.config.head_dim;
+            let end = start + self.config.head_dim;
+            self.rope
+                .apply_rotary_in_place(&mut scratch.q[start..end], position);
+        }
+        for kv_head_idx in 0..self.config.num_kv_heads {
+            let start = kv_head_idx * self.config.head_dim;
+            let end = start + self.config.head_dim;
+            self.rope
+                .apply_rotary_in_place(&mut scratch.k[start..end], position);
+        }
+
+        // Write token into physical page block (ZERO dynamic allocations)
+        paged_arena.write_token_kv(
+            layer_idx,
+            current_block_id,
+            token_offset_in_current_block,
+            &scratch.k,
+            &scratch.v,
+        );
+
+        let context_len = position + 1;
+
+        // Attention Output Projection with GQA over Paged KV Cache
+        for head in 0..self.config.num_heads {
+            let q_start = head * self.config.head_dim;
+            let q_slice = &scratch.q[q_start..q_start + self.config.head_dim];
+            let out_slice = &mut scratch.attn_out[q_start..q_start + self.config.head_dim];
+
+            let kv_head = head / (self.config.num_heads / self.config.num_kv_heads);
+
+            self.flash_attn.forward_decode_paged_gqa(
+                q_slice,
+                paged_arena,
+                layer_idx,
+                block_table,
+                kv_head,
+                self.config.num_kv_heads,
+                context_len,
+                out_slice,
+            );
+        }
+
+        Self::gemv(
+            &layer.o_proj,
+            &scratch.attn_out,
+            h,
+            q_dim,
+            &mut scratch.o_proj_out,
+        );
+
+        // Residual 1
+        for i in 0..h {
+            scratch.hidden[i] += scratch.o_proj_out[i];
+        }
+
+        // FFN RMSNorm & SwiGLU MLP
+        Self::rms_norm(
+            &scratch.hidden,
+            &layer.ffn_norm,
+            &mut scratch.ffn_norm_hidden,
+            eps,
+        );
+
+        let inter_dim = self.config.intermediate_dim;
+        Self::gemv(
+            &layer.gate_proj,
+            &scratch.ffn_norm_hidden,
+            inter_dim,
+            h,
+            &mut scratch.gate,
+        );
+        Self::gemv(
+            &layer.up_proj,
+            &scratch.ffn_norm_hidden,
+            inter_dim,
+            h,
+            &mut scratch.up,
+        );
+
+        // SwiGLU: down_proj(silu(gate) * up)
+        for i in 0..inter_dim {
+            let g = scratch.gate[i];
+            let silu_g = g / (1.0 + (-g).exp());
+            scratch.activated[i] = silu_g * scratch.up[i];
+        }
+
+        Self::gemv(
+            &layer.down_proj,
+            &scratch.activated,
+            h,
+            inter_dim,
+            &mut scratch.mlp_out,
+        );
+
+        // Residual 2
+        for i in 0..h {
+            scratch.hidden[i] += scratch.mlp_out[i];
+        }
+    }
+
+    /// Autoregressive forward step utilizing zero-allocation Paged KV-Cache Arena.
+    pub fn forward_step_paged(
+        &self,
+        token_id: u32,
+        position: usize,
+        paged_arena: &mut oxide_alloc::PagedKvArena,
+        block_table: &mut oxide_alloc::SequenceBlockTable,
+        scratch: &mut Llama3ScratchBuffers,
+    ) -> Result<()> {
+        let (current_block_id, token_offset_in_block) = block_table
+            .advance_token(paged_arena)
+            .map_err(|e| oxide_core::error::EngineError::BackendError(e.to_string()))?;
+
+        let h = self.config.hidden_dim;
+        let tok_idx = (token_id as usize) % self.config.vocab_size;
+
+        // Embedding lookup
+        let emb_offset = tok_idx * h;
+        if emb_offset + h <= self.token_embedding.len() {
+            scratch
+                .hidden
+                .copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
+        } else {
+            scratch.hidden.fill(0.0);
+        }
+
+        let q_dim = self.config.num_heads * self.config.head_dim;
+        let kv_dim = self.config.num_kv_heads * self.config.head_dim;
+        let eps = self.config.rms_norm_eps_f32();
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            self.forward_layer_paged(
+                layer_idx,
+                layer,
+                position,
+                paged_arena,
+                &block_table.block_ids,
+                token_offset_in_block,
+                current_block_id,
+                scratch,
+                eps,
+                h,
+                q_dim,
+                kv_dim,
+            );
+        }
+
+        Self::rms_norm(
+            &scratch.hidden,
+            &self.output_norm,
+            &mut scratch.final_norm,
+            eps,
+        );
+
+        let v = self.config.vocab_size;
+        Self::gemv(
+            &self.lm_head,
+            &scratch.final_norm,
+            v,
+            h,
+            &mut scratch.logits,
+        );
+
+        Ok(())
+    }
+
+
     /// Forward pass through a range of transformer decoder layers [start_layer..end_layer].
     pub fn forward_layers(
         &self,

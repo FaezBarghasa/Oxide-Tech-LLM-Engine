@@ -86,6 +86,7 @@ async fn test_server_state_initialization_with_kv_cache() {
     let state = ServerState {
         pipeline,
         model_manager: None,
+        batch_engine: None,
         dfa_grammar,
         slot_manager,
         kv_cache: Arc::clone(&kv_cache),
@@ -146,6 +147,7 @@ async fn test_dynamic_model_loading_and_hot_swapping() {
     let state = ServerState {
         pipeline: dummy_pipe,
         model_manager: Some(Arc::clone(&model_manager)),
+        batch_engine: None,
         dfa_grammar,
         slot_manager,
         kv_cache,

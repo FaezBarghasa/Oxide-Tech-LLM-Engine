@@ -193,6 +193,7 @@ impl FlashAttentionEngine {
     /// `num_kv_heads`: Total KV heads in model
     /// `context_len`: Total tokens in cache including current token
     /// `output`: Destination slice for this head `[head_dim]`
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_decode_gqa(
         &self,
         q_head: &[f32],
@@ -248,4 +249,78 @@ impl FlashAttentionEngine {
             }
         }
     }
+
+    /// Computes Flash Attention forward pass over Paged KV Cache blocks:
+    /// Iterates through physical page blocks mapped by `block_table`, accessing memory without copying or allocating.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_decode_paged_gqa(
+        &self,
+        q_head: &[f32],
+        paged_arena: &oxide_alloc::PagedKvArena,
+        layer_idx: usize,
+        block_table: &[u32],
+        kv_head_idx: usize,
+        num_kv_heads: usize,
+        context_len: usize,
+        output: &mut [f32],
+    ) {
+        let head_dim = self.config.head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        let kv_head_offset = kv_head_idx * head_dim;
+
+        output.fill(0.0);
+        if context_len == 0 {
+            return;
+        }
+
+        let mut max_score = f32::NEG_INFINITY;
+        let mut sum_exp = 0.0f32;
+
+        let total_blocks = block_table.len();
+        let tokens_per_page = oxide_alloc::TOKENS_PER_PAGE;
+
+        for (b_idx, &block_id) in block_table.iter().enumerate() {
+            let (k_block, v_block) = paged_arena.get_block_data(layer_idx, block_id);
+            let tokens_in_this_block = if b_idx == total_blocks - 1 {
+                let rem = context_len % tokens_per_page;
+                if rem == 0 { tokens_per_page } else { rem }
+            } else {
+                tokens_per_page
+            };
+
+            for t in 0..tokens_in_this_block {
+                let t_offset = t * kv_dim + kv_head_offset;
+                if t_offset + head_dim > k_block.len() || t_offset + head_dim > v_block.len() {
+                    break;
+                }
+                let k_vec = &k_block[t_offset..t_offset + head_dim];
+                let v_vec = &v_block[t_offset..t_offset + head_dim];
+
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q_head[d] * k_vec[d];
+                }
+                let score = dot * self.config.softmax_scale;
+
+                let new_max = max_score.max(score);
+                let alpha = (max_score - new_max).exp();
+                let beta = (score - new_max).exp();
+
+                max_score = new_max;
+                sum_exp = sum_exp * alpha + beta;
+
+                for d in 0..head_dim {
+                    output[d] = output[d] * alpha + beta * v_vec[d];
+                }
+            }
+        }
+
+        if sum_exp > 0.0 {
+            let inv_sum = 1.0 / sum_exp;
+            for val in output.iter_mut() {
+                *val *= inv_sum;
+            }
+        }
+    }
 }
+

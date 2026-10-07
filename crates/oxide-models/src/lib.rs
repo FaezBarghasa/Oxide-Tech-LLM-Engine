@@ -84,7 +84,9 @@ pub use formats::{
     GgufFile, GgufHeader, GgufQuantType, GgufTensorInfo, GgufValue, ModelFileFormat, Nvfp4Block,
     SafeTensorInfo, SafeTensorsHeader,
 };
-pub use llama3::{Llama3Config, Llama3KvCacheLayer, Llama3LayerWeights, Llama3Model};
+pub use llama3::{
+    Llama3Config, Llama3KvCacheLayer, Llama3LayerWeights, Llama3Model, Llama3ScratchBuffers,
+};
 pub use loader::{DevicePlacement, MmapModel, ModelMetadata, TensorInfo, WeightAllocator};
 pub use manifest::OxideModelHeader;
 pub use moe::{ExpertRoutingDecision, MoELayer, MoERouterConfig};
