@@ -45,7 +45,10 @@ impl MetalLlmKernels {
         const HIDDEN_DIM: usize = 128;
         let mut activations = [0.0f32; HIDDEN_DIM];
         for (i, act) in activations.iter_mut().enumerate() {
-            *act = ((input_token as f32 * 0.05) + (i as f32 * 0.1)).sin();
+            let hash = (input_token.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
+            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
+            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
+            *act = sign * mag * 0.1;
         }
 
         let dummy_q4 = [oxide_quant::int_quant::BlockQ4_0 {

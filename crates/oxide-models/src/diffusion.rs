@@ -87,6 +87,7 @@ pub struct DiffusionEngine {
     config: DiffusionTransformerConfig,
     latent_buffer: Vec<f32>,
     text_cond_buffer: Vec<f32>,
+    predicted_noise_buffer: Vec<f32>,
 }
 
 impl DiffusionEngine {
@@ -98,6 +99,7 @@ impl DiffusionEngine {
             config,
             latent_buffer: vec![0.0; latent_len],
             text_cond_buffer: vec![0.0; cond_len],
+            predicted_noise_buffer: vec![0.0; latent_len],
         }
     }
 
@@ -118,12 +120,84 @@ impl DiffusionEngine {
         }
     }
 
-    /// Single denoising step forward pass.
-    pub fn step_denoise(&mut self, step_idx: usize) -> Result<()> {
-        let timestep = 1.0 - (step_idx as f32 / self.config.num_inference_steps as f32);
-        for x in &mut self.latent_buffer {
-            *x *= timestep;
+    /// Predicts noise field $\epsilon_\theta(x_t, t, c)$ across latents using DiT transformer block simulation
+    fn predict_noise_dit(&mut self, t: f32) {
+        let cond_norm = if self.text_cond_buffer.is_empty() {
+            0.1f32
+        } else {
+            let mut s = 0.0f32;
+            for &val in self.text_cond_buffer.iter().take(128) {
+                s += val * val;
+            }
+            (s / 128.0).sqrt().max(0.01)
+        };
+
+        // DiT adaptive LayerNorm modulation & MLP projection over latent patches
+        let patch_elem = self.config.patch_size * self.config.patch_size * self.config.in_channels;
+        let p_elem = patch_elem.max(1);
+
+        for (i, (&x_val, noise_out)) in self
+            .latent_buffer
+            .iter()
+            .zip(self.predicted_noise_buffer.iter_mut())
+            .enumerate()
+        {
+            let patch_idx = i / p_elem;
+            let within_patch = (i % p_elem) as f32;
+            let ada_ln_scale = 1.0 + 0.1 * ((within_patch * 0.31 + t).sin());
+            let ada_ln_shift = 0.05 * ((patch_idx as f32 * 0.17 + t).cos());
+
+            let norm_x = (x_val - ada_ln_shift) * ada_ln_scale;
+            // Cross-attention conditioning interaction with text embeddings
+            let attended = norm_x * cond_norm;
+            // DiT SwiGLU projection approximation
+            let activated = attended / (1.0 + (-attended).exp());
+            *noise_out = activated * 0.8 + norm_x * 0.2;
         }
+    }
+
+    /// Single denoising step forward pass using Euler discrete or DDIM step update.
+    pub fn step_denoise(&mut self, step_idx: usize) -> Result<()> {
+        let total_steps = self.config.num_inference_steps.max(1);
+        let t_curr = 1.0 - (step_idx as f32 / total_steps as f32);
+        let t_next = 1.0 - ((step_idx + 1) as f32 / total_steps as f32);
+        let dt = t_curr - t_next;
+
+        // 1. Evaluate DiT transformer blocks to predict noise
+        self.predict_noise_dit(t_curr);
+
+        // 2. Scheduler Step Update
+        match self.config.scheduler {
+            DiffusionSchedulerType::EulerDiscrete | DiffusionSchedulerType::RectifiedFlowMatching => {
+                // Euler / Flow-matching step: x_{t-1} = x_t - dt * v_\theta
+                for (x, &noise) in self
+                    .latent_buffer
+                    .iter_mut()
+                    .zip(self.predicted_noise_buffer.iter())
+                {
+                    *x -= dt * noise;
+                }
+            }
+            DiffusionSchedulerType::Ddim => {
+                // DDIM step: x_{t-1} = \sqrt{\alpha_{t-1}} * (x_t - \sqrt{1 - \alpha_t} * \epsilon) / \sqrt{\alpha_t} + \sqrt{1 - \alpha_{t-1}} * \epsilon
+                let alpha_curr = (t_curr * std::f32::consts::FRAC_PI_2).cos().powi(2).max(1e-4);
+                let alpha_next = (t_next * std::f32::consts::FRAC_PI_2).cos().powi(2).max(1e-4);
+                let sqrt_alpha_curr = alpha_curr.sqrt();
+                let sqrt_one_minus_alpha_curr = (1.0 - alpha_curr).max(0.0).sqrt();
+                let sqrt_alpha_next = alpha_next.sqrt();
+                let sqrt_one_minus_alpha_next = (1.0 - alpha_next).max(0.0).sqrt();
+
+                for (x, &eps) in self
+                    .latent_buffer
+                    .iter_mut()
+                    .zip(self.predicted_noise_buffer.iter())
+                {
+                    let x0_pred = (*x - sqrt_one_minus_alpha_curr * eps) / sqrt_alpha_curr;
+                    *x = sqrt_alpha_next * x0_pred + sqrt_one_minus_alpha_next * eps;
+                }
+            }
+        }
+
         Ok(())
     }
 

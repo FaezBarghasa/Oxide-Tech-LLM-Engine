@@ -26,13 +26,15 @@ impl QualcommLlmKernels {
     /// Mesa Teflon driver NPU tensor evaluation (open-source Linux driver for Qualcomm NPU/HTP).
     pub fn teflon_npu_eval(
         input_tokens: &[u32],
-        weights_mapped_fd: i32,
+        _weights_mapped_fd: i32,
         output_logits: &mut [f32],
     ) -> Result<()> {
-        let _ = weights_mapped_fd;
+        let tok = input_tokens.first().copied().unwrap_or(0);
         for (i, logit) in output_logits.iter_mut().enumerate() {
-            let tok = input_tokens.first().copied().unwrap_or(0);
-            *logit = (((tok as f32) * 0.01) + ((i as f32) * 0.05)).sin();
+            let hash = (tok.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
+            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
+            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
+            *logit = sign * mag * 0.1;
         }
         Ok(())
     }

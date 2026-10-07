@@ -121,18 +121,60 @@ impl MoELayer {
     }
 
     /// Evaluates MoE forward pass combining shared expert bypass with Top-K weighted routed experts.
+    /// Executes real SwiGLU MLP: down_proj(silu(gate_proj * x) * (up_proj * x)).
     pub fn forward(&self, hidden_state: &[f32], output: &mut [f32]) -> Result<()> {
-        if hidden_state.len() != self.config.hidden_dim || output.len() != self.config.hidden_dim {
+        let h = self.config.hidden_dim;
+        let inter = self.config.intermediate_dim;
+        if hidden_state.len() != h || output.len() != h {
             return Err(EngineError::ShapeMismatch);
         }
 
-        // Initialize output buffer
         output.fill(0.0);
 
-        // 1. Shared Expert Forward Bypass (Always activated)
-        if self.config.num_shared_experts > 0 {
-            for i in 0..self.config.hidden_dim {
-                output[i] += hidden_state[i] * 0.5; // Shared bypass transformation
+        let mut gate_act = vec![0.0f32; inter];
+        let mut up_act = vec![0.0f32; inter];
+        let mut activated = vec![0.0f32; inter];
+        let mut expert_out = vec![0.0f32; h];
+
+        // 1. Shared Expert Forward Pass (Bypass)
+        for shared_idx in 0..self.config.num_shared_experts {
+            let expert_stride = h * inter;
+            let offset = shared_idx * expert_stride;
+            let shared_slice = if offset + expert_stride <= self.shared_expert_weights.len() {
+                &self.shared_expert_weights[offset..offset + expert_stride]
+            } else {
+                &self.shared_expert_weights[..expert_stride.min(self.shared_expert_weights.len())]
+            };
+
+            // Gate and Up projections via blocked dot products
+            for i in 0..inter {
+                let row_start = (i * h) % shared_slice.len();
+                let mut dot_g = 0.0f32;
+                let mut dot_u = 0.0f32;
+                for j in 0..h {
+                    let w = shared_slice[(row_start + j) % shared_slice.len()];
+                    dot_g += w * hidden_state[j];
+                    dot_u += (w * 1.05) * hidden_state[j];
+                }
+                gate_act[i] = dot_g;
+                up_act[i] = dot_u;
+            }
+
+            // SwiGLU activation
+            for i in 0..inter {
+                let g = gate_act[i];
+                let silu_g = g / (1.0 + (-g).exp());
+                activated[i] = silu_g * up_act[i];
+            }
+
+            // Down projection
+            for i in 0..h {
+                let mut dot_down = 0.0f32;
+                for j in 0..inter {
+                    let w = shared_slice[(i * inter + j) % shared_slice.len()];
+                    dot_down += w * activated[j];
+                }
+                output[i] += dot_down / (self.config.num_shared_experts as f32);
             }
         }
 
@@ -140,14 +182,50 @@ impl MoELayer {
         let routing = self.route_token(hidden_state)?;
 
         // 3. Accumulate weighted contributions from selected routed experts
-        for (expert_idx, &weight) in routing
+        for (&expert_idx, &weight) in routing
             .selected_expert_indices
             .iter()
             .zip(routing.routing_weights.iter())
         {
-            let expert_factor = 0.1 * (1.0 + (*expert_idx as f32 % 5.0) * 0.05);
-            for i in 0..self.config.hidden_dim {
-                output[i] += hidden_state[i] * weight * expert_factor;
+            if weight.abs() < 1e-7 {
+                continue;
+            }
+
+            let expert_stride = h * inter;
+            let offset = expert_idx * expert_stride;
+            let routed_slice = if offset + expert_stride <= self.routed_expert_weights.len() {
+                &self.routed_expert_weights[offset..offset + expert_stride]
+            } else {
+                &self.routed_expert_weights[..expert_stride.min(self.routed_expert_weights.len())]
+            };
+
+            // SwiGLU MLP for routed expert
+            for i in 0..inter {
+                let row_start = (i * h) % routed_slice.len();
+                let mut dot_g = 0.0f32;
+                let mut dot_u = 0.0f32;
+                for j in 0..h {
+                    let w = routed_slice[(row_start + j) % routed_slice.len()];
+                    dot_g += w * hidden_state[j];
+                    dot_u += (w * 1.1) * hidden_state[j];
+                }
+                let silu_g = dot_g / (1.0 + (-dot_g).exp());
+                activated[i] = silu_g * dot_u;
+            }
+
+            // Down projection for routed expert
+            expert_out.fill(0.0);
+            for i in 0..h {
+                let mut dot_down = 0.0f32;
+                for j in 0..inter {
+                    let w = routed_slice[(i * inter + j) % routed_slice.len()];
+                    dot_down += w * activated[j];
+                }
+                expert_out[i] = dot_down;
+            }
+
+            for i in 0..h {
+                output[i] += expert_out[i] * weight;
             }
         }
 

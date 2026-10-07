@@ -80,7 +80,10 @@ impl IntelLlmKernels {
         let weights_fp16 = [half::f16::from_f32(0.04).to_bits(); HIDDEN_DIM];
 
         for (i, act) in activations_fp16.iter_mut().enumerate() {
-            let val = ((input_token as f32 * 0.05) + (i as f32 * 0.1)).sin();
+            let hash = (input_token.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
+            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
+            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
+            let val = sign * mag * 0.1;
             *act = half::f16::from_f32(val).to_bits();
         }
 

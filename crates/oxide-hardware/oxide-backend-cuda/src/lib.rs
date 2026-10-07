@@ -124,7 +124,10 @@ impl HardwareBackend for CudaBackend {
         if slot < self.host_token_buffer.len() {
             let mut activations = [0.0f32; 128];
             for (i, act) in activations.iter_mut().enumerate() {
-                *act = ((cmd.input_token as f32 * 0.05) + (i as f32 * 0.1)).sin();
+                let hash = (cmd.input_token.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
+                let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
+                let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
+                *act = sign * mag * 0.1;
             }
             let mut norm_out = [0.0f32; 128];
             let weights = [1.0f32; 128];
