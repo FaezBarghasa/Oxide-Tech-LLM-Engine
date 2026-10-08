@@ -286,4 +286,89 @@ __global__ void flash_decode_paged_kernel(
     }
 }
 
+// C-ABI Launch Wrappers for FFI
+int launch_cuda_rmsnorm(
+    float* output,
+    const float* input,
+    const float* weight,
+    int num_tokens,
+    int hidden_dim,
+    float eps,
+    cudaStream_t stream
+) {
+    int block_size = 256;
+    if (hidden_dim < 256) block_size = hidden_dim;
+    rms_norm_f32_kernel<<<num_tokens, block_size, 0, stream>>>(
+        output, input, weight, hidden_dim, eps
+    );
+    return cudaGetLastError();
+}
+
+int launch_cuda_rope(
+    float* q,
+    float* k,
+    const float* cos_table,
+    const float* sin_table,
+    int seq_len,
+    int num_heads,
+    int head_dim,
+    cudaStream_t stream
+) {
+    dim3 grid(seq_len, num_heads);
+    int block_size = head_dim / 2;
+    rope_embedding_kernel<<<grid, block_size, 0, stream>>>(
+        q, k, cos_table, sin_table, seq_len, num_heads, head_dim
+    );
+    return cudaGetLastError();
+}
+
+int launch_cuda_gemv_q4_0(
+    float* y,
+    const uint8_t* weight_bytes,
+    const float* x,
+    const half* scales,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    gemv_q4_0_cuda_kernel<<<m, 256, 0, stream>>>(
+        y, weight_bytes, x, scales, m, k
+    );
+    return cudaGetLastError();
+}
+
+int launch_cuda_gemv_q8_0(
+    float* y,
+    const int8_t* weight_bytes,
+    const float* x,
+    const half* scales,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    gemv_q8_0_cuda_kernel<<<m, 256, 0, stream>>>(
+        y, weight_bytes, x, scales, m, k
+    );
+    return cudaGetLastError();
+}
+
+int launch_cuda_flash_decode(
+    float* output,
+    const float* q,
+    const float* k_cache,
+    const float* v_cache,
+    int num_heads,
+    int head_dim,
+    int num_kv_tokens,
+    float sm_scale,
+    cudaStream_t stream
+) {
+    int block_size = 128;
+    if (head_dim < 128) block_size = head_dim;
+    flash_decode_paged_kernel<<<num_heads, block_size, 0, stream>>>(
+        output, q, k_cache, v_cache, num_heads, head_dim, num_kv_tokens, sm_scale
+    );
+    return cudaGetLastError();
+}
+
 }

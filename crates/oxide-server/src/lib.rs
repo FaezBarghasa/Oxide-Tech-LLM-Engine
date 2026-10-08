@@ -653,7 +653,7 @@ async fn completions_handler(
         stream: false,
     };
 
-    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request).await else {
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await else {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -667,6 +667,51 @@ async fn completions_handler(
             .into_response();
     };
 
+    let tokenizer = Arc::clone(&state.tokenizer);
+
+    // High-throughput Continuous Batching path for completions
+    if let Some(engine) = &state.batch_engine
+        && let Ok(mut token_rx) = engine.generate_stream(
+            req_id.clone(),
+            slot_request.prompt_tokens.clone(),
+            max_tokens,
+            slot_request.temperature,
+            slot_request.top_p,
+        ).await
+    {
+            let mut generated_text = String::new();
+            let mut completion_tokens = 0;
+
+            while let Some(event) = token_rx.recv().await {
+                generated_text.push_str(&tokenizer.decode_token(event.token_id));
+                completion_tokens += 1;
+                if event.is_terminal {
+                    break;
+                }
+            }
+
+            drop(slot_guard);
+
+            let resp = CompletionResponse {
+                id: req_id,
+                object: "text_completion".to_string(),
+                created: 1_728_000_000,
+                model: payload.model,
+                choices: vec![CompletionChoice {
+                    text: generated_text,
+                    index: 0,
+                    finish_reason: "stop".to_string(),
+                }],
+                usage: UsageStatistics {
+                    prompt_tokens: prompt_len,
+                    completion_tokens,
+                    total_tokens: prompt_len + completion_tokens,
+                },
+            };
+
+            return Json(resp).into_response();
+        }
+
     let sampling_config = SamplingConfig {
         temperature: payload.temperature.unwrap_or(0.7),
         top_p: payload.top_p.unwrap_or(0.9),
@@ -674,7 +719,6 @@ async fn completions_handler(
     };
     let sampler = AcademicSamplerEngine::new(sampling_config);
     let target_pipeline = state.resolve_pipeline(&payload.model).await;
-    let tokenizer = Arc::clone(&state.tokenizer);
 
     let mut generated_text = String::new();
     let mut cur_token: u32 = prompt_tokens.last().copied().unwrap_or(1);
@@ -690,8 +734,10 @@ async fn completions_handler(
 
         let mut logits = vec![0.0f32; 1024];
         for (idx, logit) in logits.iter_mut().enumerate() {
-            let phase = ((cur_token as f32 * 0.17) + (idx as f32 * 0.05) + (i as f32 * 0.1)).sin();
-            *logit = phase * 2.0;
+            let hash = (cur_token.wrapping_mul(2_654_435_761)).wrapping_add(idx as u32);
+            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
+            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
+            *logit = sign * mag * 2.0;
         }
         cur_token = sampler
             .sample_token(&mut logits, &mut sampler_state, 10)
@@ -751,9 +797,12 @@ async fn embeddings_handler(
         let mut vec = vec![0.0f32; dim];
         for (pos, &tok) in tokens.iter().enumerate() {
             for (i, v) in vec.iter_mut().enumerate() {
-                let weight =
-                    ((tok as f32 * 0.031) + (i as f32 * 0.017) + (pos as f32 * 0.007)).cos();
-                *v += weight;
+                let h = (tok.wrapping_mul(2_654_435_761))
+                    .wrapping_add((i as u32).wrapping_mul(1_000_003))
+                    .wrapping_add(pos as u32);
+                let sign = if (h & 1) == 0 { 1.0f32 } else { -1.0f32 };
+                let mag = ((h >> 1) % 1000) as f32 / 1000.0f32;
+                *v += sign * mag;
             }
         }
         let inv_len = 1.0 / (count as f32);
