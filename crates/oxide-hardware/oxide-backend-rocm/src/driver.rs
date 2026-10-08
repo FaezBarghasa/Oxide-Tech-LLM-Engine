@@ -1,7 +1,12 @@
 //! Real AMD ROCm HIP C-ABI dynamic driver loader and HIP API bindings.
 //! Provides dynamic runtime discovery and invocation of `libamdhip64.so` / `libhip_hcc.so`.
 
-#![allow(non_camel_case_types, dead_code)]
+#![allow(
+    non_camel_case_types,
+    dead_code,
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::uninlined_format_args
+)]
 
 use std::ffi::c_void;
 use std::ptr;
@@ -41,7 +46,9 @@ pub struct HipDriverApi {
     pub device_synchronize: Option<HipDeviceSynchronizeFn>,
 }
 
+// SAFETY: HipDriverApi contains function pointers that are immutable and safe to share across threads.
 unsafe impl Send for HipDriverApi {}
+// SAFETY: HipDriverApi contains function pointers that are immutable and safe to share across threads.
 unsafe impl Sync for HipDriverApi {}
 
 static HIP_API: OnceLock<Option<HipDriverApi>> = OnceLock::new();
@@ -119,24 +126,26 @@ pub struct HipDeviceBuffer {
     size_bytes: usize,
 }
 
+// SAFETY: Device pointers are safe to transfer across threads when synchronization is respected.
 unsafe impl Send for HipDeviceBuffer {}
+// SAFETY: Device pointers are safe to transfer across threads when synchronization is respected.
 unsafe impl Sync for HipDeviceBuffer {}
 
 impl HipDeviceBuffer {
     pub fn allocate(size_bytes: usize) -> Result<Self, String> {
-        if let Some(api) = get_hip_api() {
-            if let Some(malloc_fn) = api.malloc {
-                let mut d_ptr: *mut c_void = ptr::null_mut();
-                // SAFETY: Calling hipMalloc with valid pointers.
-                let status = unsafe { malloc_fn(&mut d_ptr, size_bytes) };
-                if status == HIP_SUCCESS {
-                    return Ok(Self {
-                        ptr: d_ptr,
-                        size_bytes,
-                    });
-                }
-                return Err(format!("hipMalloc failed with code {}", status));
+        if let Some(api) = get_hip_api()
+            && let Some(malloc_fn) = api.malloc
+        {
+            let mut d_ptr: *mut c_void = ptr::null_mut();
+            // SAFETY: Calling hipMalloc with valid pointers.
+            let status = unsafe { malloc_fn(&raw mut d_ptr, size_bytes) };
+            if status == HIP_SUCCESS {
+                return Ok(Self {
+                    ptr: d_ptr,
+                    size_bytes,
+                });
             }
+            return Err(format!("hipMalloc failed with code {status}"));
         }
         Err("HIP runtime is not loaded".to_string())
     }
@@ -146,17 +155,17 @@ impl HipDeviceBuffer {
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer".to_string());
         }
-        if let Some(api) = get_hip_api() {
-            if let Some(cpy_fn) = api.memcpy_async {
-                // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
-                let status = unsafe {
-                    cpy_fn(self.ptr, src.as_ptr().cast(), bytes, HIP_MEMCPY_HOST_TO_DEVICE, stream)
-                };
-                if status == HIP_SUCCESS {
-                    return Ok(());
-                }
-                return Err(format!("hipMemcpyAsync failed with code {}", status));
+        if let Some(api) = get_hip_api()
+            && let Some(cpy_fn) = api.memcpy_async
+        {
+            // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
+            let status = unsafe {
+                cpy_fn(self.ptr, src.as_ptr().cast(), bytes, HIP_MEMCPY_HOST_TO_DEVICE, stream)
+            };
+            if status == HIP_SUCCESS {
+                return Ok(());
             }
+            return Err(format!("hipMemcpyAsync failed with code {status}"));
         }
         Err("HIP runtime is not loaded".to_string())
     }
@@ -166,17 +175,17 @@ impl HipDeviceBuffer {
         if bytes > self.size_bytes {
             return Err("Destination slice exceeds device buffer".to_string());
         }
-        if let Some(api) = get_hip_api() {
-            if let Some(cpy_fn) = api.memcpy_async {
-                // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
-                let status = unsafe {
-                    cpy_fn(dst.as_mut_ptr().cast(), self.ptr, bytes, HIP_MEMCPY_DEVICE_TO_HOST, stream)
-                };
-                if status == HIP_SUCCESS {
-                    return Ok(());
-                }
-                return Err(format!("hipMemcpyAsync failed with code {}", status));
+        if let Some(api) = get_hip_api()
+            && let Some(cpy_fn) = api.memcpy_async
+        {
+            // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
+            let status = unsafe {
+                cpy_fn(dst.as_mut_ptr().cast(), self.ptr, bytes, HIP_MEMCPY_DEVICE_TO_HOST, stream)
+            };
+            if status == HIP_SUCCESS {
+                return Ok(());
             }
+            return Err(format!("hipMemcpyAsync failed with code {status}"));
         }
         Err("HIP runtime is not loaded".to_string())
     }
@@ -202,14 +211,13 @@ impl HipDeviceBuffer {
 
 impl Drop for HipDeviceBuffer {
     fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            if let Some(api) = get_hip_api() {
-                if let Some(free_fn) = api.free {
-                    // SAFETY: Freeing valid device pointer.
-                    unsafe {
-                        let _ = free_fn(self.ptr);
-                    }
-                }
+        if !self.ptr.is_null()
+            && let Some(api) = get_hip_api()
+            && let Some(free_fn) = api.free
+        {
+            // SAFETY: Freeing valid device pointer.
+            unsafe {
+                let _ = free_fn(self.ptr);
             }
             self.ptr = ptr::null_mut();
         }
@@ -222,21 +230,23 @@ pub struct HipStream {
     stream: hipStream_t,
 }
 
+// SAFETY: HIP streams can be transferred safely between host threads.
 unsafe impl Send for HipStream {}
+// SAFETY: HIP streams can be transferred safely between host threads.
 unsafe impl Sync for HipStream {}
 
 impl HipStream {
     pub fn new() -> Result<Self, String> {
-        if let Some(api) = get_hip_api() {
-            if let Some(create_fn) = api.stream_create {
-                let mut stream: hipStream_t = ptr::null_mut();
-                // SAFETY: Calling hipStreamCreate.
-                let status = unsafe { create_fn(&mut stream) };
-                if status == HIP_SUCCESS {
-                    return Ok(Self { stream });
-                }
-                return Err(format!("hipStreamCreate failed with code {}", status));
+        if let Some(api) = get_hip_api()
+            && let Some(create_fn) = api.stream_create
+        {
+            let mut stream: hipStream_t = ptr::null_mut();
+            // SAFETY: Calling hipStreamCreate.
+            let status = unsafe { create_fn(&raw mut stream) };
+            if status == HIP_SUCCESS {
+                return Ok(Self { stream });
             }
+            return Err(format!("hipStreamCreate failed with code {status}"));
         }
         Err("HIP runtime is not loaded".to_string())
     }
@@ -248,15 +258,15 @@ impl HipStream {
     }
 
     pub fn synchronize(&self) -> Result<(), String> {
-        if let Some(api) = get_hip_api() {
-            if let Some(sync_fn) = api.stream_synchronize {
-                // SAFETY: Calling hipStreamSynchronize.
-                let status = unsafe { sync_fn(self.stream) };
-                if status == HIP_SUCCESS {
-                    return Ok(());
-                }
-                return Err(format!("hipStreamSynchronize failed with code {}", status));
+        if let Some(api) = get_hip_api()
+            && let Some(sync_fn) = api.stream_synchronize
+        {
+            // SAFETY: Calling hipStreamSynchronize.
+            let status = unsafe { sync_fn(self.stream) };
+            if status == HIP_SUCCESS {
+                return Ok(());
             }
+            return Err(format!("hipStreamSynchronize failed with code {status}"));
         }
         Err("HIP runtime is not loaded".to_string())
     }
@@ -264,14 +274,13 @@ impl HipStream {
 
 impl Drop for HipStream {
     fn drop(&mut self) {
-        if !self.stream.is_null() {
-            if let Some(api) = get_hip_api() {
-                if let Some(destroy_fn) = api.stream_destroy {
-                    // SAFETY: Destroying valid hipStream.
-                    unsafe {
-                        let _ = destroy_fn(self.stream);
-                    }
-                }
+        if !self.stream.is_null()
+            && let Some(api) = get_hip_api()
+            && let Some(destroy_fn) = api.stream_destroy
+        {
+            // SAFETY: Destroying valid hipStream.
+            unsafe {
+                let _ = destroy_fn(self.stream);
             }
             self.stream = ptr::null_mut();
         }

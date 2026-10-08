@@ -67,7 +67,7 @@ impl fmt::Debug for RocmBackend {
             .field("event_counter", &self.current_event_id)
             .field("host_token_buffer_len", &self.host_token_buffer.len())
             .field("hip_active", &self.hip_stream.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
