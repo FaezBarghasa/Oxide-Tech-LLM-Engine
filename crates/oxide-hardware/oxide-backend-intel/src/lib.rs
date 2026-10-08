@@ -22,10 +22,12 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod kernels;
 pub mod level_zero;
 
 pub use arch::IntelExecutionPlan;
+pub use driver::{LevelZeroDeviceBuffer, is_level_zero_available};
 pub use kernels::IntelLlmKernels;
 pub use level_zero::LevelZeroCommunicator;
 
@@ -46,6 +48,8 @@ pub struct IntelBackend {
     host_token_buffer: Vec<u32>,
     profile: GpuDeviceProfile,
     execution_plan: IntelExecutionPlan,
+    #[allow(dead_code)]
+    d_activations: Option<LevelZeroDeviceBuffer>,
 }
 
 impl fmt::Debug for IntelBackend {
@@ -62,6 +66,7 @@ impl fmt::Debug for IntelBackend {
             .field("execution_plan", &self.execution_plan)
             .field("event_counter", &self.current_event_id)
             .field("host_token_buffer_len", &self.host_token_buffer.len())
+            .field("level_zero_active", &is_level_zero_available())
             .finish()
     }
 }
@@ -85,6 +90,7 @@ impl IntelBackend {
             host_token_buffer: vec![0; max_slots],
             profile,
             execution_plan,
+            d_activations: None,
         }
     }
 

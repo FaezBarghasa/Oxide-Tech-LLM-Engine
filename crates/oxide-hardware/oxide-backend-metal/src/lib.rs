@@ -22,10 +22,12 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod kernels;
 pub mod mlx;
 
 pub use arch::MetalExecutionPlan;
+pub use driver::is_metal_available;
 pub use kernels::MetalLlmKernels;
 pub use mlx::{MetalCommandStream, MetalUnifiedBuffer};
 use oxide_core::error::Result;
