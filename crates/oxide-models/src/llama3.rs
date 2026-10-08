@@ -856,14 +856,7 @@ impl Llama3Model {
         );
 
         // 4. LM Head projection to vocabulary logits
-        let v = self.config.vocab_size;
-        Self::gemv(
-            &self.lm_head,
-            &scratch.final_norm,
-            v,
-            h,
-            &mut scratch.logits,
-        );
+        self.lm_head.gemv(&scratch.final_norm, &mut scratch.logits);
 
         Ok(())
     }
@@ -1139,14 +1132,8 @@ impl Llama3Model {
             eps,
         );
 
-        let v = self.config.vocab_size;
-        Self::gemv(
-            &self.lm_head,
-            &scratch.final_norm,
-            v,
-            h,
-            &mut scratch.logits,
-        );
+        // 4. LM Head projection to vocabulary logits
+        self.lm_head.gemv(&scratch.final_norm, &mut scratch.logits);
 
         Ok(())
     }
@@ -1214,11 +1201,6 @@ impl Llama3Model {
     #[inline(always)]
     fn rms_norm(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) {
         oxide_quant::simd::rmsnorm_f32(input, weight, output, eps);
-    }
-
-    #[inline(always)]
-    fn gemv(matrix: &[f32], vector: &[f32], out_dim: usize, in_dim: usize, output: &mut [f32]) {
-        oxide_quant::simd::gemv_blocked_f32(matrix, vector, out_dim, in_dim, output);
     }
 }
 
