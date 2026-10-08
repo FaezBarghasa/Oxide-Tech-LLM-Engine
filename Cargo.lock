@@ -1429,6 +1429,7 @@ dependencies = [
  "oxide-core",
  "oxide-models",
  "oxide-quant",
+ "rayon",
  "rtrb",
  "serde",
  "thiserror",

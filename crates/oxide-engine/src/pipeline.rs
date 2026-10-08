@@ -209,15 +209,23 @@ impl SpecializedPipeline {
                     scratch.final_norm[i] = h_val * inv_rms * w_val;
                 }
 
-                // 4. LM Head projection
+                // 4. LM Head projection via multithreaded SIMD matrix-vector multiplication
                 let v = model.config.vocab_size;
-                for i in 0..v {
-                    let offset = i * h;
-                    if offset + h <= model.lm_head.len() {
-                        let row = &model.lm_head[offset..offset + h];
-                        scratch.logits[i] = oxide_quant::simd::dot_f32(row, &scratch.final_norm);
-                    }
-                }
+                use rayon::prelude::*;
+                scratch.logits[..v]
+                    .par_chunks_mut(64)
+                    .enumerate()
+                    .for_each(|(chunk_idx, logit_chunk)| {
+                        let base_vocab = chunk_idx * 64;
+                        for (j, logit_val) in logit_chunk.iter_mut().enumerate() {
+                            let vocab_idx = base_vocab + j;
+                            let offset = vocab_idx * h;
+                            if offset + h <= model.lm_head.len() {
+                                let row = &model.lm_head[offset..offset + h];
+                                *logit_val = oxide_quant::simd::dot_f32(row, &scratch.final_norm);
+                            }
+                        }
+                    });
 
                 *pos += 1;
                 let mut max_idx = 0;

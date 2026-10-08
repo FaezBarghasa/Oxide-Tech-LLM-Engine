@@ -181,18 +181,90 @@ impl Llama3KvCacheLayer {
     }
 }
 
+/// Quantized or dense weight matrix with direct SIMD kernel dispatch.
+#[derive(Debug, Clone)]
+#[allow(non_camel_case_types)]
+pub enum QuantizedTensor {
+    F32 {
+        data: Vec<f32>,
+        m: usize,
+        n: usize,
+    },
+    Q4_K {
+        blocks: Vec<oxide_quant::BlockQ4_K>,
+        m: usize,
+        n: usize,
+    },
+    Q6_K {
+        blocks: Vec<oxide_quant::BlockQ6_K>,
+        m: usize,
+        n: usize,
+    },
+    Q8_0 {
+        blocks: Vec<oxide_quant::BlockQ8_0>,
+        m: usize,
+        n: usize,
+    },
+}
+
+impl QuantizedTensor {
+    #[must_use]
+    pub fn from_f32(data: Vec<f32>, m: usize, n: usize) -> Self {
+        Self::F32 { data, m, n }
+    }
+
+    #[must_use]
+    pub fn rows(&self) -> usize {
+        match self {
+            Self::F32 { m, .. }
+            | Self::Q4_K { m, .. }
+            | Self::Q6_K { m, .. }
+            | Self::Q8_0 { m, .. } => *m,
+        }
+    }
+
+    #[must_use]
+    pub fn cols(&self) -> usize {
+        match self {
+            Self::F32 { n, .. }
+            | Self::Q4_K { n, .. }
+            | Self::Q6_K { n, .. }
+            | Self::Q8_0 { n, .. } => *n,
+        }
+    }
+
+    /// High-performance SIMD GEMV vector-matrix multiply dispatching directly to native quantized kernels.
+    #[inline(always)]
+    pub fn gemv(&self, vector: &[f32], output: &mut [f32]) {
+        match self {
+            Self::F32 { data, m, n } => {
+                oxide_quant::simd::gemv_blocked_f32(data, vector, *m, *n, output);
+            }
+            Self::Q4_K { blocks, m, n } => {
+                oxide_quant::simd::gemv_q4_k(blocks, vector, *m, *n, output);
+            }
+            Self::Q6_K { blocks, m, n } => {
+                oxide_quant::simd::gemv_q6_k(blocks, vector, *m, *n, output);
+            }
+            Self::Q8_0 { blocks, m, n } => {
+                oxide_quant::simd::gemv_q8_0(blocks, vector, *m, *n, output);
+            }
+        }
+    }
+}
+
 /// Single Transformer Decoder Layer Weights.
 #[derive(Debug, Clone)]
 pub struct Llama3LayerWeights {
-    pub q_proj: Vec<f32>,    // [num_heads * head_dim, hidden_dim]
-    pub k_proj: Vec<f32>,    // [num_kv_heads * head_dim, hidden_dim]
-    pub v_proj: Vec<f32>,    // [num_kv_heads * head_dim, hidden_dim]
-    pub o_proj: Vec<f32>,    // [hidden_dim, num_heads * head_dim]
-    pub gate_proj: Vec<f32>, // [intermediate_dim, hidden_dim]
-    pub up_proj: Vec<f32>,   // [intermediate_dim, hidden_dim]
-    pub down_proj: Vec<f32>, // [hidden_dim, intermediate_dim]
-    pub attn_norm: Vec<f32>, // [hidden_dim]
-    pub ffn_norm: Vec<f32>,  // [hidden_dim]
+    pub q_proj: QuantizedTensor,    // [num_heads * head_dim, hidden_dim]
+    pub k_proj: QuantizedTensor,    // [num_kv_heads * head_dim, hidden_dim]
+    pub v_proj: QuantizedTensor,    // [num_kv_heads * head_dim, hidden_dim]
+    pub o_proj: QuantizedTensor,    // [hidden_dim, num_heads * head_dim]
+    pub gate_proj: QuantizedTensor, // [intermediate_dim, hidden_dim]
+    pub up_proj: QuantizedTensor,   // [intermediate_dim, hidden_dim]
+    pub down_proj: QuantizedTensor, // [hidden_dim, intermediate_dim]
+    pub attn_norm: Vec<f32>,        // [hidden_dim]
+    pub ffn_norm: Vec<f32>,         // [hidden_dim]
 }
 
 impl Llama3LayerWeights {
@@ -211,13 +283,13 @@ impl Llama3LayerWeights {
 
         let seed = layer_idx as f32 * 0.31;
         Self {
-            q_proj: fill_weight(q_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.1),
-            k_proj: fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.2),
-            v_proj: fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.3),
-            o_proj: fill_weight(h * q_dim, 1.0 / (q_dim as f32).sqrt(), seed + 0.4),
-            gate_proj: fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.5),
-            up_proj: fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.6),
-            down_proj: fill_weight(h * inter, 1.0 / (inter as f32).sqrt(), seed + 0.7),
+            q_proj: QuantizedTensor::from_f32(fill_weight(q_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.1), q_dim, h),
+            k_proj: QuantizedTensor::from_f32(fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.2), kv_dim, h),
+            v_proj: QuantizedTensor::from_f32(fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.3), kv_dim, h),
+            o_proj: QuantizedTensor::from_f32(fill_weight(h * q_dim, 1.0 / (q_dim as f32).sqrt(), seed + 0.4), h, q_dim),
+            gate_proj: QuantizedTensor::from_f32(fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.5), inter, h),
+            up_proj: QuantizedTensor::from_f32(fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.6), inter, h),
+            down_proj: QuantizedTensor::from_f32(fill_weight(h * inter, 1.0 / (inter as f32).sqrt(), seed + 0.7), h, inter),
             attn_norm: vec![1.0; h],
             ffn_norm: vec![1.0; h],
         }
@@ -432,6 +504,109 @@ impl Llama3Model {
     }
 
 
+    /// Helper to extract a tensor directly into a `QuantizedTensor` without full f32 inflation.
+    fn extract_gguf_tensor(
+        gguf: &GgufFile,
+        tensor_name: &str,
+        data_slice: &[u8],
+        m: usize,
+        n: usize,
+    ) -> Option<QuantizedTensor> {
+        let info = gguf.tensors.get(tensor_name)?;
+        let offset = gguf.tensor_data_offset + info.offset as usize;
+        if offset >= data_slice.len() {
+            return None;
+        }
+        let avail = &data_slice[offset..];
+
+        match info.quant_type {
+            crate::formats::GgufQuantType::Q4_K_M | crate::formats::GgufQuantType::Q4_1 => {
+                let block_size = 144; // 2+2+12+128 = 144 bytes per 256 weights
+                let num_blocks = (m * n) / 256;
+                let needed_bytes = num_blocks * block_size;
+                if avail.len() >= needed_bytes {
+                    let mut blocks = Vec::with_capacity(num_blocks);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                        let dmin_raw = u16::from_le_bytes([block_raw[2], block_raw[3]]);
+                        let mut scales = [0u8; 12];
+                        scales.copy_from_slice(&block_raw[4..16]);
+                        let mut qs = [0u8; 128];
+                        qs.copy_from_slice(&block_raw[16..144]);
+                        blocks.push(oxide_quant::BlockQ4_K {
+                            d: oxide_quant::f16(d_raw),
+                            dmin: oxide_quant::f16(dmin_raw),
+                            scales,
+                            qs,
+                        });
+                    }
+                    Some(QuantizedTensor::Q4_K { blocks, m, n })
+                } else {
+                    None
+                }
+            }
+            crate::formats::GgufQuantType::Q6_K => {
+                let block_size = 210; // 128 + 64 + 16 + 2
+                let num_blocks = (m * n) / 256;
+                let needed_bytes = num_blocks * block_size;
+                if avail.len() >= needed_bytes {
+                    let mut blocks = Vec::with_capacity(num_blocks);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let mut ql = [0u8; 128];
+                        ql.copy_from_slice(&block_raw[0..128]);
+                        let mut qh = [0u8; 64];
+                        qh.copy_from_slice(&block_raw[128..192]);
+                        let mut scales = [0i8; 16];
+                        for i in 0..16 {
+                            scales[i] = block_raw[192 + i] as i8;
+                        }
+                        let d_raw = u16::from_le_bytes([block_raw[208], block_raw[209]]);
+                        blocks.push(oxide_quant::BlockQ6_K {
+                            ql,
+                            qh,
+                            scales,
+                            d: oxide_quant::f16(d_raw),
+                        });
+                    }
+                    Some(QuantizedTensor::Q6_K { blocks, m, n })
+                } else {
+                    None
+                }
+            }
+            crate::formats::GgufQuantType::Q8_0 => {
+                let block_size = 34; // 2 + 32
+                let num_blocks = (m * n) / 32;
+                let needed_bytes = num_blocks * block_size;
+                if avail.len() >= needed_bytes {
+                    let mut blocks = Vec::with_capacity(num_blocks);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                        let mut qs = [0i8; 32];
+                        for i in 0..32 {
+                            qs[i] = block_raw[2 + i] as i8;
+                        }
+                        blocks.push(oxide_quant::BlockQ8_0 {
+                            scale: oxide_quant::f16(scale_raw),
+                            qs,
+                        });
+                    }
+                    Some(QuantizedTensor::Q8_0 { blocks, m, n })
+                } else {
+                    None
+                }
+            }
+            _ => {
+                // Fallback to F32 decompression if format is uncompressed or unsupported directly
+                let mut data = vec![0.0f32; m * n];
+                Self::extract_gguf_tensor_to_buffer(gguf, tensor_name, data_slice, &mut data);
+                Some(QuantizedTensor::F32 { data, m, n })
+            }
+        }
+    }
+
     /// Loads tensor weights from GGUF binary container.
     pub fn load_from_gguf(&mut self, gguf: &GgufFile, data_slice: &[u8]) -> Result<()> {
         // 1. Embeddings
@@ -463,6 +638,11 @@ impl Llama3Model {
             self.lm_head.copy_from_slice(&self.token_embedding);
         }
 
+        let h = self.config.hidden_dim;
+        let q_dim = self.config.num_heads * self.config.head_dim;
+        let kv_dim = self.config.num_kv_heads * self.config.head_dim;
+        let inter = self.config.intermediate_dim;
+
         // 4. Transformer Decoder Layers
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let q_name = format!("blk.{i}.attn_q.weight");
@@ -475,13 +655,28 @@ impl Llama3Model {
             let attn_norm_name = format!("blk.{i}.attn_norm.weight");
             let ffn_norm_name = format!("blk.{i}.ffn_norm.weight");
 
-            Self::extract_gguf_tensor_to_buffer(gguf, &q_name, data_slice, &mut layer.q_proj);
-            Self::extract_gguf_tensor_to_buffer(gguf, &k_name, data_slice, &mut layer.k_proj);
-            Self::extract_gguf_tensor_to_buffer(gguf, &v_name, data_slice, &mut layer.v_proj);
-            Self::extract_gguf_tensor_to_buffer(gguf, &o_name, data_slice, &mut layer.o_proj);
-            Self::extract_gguf_tensor_to_buffer(gguf, &gate_name, data_slice, &mut layer.gate_proj);
-            Self::extract_gguf_tensor_to_buffer(gguf, &up_name, data_slice, &mut layer.up_proj);
-            Self::extract_gguf_tensor_to_buffer(gguf, &down_name, data_slice, &mut layer.down_proj);
+            if let Some(t) = Self::extract_gguf_tensor(gguf, &q_name, data_slice, q_dim, h) {
+                layer.q_proj = t;
+            }
+            if let Some(t) = Self::extract_gguf_tensor(gguf, &k_name, data_slice, kv_dim, h) {
+                layer.k_proj = t;
+            }
+            if let Some(t) = Self::extract_gguf_tensor(gguf, &v_name, data_slice, kv_dim, h) {
+                layer.v_proj = t;
+            }
+            if let Some(t) = Self::extract_gguf_tensor(gguf, &o_name, data_slice, h, q_dim) {
+                layer.o_proj = t;
+            }
+            if let Some(t) = Self::extract_gguf_tensor(gguf, &gate_name, data_slice, inter, h) {
+                layer.gate_proj = t;
+            }
+            if let Some(t) = Self::extract_gguf_tensor(gguf, &up_name, data_slice, inter, h) {
+                layer.up_proj = t;
+            }
+            if let Some(t) = Self::extract_gguf_tensor(gguf, &down_name, data_slice, h, inter) {
+                layer.down_proj = t;
+            }
+
             Self::extract_gguf_tensor_to_buffer(
                 gguf,
                 &attn_norm_name,
@@ -636,8 +831,8 @@ impl Llama3Model {
         scratch: &mut Llama3ScratchBuffers,
         eps: f32,
         h: usize,
-        q_dim: usize,
-        kv_dim: usize,
+        _q_dim: usize,
+        _kv_dim: usize,
     ) {
         Self::rms_norm(
             &scratch.hidden,
@@ -647,27 +842,9 @@ impl Llama3Model {
         );
 
         // Q, K, V Projections via SIMD GEMV
-        Self::gemv(
-            &layer.q_proj,
-            &scratch.norm_hidden,
-            q_dim,
-            h,
-            &mut scratch.q,
-        );
-        Self::gemv(
-            &layer.k_proj,
-            &scratch.norm_hidden,
-            kv_dim,
-            h,
-            &mut scratch.k,
-        );
-        Self::gemv(
-            &layer.v_proj,
-            &scratch.norm_hidden,
-            kv_dim,
-            h,
-            &mut scratch.v,
-        );
+        layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q);
+        layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k);
+        layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v);
 
         // RoPE Rotary Embedding
         for head_idx in 0..self.config.num_heads {
@@ -715,13 +892,7 @@ impl Llama3Model {
             );
         }
 
-        Self::gemv(
-            &layer.o_proj,
-            &scratch.attn_out,
-            h,
-            q_dim,
-            &mut scratch.o_proj_out,
-        );
+        layer.o_proj.gemv(&scratch.attn_out, &mut scratch.o_proj_out);
 
         // Residual 1
         for i in 0..h {
@@ -737,20 +908,8 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        Self::gemv(
-            &layer.gate_proj,
-            &scratch.ffn_norm_hidden,
-            inter_dim,
-            h,
-            &mut scratch.gate,
-        );
-        Self::gemv(
-            &layer.up_proj,
-            &scratch.ffn_norm_hidden,
-            inter_dim,
-            h,
-            &mut scratch.up,
-        );
+        layer.gate_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
+        layer.up_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
 
         // SwiGLU: down_proj(silu(gate) * up)
         for i in 0..inter_dim {
@@ -759,13 +918,7 @@ impl Llama3Model {
             scratch.activated[i] = silu_g * scratch.up[i];
         }
 
-        Self::gemv(
-            &layer.down_proj,
-            &scratch.activated,
-            h,
-            inter_dim,
-            &mut scratch.mlp_out,
-        );
+        layer.down_proj.gemv(&scratch.activated, &mut scratch.mlp_out);
 
         // Residual 2
         for i in 0..h {
@@ -789,8 +942,8 @@ impl Llama3Model {
         scratch: &mut Llama3ScratchBuffers,
         eps: f32,
         h: usize,
-        q_dim: usize,
-        kv_dim: usize,
+        _q_dim: usize,
+        _kv_dim: usize,
     ) {
         Self::rms_norm(
             &scratch.hidden,
@@ -800,27 +953,9 @@ impl Llama3Model {
         );
 
         // Q, K, V Projections via SIMD GEMV
-        Self::gemv(
-            &layer.q_proj,
-            &scratch.norm_hidden,
-            q_dim,
-            h,
-            &mut scratch.q,
-        );
-        Self::gemv(
-            &layer.k_proj,
-            &scratch.norm_hidden,
-            kv_dim,
-            h,
-            &mut scratch.k,
-        );
-        Self::gemv(
-            &layer.v_proj,
-            &scratch.norm_hidden,
-            kv_dim,
-            h,
-            &mut scratch.v,
-        );
+        layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q);
+        layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k);
+        layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v);
 
         // RoPE Rotary Embedding
         for head_idx in 0..self.config.num_heads {
@@ -867,13 +1002,7 @@ impl Llama3Model {
             );
         }
 
-        Self::gemv(
-            &layer.o_proj,
-            &scratch.attn_out,
-            h,
-            q_dim,
-            &mut scratch.o_proj_out,
-        );
+        layer.o_proj.gemv(&scratch.attn_out, &mut scratch.o_proj_out);
 
         // Residual 1
         for i in 0..h {
@@ -889,20 +1018,8 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        Self::gemv(
-            &layer.gate_proj,
-            &scratch.ffn_norm_hidden,
-            inter_dim,
-            h,
-            &mut scratch.gate,
-        );
-        Self::gemv(
-            &layer.up_proj,
-            &scratch.ffn_norm_hidden,
-            inter_dim,
-            h,
-            &mut scratch.up,
-        );
+        layer.gate_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
+        layer.up_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
 
         // SwiGLU: down_proj(silu(gate) * up)
         for i in 0..inter_dim {
@@ -911,13 +1028,7 @@ impl Llama3Model {
             scratch.activated[i] = silu_g * scratch.up[i];
         }
 
-        Self::gemv(
-            &layer.down_proj,
-            &scratch.activated,
-            h,
-            inter_dim,
-            &mut scratch.mlp_out,
-        );
+        layer.down_proj.gemv(&scratch.activated, &mut scratch.mlp_out);
 
         // Residual 2
         for i in 0..h {
