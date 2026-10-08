@@ -316,7 +316,20 @@ pub struct BenchArgs {
     /// Number of warmup iterations
     #[arg(long, default_value_t = 50)]
     pub warmup: usize,
+
+    /// Prompt length in tokens for TTFT benchmarking
+    #[arg(long, default_value_t = 128)]
+    pub prompt_len: usize,
+
+    /// Generation length in tokens for decode throughput benchmarking
+    #[arg(long, default_value_t = 64)]
+    pub gen_len: usize,
+
+    /// Concurrency streams (e.g. 1, 4, 16)
+    #[arg(long, default_value_t = 1)]
+    pub concurrency: usize,
 }
+
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct ChatArgs {
@@ -565,9 +578,15 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             );
             Ok(())
         }
-        Some(Commands::Bench(bench)) => {
-            run_all_hardware_benchmarks(&bench.model, bench.tokens, bench.warmup)
-        }
+        Some(Commands::Bench(bench)) => run_all_hardware_benchmarks(
+            &bench.model,
+            bench.tokens,
+            bench.warmup,
+            bench.prompt_len,
+            bench.gen_len,
+            bench.concurrency,
+        ),
+
         Some(Commands::Lab(lab)) => run_lab_command(lab),
         Some(Commands::Server(srv)) => {
             let addr: SocketAddr = format!("{}:{}", srv.host, srv.port).parse()?;
@@ -984,8 +1003,12 @@ pub fn run_all_hardware_benchmarks(
     model: &str,
     tokens: usize,
     warmup: usize,
+    prompt_len: usize,
+    gen_len: usize,
+    concurrency: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use std::time::Instant;
+
 
     struct TargetConfig {
         name: &'static str,
@@ -1015,11 +1038,12 @@ pub fn run_all_hardware_benchmarks(
         "║ Host dGPU: NVIDIA GeForce RTX 4060 Laptop GPU (8GB VRAM, sm_89 Ada Lovelace)          ║"
     );
     println!(
-        "║ Workload:  Model: {model} | Decode {tokens} tokens (Warmup: {warmup} iterations)                       ║"
+        "║ Workload:  Model: {model} | Decode {tokens} toks | Prompt {prompt_len} | Gen {gen_len} | Concurrency {concurrency} ║"
     );
     println!(
         "╚═══════════════════════════════════════════════════════════════════════════════════════╝\n"
     );
+
 
     let targets = [
         TargetConfig {
