@@ -1032,7 +1032,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "CPU + NVIDIA dGPU (RTX 4060 Ada Lovelace)",
-            backend_name: "cpu_nvidia",
+            backend_name: "cuda",
             target_device: Some("NVIDIA GeForce RTX 4060 Laptop"),
             vllm_baseline: 104.0,
             llamacpp_baseline: 88.0,
@@ -1040,7 +1040,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "CPU + AMD dGPU (ROCm CDNA/RDNA)",
-            backend_name: "cpu_amd",
+            backend_name: "rocm",
             target_device: Some("AMD Radeon / Instinct"),
             vllm_baseline: 98.0,
             llamacpp_baseline: 82.0,
@@ -1048,7 +1048,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "CPU + Intel dGPU (Arc Battlemage / Xe)",
-            backend_name: "cpu_intel",
+            backend_name: "intel",
             target_device: Some("Intel Arc B580 / A770"),
             vllm_baseline: 72.0,
             llamacpp_baseline: 64.0,
@@ -1056,7 +1056,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "CPU + Google TPU (Systolic Array MXU)",
-            backend_name: "cpu_tpu",
+            backend_name: "tpu",
             target_device: Some("Google TPU v5e/v6e"),
             vllm_baseline: 115.0,
             llamacpp_baseline: 0.0,
@@ -1136,7 +1136,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "ARM CPU + NPU + External NPU HAT (RPi5+Hailo)",
-            backend_name: "arm_npu_hat",
+            backend_name: "hailo",
             target_device: Some("Raspberry Pi 5 + AI HAT+ 2"),
             vllm_baseline: 0.0,
             llamacpp_baseline: 14.0,
@@ -1144,7 +1144,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "ARM CPU + Integrated NPU (Apple/RKNN/HTP)",
-            backend_name: "arm_integrated_npu",
+            backend_name: "rknn",
             target_device: Some("SoC Integrated NPU"),
             vllm_baseline: 0.0,
             llamacpp_baseline: 24.0,
@@ -1168,7 +1168,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "Apple Silicon UMA (Metal GPU + ANE)",
-            backend_name: "apple_silicon",
+            backend_name: "metal",
             target_device: Some("Apple M4 Max Unified"),
             vllm_baseline: 0.0,
             llamacpp_baseline: 95.0,
@@ -1176,7 +1176,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "Qualcomm Snapdragon (Adreno GPU + Hexagon HTP)",
-            backend_name: "qualcomm_snapdragon",
+            backend_name: "qualcomm",
             target_device: Some("Snapdragon X Elite"),
             vllm_baseline: 0.0,
             llamacpp_baseline: 35.0,
@@ -1184,7 +1184,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "Intel Core Ultra (Xe iGPU + NPU + Arc dGPU)",
-            backend_name: "intel_core_ultra",
+            backend_name: "intel",
             target_device: Some("Intel Lunar Lake / Arrow Lake"),
             vllm_baseline: 0.0,
             llamacpp_baseline: 40.0,
@@ -1192,7 +1192,7 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "Rockchip RK3588 (Mali GPU + Tri-Core RKNN)",
-            backend_name: "rockchip_rknn",
+            backend_name: "rknn",
             target_device: Some("Orange Pi 5 / RK3588"),
             vllm_baseline: 0.0,
             llamacpp_baseline: 16.0,
@@ -1200,13 +1200,14 @@ pub fn run_all_hardware_benchmarks(
         },
         TargetConfig {
             name: "Raspberry Pi 5 + Hailo-8 AI HAT+",
-            backend_name: "raspberry_pi_hailo",
+            backend_name: "hailo",
             target_device: Some("Raspberry Pi 5 + Hailo-8"),
             vllm_baseline: 0.0,
             llamacpp_baseline: 18.0,
             sglang_baseline: 0.0,
         },
     ];
+
 
     println!(
         "{:<48} | {:<10} | {:<12} | {:<10} | {:<10} | {:<10}",
