@@ -305,7 +305,7 @@ pub struct Llama3Model {
     pub token_embedding: Vec<f32>, // [vocab_size, hidden_dim]
     pub layers: Vec<Llama3LayerWeights>,
     pub output_norm: Vec<f32>, // [hidden_dim]
-    pub lm_head: Vec<f32>,     // [vocab_size, hidden_dim]
+    pub lm_head: QuantizedTensor, // [vocab_size, hidden_dim]
 }
 
 impl Llama3Model {
@@ -334,9 +334,10 @@ impl Llama3Model {
             .map(|i| ((i as f32 * 0.013).cos()) * (1.0 / (h as f32).sqrt()))
             .collect();
         let output_norm = vec![1.0; h];
-        let lm_head: Vec<f32> = (0..v * h)
+        let lm_head_data: Vec<f32> = (0..v * h)
             .map(|i| ((i as f32 * 0.019).sin()) * (1.0 / (h as f32).sqrt()))
             .collect();
+        let lm_head = QuantizedTensor::from_f32(lm_head_data, v, h);
 
         let layers = (0..config.num_layers)
             .map(|l| Llama3LayerWeights::new_synthetic(&config, l))
@@ -396,107 +397,159 @@ impl Llama3Model {
                     }
                 }
                 crate::formats::GgufQuantType::F16 => {
+                    use rayon::prelude::*;
                     let count = target.len().min(avail.len() / 2);
-                    for i in 0..count {
-                        let raw = u16::from_le_bytes([avail[i * 2], avail[i * 2 + 1]]);
-                        target[i] = oxide_quant::f16(raw).to_f32();
-                    }
+                    target[..count]
+                        .par_chunks_mut(1024)
+                        .enumerate()
+                        .for_each(|(chunk_idx, chunk)| {
+                            let base_idx = chunk_idx * 1024;
+                            for (j, val) in chunk.iter_mut().enumerate() {
+                                let i = base_idx + j;
+                                let raw = u16::from_le_bytes([avail[i * 2], avail[i * 2 + 1]]);
+                                *val = oxide_quant::f16(raw).to_f32();
+                            }
+                        });
                 }
                 crate::formats::GgufQuantType::Q8_0 => {
+                    use rayon::prelude::*;
                     let block_size = 34; // 2 bytes f16 scale + 32 bytes int8
                     let num_blocks = (target.len() / 32).min(avail.len() / block_size);
-                    for b_idx in 0..num_blocks {
-                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
-                        let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
-                        let scale = oxide_quant::f16(scale_raw).to_f32();
-                        let start = b_idx * 32;
-                        for i in 0..32 {
-                            let q = block_raw[2 + i] as i8;
-                            target[start + i] = (q as f32) * scale;
-                        }
-                    }
+                    target[..num_blocks * 32]
+                        .par_chunks_mut(32 * 64)
+                        .enumerate()
+                        .for_each(|(c_idx, c_slice)| {
+                            let base_b = c_idx * 64;
+                            let n_b = c_slice.len() / 32;
+                            for b in 0..n_b {
+                                let b_idx = base_b + b;
+                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                                let scale = oxide_quant::f16(scale_raw).to_f32();
+                                let start = b * 32;
+                                for i in 0..32 {
+                                    let q = block_raw[2 + i] as i8;
+                                    c_slice[start + i] = (q as f32) * scale;
+                                }
+                            }
+                        });
                 }
                 crate::formats::GgufQuantType::Q4_0 => {
+                    use rayon::prelude::*;
                     let block_size = 18; // 2 bytes f16 scale + 16 bytes nibbles
                     let num_blocks = (target.len() / 32).min(avail.len() / block_size);
-                    for b_idx in 0..num_blocks {
-                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
-                        let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
-                        let scale = oxide_quant::f16(scale_raw).to_f32();
-                        let start = b_idx * 32;
-                        for i in 0..16 {
-                            let byte = block_raw[2 + i];
-                            let q0 = (byte & 0x0F) as i8 - 8;
-                            let q1 = ((byte >> 4) & 0x0F) as i8 - 8;
-                            target[start + i] = (q0 as f32) * scale;
-                            target[start + i + 16] = (q1 as f32) * scale;
-                        }
-                    }
+                    target[..num_blocks * 32]
+                        .par_chunks_mut(32 * 64)
+                        .enumerate()
+                        .for_each(|(c_idx, c_slice)| {
+                            let base_b = c_idx * 64;
+                            let n_b = c_slice.len() / 32;
+                            for b in 0..n_b {
+                                let b_idx = base_b + b;
+                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                                let scale = oxide_quant::f16(scale_raw).to_f32();
+                                let start = b * 32;
+                                for i in 0..16 {
+                                    let byte = block_raw[2 + i];
+                                    let q0 = (byte & 0x0F) as i8 - 8;
+                                    let q1 = ((byte >> 4) & 0x0F) as i8 - 8;
+                                    c_slice[start + i] = (q0 as f32) * scale;
+                                    c_slice[start + i + 16] = (q1 as f32) * scale;
+                                }
+                            }
+                        });
                 }
                 crate::formats::GgufQuantType::Q4_K_M | crate::formats::GgufQuantType::Q4_1 => {
+                    use rayon::prelude::*;
                     let block_size = 144; // 2+2+12+128 = 144 bytes per 256 weights
                     let num_blocks = (target.len() / 256).min(avail.len() / block_size);
-                    for b_idx in 0..num_blocks {
-                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
-                        let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
-                        let dmin_raw = u16::from_le_bytes([block_raw[2], block_raw[3]]);
-                        let d = oxide_quant::f16(d_raw).to_f32();
-                        let dmin = oxide_quant::f16(dmin_raw).to_f32();
-                        let qs = &block_raw[16..144];
-                        let start = b_idx * 256;
-                        for i in 0..128 {
-                            let byte = qs[i];
-                            let q0 = (byte & 0x0F) as f32;
-                            let q1 = ((byte >> 4) & 0x0F) as f32;
-                            target[start + i] = q0 * d + dmin;
-                            target[start + i + 128] = q1 * d + dmin;
-                        }
-                    }
+                    target[..num_blocks * 256]
+                        .par_chunks_mut(256 * 16)
+                        .enumerate()
+                        .for_each(|(c_idx, c_slice)| {
+                            let base_b = c_idx * 16;
+                            let n_b = c_slice.len() / 256;
+                            for b in 0..n_b {
+                                let b_idx = base_b + b;
+                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                                let dmin_raw = u16::from_le_bytes([block_raw[2], block_raw[3]]);
+                                let d = oxide_quant::f16(d_raw).to_f32();
+                                let dmin = oxide_quant::f16(dmin_raw).to_f32();
+                                let qs = &block_raw[16..144];
+                                let start = b * 256;
+                                for i in 0..128 {
+                                    let byte = qs[i];
+                                    let q0 = (byte & 0x0F) as f32;
+                                    let q1 = ((byte >> 4) & 0x0F) as f32;
+                                    c_slice[start + i] = q0 * d + dmin;
+                                    c_slice[start + i + 128] = q1 * d + dmin;
+                                }
+                            }
+                        });
                 }
                 crate::formats::GgufQuantType::Q6_K => {
-                    // Q6_K block size: 128 (ql) + 64 (qh) + 16 (scales) + 2 (d) = 210 bytes per 256 weights
+                    use rayon::prelude::*;
                     let block_size = 210;
                     let num_blocks = (target.len() / 256).min(avail.len() / block_size);
-                    for b_idx in 0..num_blocks {
-                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
-                        let ql = &block_raw[0..128];
-                        let qh = &block_raw[128..192];
-                        let d_raw = u16::from_le_bytes([block_raw[208], block_raw[209]]);
-                        let d = oxide_quant::f16(d_raw).to_f32();
-                        let start = b_idx * 256;
-                        for i in 0..128 {
-                            let byte_l = ql[i];
-                            let qh_idx = i / 2;
-                            let shift = (i % 2) * 4;
-                            let byte_h = (qh[qh_idx] >> shift) & 0x0F;
-                            let h0 = byte_h & 0x03;
-                            let h1 = (byte_h >> 2) & 0x03;
-                            let q0 = ((h0 << 4) | (byte_l & 0x0F)) as i8 - 32;
-                            let q1 = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i8 - 32;
-                            target[start + i] = (q0 as f32) * d;
-                            target[start + i + 128] = (q1 as f32) * d;
-                        }
-                    }
+                    target[..num_blocks * 256]
+                        .par_chunks_mut(256 * 16)
+                        .enumerate()
+                        .for_each(|(c_idx, c_slice)| {
+                            let base_b = c_idx * 16;
+                            let n_b = c_slice.len() / 256;
+                            for b in 0..n_b {
+                                let b_idx = base_b + b;
+                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let ql = &block_raw[0..128];
+                                let qh = &block_raw[128..192];
+                                let d_raw = u16::from_le_bytes([block_raw[208], block_raw[209]]);
+                                let d = oxide_quant::f16(d_raw).to_f32();
+                                let start = b * 256;
+                                for i in 0..128 {
+                                    let byte_l = ql[i];
+                                    let qh_idx = i / 2;
+                                    let shift = (i % 2) * 4;
+                                    let byte_h = (qh[qh_idx] >> shift) & 0x0F;
+                                    let h0 = byte_h & 0x03;
+                                    let h1 = (byte_h >> 2) & 0x03;
+                                    let q0 = ((h0 << 4) | (byte_l & 0x0F)) as i8 - 32;
+                                    let q1 = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i8 - 32;
+                                    c_slice[start + i] = (q0 as f32) * d;
+                                    c_slice[start + i + 128] = (q1 as f32) * d;
+                                }
+                            }
+                        });
                 }
                 crate::formats::GgufQuantType::Q5_K_M | crate::formats::GgufQuantType::Q5_0 => {
+                    use rayon::prelude::*;
                     let block_size = 22; // 2 bytes f16 scale + 4 bytes qh + 16 bytes qs
                     let num_blocks = (target.len() / 32).min(avail.len() / block_size);
-                    for b_idx in 0..num_blocks {
-                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
-                        let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
-                        let d = oxide_quant::f16(d_raw).to_f32();
-                        let qh = u32::from_le_bytes([block_raw[2], block_raw[3], block_raw[4], block_raw[5]]);
-                        let start = b_idx * 32;
-                        for i in 0..16 {
-                            let byte = block_raw[6 + i];
-                            let h0 = ((qh >> i) & 1) as i8;
-                            let h1 = ((qh >> (i + 16)) & 1) as i8;
-                            let q0 = (((byte & 0x0F) as i8) | (h0 << 4)) - 16;
-                            let q1 = ((((byte >> 4) & 0x0F) as i8) | (h1 << 4)) - 16;
-                            target[start + i] = (q0 as f32) * d;
-                            target[start + i + 16] = (q1 as f32) * d;
-                        }
-                    }
+                    target[..num_blocks * 32]
+                        .par_chunks_mut(32 * 64)
+                        .enumerate()
+                        .for_each(|(c_idx, c_slice)| {
+                            let base_b = c_idx * 64;
+                            let n_b = c_slice.len() / 32;
+                            for b in 0..n_b {
+                                let b_idx = base_b + b;
+                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                                let d = oxide_quant::f16(d_raw).to_f32();
+                                let qh = u32::from_le_bytes([block_raw[2], block_raw[3], block_raw[4], block_raw[5]]);
+                                let start = b * 32;
+                                for i in 0..16 {
+                                    let byte = block_raw[6 + i];
+                                    let h0 = ((qh >> i) & 1) as i8;
+                                    let h1 = ((qh >> (i + 16)) & 1) as i8;
+                                    let q0 = (((byte & 0x0F) as i8) | (h0 << 4)) - 16;
+                                    let q1 = ((((byte >> 4) & 0x0F) as i8) | (h1 << 4)) - 16;
+                                    c_slice[start + i] = (q0 as f32) * d;
+                                    c_slice[start + i + 16] = (q1 as f32) * d;
+                                }
+                            }
+                        });
                 }
                 _ => {}
             }
@@ -625,20 +678,16 @@ impl Llama3Model {
             &mut self.output_norm,
         );
 
-        // 3. LM Head (if distinct from embeddings)
-        if gguf.tensors.contains_key("output.weight") {
-            Self::extract_gguf_tensor_to_buffer(
-                gguf,
-                "output.weight",
-                data_slice,
-                &mut self.lm_head,
-            );
-        } else if self.lm_head.len() == self.token_embedding.len() {
-            // Tied weights fallback
-            self.lm_head.copy_from_slice(&self.token_embedding);
-        }
-
         let h = self.config.hidden_dim;
+        let v = self.config.vocab_size;
+
+        // 3. LM Head (if distinct from embeddings)
+        if let Some(t) = Self::extract_gguf_tensor(gguf, "output.weight", data_slice, v, h) {
+            self.lm_head = t;
+        } else {
+            // Tied weights fallback
+            self.lm_head = QuantizedTensor::from_f32(self.token_embedding.clone(), v, h);
+        }
         let q_dim = self.config.num_heads * self.config.head_dim;
         let kv_dim = self.config.num_kv_heads * self.config.head_dim;
         let inter = self.config.intermediate_dim;

@@ -1464,6 +1464,7 @@ dependencies = [
  "oxide-alloc",
  "oxide-core",
  "oxide-quant",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror",
