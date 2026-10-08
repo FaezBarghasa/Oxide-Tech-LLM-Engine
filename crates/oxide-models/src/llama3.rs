@@ -692,8 +692,9 @@ impl Llama3Model {
         let kv_dim = self.config.num_kv_heads * self.config.head_dim;
         let inter = self.config.intermediate_dim;
 
-        // 4. Transformer Decoder Layers
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        // 4. Transformer Decoder Layers loaded in parallel across all CPU cores
+        use rayon::prelude::*;
+        self.layers.par_iter_mut().enumerate().for_each(|(i, layer)| {
             let q_name = format!("blk.{i}.attn_q.weight");
             let k_name = format!("blk.{i}.attn_k.weight");
             let v_name = format!("blk.{i}.attn_v.weight");
@@ -738,7 +739,7 @@ impl Llama3Model {
                 data_slice,
                 &mut layer.ffn_norm,
             );
-        }
+        });
 
         Ok(())
     }

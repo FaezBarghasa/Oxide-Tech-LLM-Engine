@@ -683,6 +683,27 @@ unsafe fn dot_q4_k_avx2(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> 
 #[inline]
 #[must_use]
 pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
+            // SAFETY: Verified AVX-512F and AVX-512BW support.
+            unsafe {
+                return dot_q6_k_avx512(ql, qh, act, d);
+            }
+        }
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Verified AVX2 and FMA support.
+            unsafe {
+                return dot_q6_k_avx2(ql, qh, act, d);
+            }
+        }
+    }
+
+    dot_q6_k_portable(ql, qh, act, d)
+}
+
+#[inline(always)]
+fn dot_q6_k_portable(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
     let mut sum = 0.0f32;
     for i in 0..128 {
         let byte_l = ql[i];
@@ -699,6 +720,113 @@ pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 
         sum += (q0 as f32) * act[i] + (q1 as f32) * act[i + 128];
     }
     sum * d
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f", enable = "avx512bw")]
+unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
+    use core::arch::x86_64::{
+        _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_loadu_si512,
+        _mm512_set1_epi32, _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps,
+    };
+
+    unsafe {
+        let mut sum_vec = _mm512_setzero_ps();
+        let thirty_two = _mm512_set1_epi32(32);
+        let thirty_two_f = _mm512_cvtepi32_ps(thirty_two);
+
+        // Process in chunks of 16 weights (since AVX-512 holds 16 f32s)
+        for chunk in 0..8 {
+            let base_idx = chunk * 16;
+            let act0 = _mm512_loadu_ps(act.as_ptr().add(base_idx));
+            let act1 = _mm512_loadu_ps(act.as_ptr().add(base_idx + 128));
+
+            // Reconstruct q0 and q1 for 16 elements
+            let mut q0_buf = [0i32; 16];
+            let mut q1_buf = [0i32; 16];
+            for j in 0..16 {
+                let i = base_idx + j;
+                let byte_l = *ql.get_unchecked(i);
+                let qh_idx = i / 2;
+                let shift = (i % 2) * 4;
+                let byte_h = (*qh.get_unchecked(qh_idx) >> shift) & 0x0F;
+
+                let h0 = byte_h & 0x03;
+                let h1 = (byte_h >> 2) & 0x03;
+
+                q0_buf[j] = ((h0 << 4) | (byte_l & 0x0F)) as i32;
+                q1_buf[j] = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i32;
+            }
+
+            let raw_q0 = _mm512_loadu_si512(q0_buf.as_ptr().cast());
+            let raw_q1 = _mm512_loadu_si512(q1_buf.as_ptr().cast());
+
+            let f_q0 = _mm512_sub_ps(_mm512_cvtepi32_ps(raw_q0), thirty_two_f);
+            let f_q1 = _mm512_sub_ps(_mm512_cvtepi32_ps(raw_q1), thirty_two_f);
+
+            sum_vec = _mm512_fmadd_ps(f_q0, act0, sum_vec);
+            sum_vec = _mm512_fmadd_ps(f_q1, act1, sum_vec);
+        }
+
+        let mut buf = [0.0f32; 16];
+        _mm512_storeu_ps(buf.as_mut_ptr(), sum_vec);
+        let mut total = 0.0f32;
+        for v in buf {
+            total += v;
+        }
+        total * d
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q6_k_avx2(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
+    use core::arch::x86_64::{
+        _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256,
+        _mm256_set1_epi32, _mm256_setzero_ps, _mm256_storeu_ps, _mm256_sub_ps,
+    };
+
+    unsafe {
+        let mut sum_vec = _mm256_setzero_ps();
+        let thirty_two = _mm256_set1_epi32(32);
+        let thirty_two_f = _mm256_cvtepi32_ps(thirty_two);
+
+        for chunk in 0..16 {
+            let base_idx = chunk * 8;
+            let act0 = _mm256_loadu_ps(act.as_ptr().add(base_idx));
+            let act1 = _mm256_loadu_ps(act.as_ptr().add(base_idx + 128));
+
+            let mut q0_buf = [0i32; 8];
+            let mut q1_buf = [0i32; 8];
+            for j in 0..8 {
+                let i = base_idx + j;
+                let byte_l = *ql.get_unchecked(i);
+                let qh_idx = i / 2;
+                let shift = (i % 2) * 4;
+                let byte_h = (*qh.get_unchecked(qh_idx) >> shift) & 0x0F;
+
+                let h0 = byte_h & 0x03;
+                let h1 = (byte_h >> 2) & 0x03;
+
+                q0_buf[j] = ((h0 << 4) | (byte_l & 0x0F)) as i32;
+                q1_buf[j] = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i32;
+            }
+
+            let raw_q0 = _mm256_loadu_si256(q0_buf.as_ptr().cast());
+            let raw_q1 = _mm256_loadu_si256(q1_buf.as_ptr().cast());
+
+            let f_q0 = _mm256_sub_ps(_mm256_cvtepi32_ps(raw_q0), thirty_two_f);
+            let f_q1 = _mm256_sub_ps(_mm256_cvtepi32_ps(raw_q1), thirty_two_f);
+
+            sum_vec = _mm256_fmadd_ps(f_q0, act0, sum_vec);
+            sum_vec = _mm256_fmadd_ps(f_q1, act1, sum_vec);
+        }
+
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), sum_vec);
+        let total = (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7]);
+        total * d
+    }
 }
 
 /// Multithreaded Q6_K Matrix-Vector Multiplication across all CPU cores and threads.
@@ -1365,6 +1493,50 @@ mod tests {
         }
         let mut output = vec![0.0f32; m];
         gemv_q4_k(&blocks, &vector, m, n, &mut output);
+        assert_eq!(output.len(), m);
+        for &val in &output {
+            assert!(val.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_dot_q6_k_parity() {
+        let mut ql = [0u8; 128];
+        let mut qh = [0u8; 64];
+        let mut act = [0.0f32; 256];
+        for i in 0..128 {
+            ql[i] = ((i * 17) % 256) as u8;
+        }
+        for i in 0..64 {
+            qh[i] = ((i * 31) % 256) as u8;
+        }
+        for i in 0..256 {
+            act[i] = (i as f32 * 0.03).cos();
+        }
+        let expected = dot_q6_k_portable(&ql, &qh, &act, 0.05);
+        let computed = dot_q6_k(&ql, &qh, &act, 0.05);
+        assert!((expected - computed).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_gemv_q6_k_multithreaded() {
+        let m = 32;
+        let n = 256;
+        let blocks = vec![
+            crate::int_quant::BlockQ6_K {
+                ql: [42u8; 128],
+                qh: [15u8; 64],
+                scales: [1i8; 16],
+                d: crate::f16::from_f32(0.01),
+            };
+            m * (n / 256)
+        ];
+        let mut vector = vec![0.0f32; n];
+        for (i, v) in vector.iter_mut().enumerate() {
+            *v = (i as f32 * 0.02).sin();
+        }
+        let mut output = vec![0.0f32; m];
+        gemv_q6_k(&blocks, &vector, m, n, &mut output);
         assert_eq!(output.len(), m);
         for &val in &output {
             assert!(val.is_finite());
