@@ -48,6 +48,7 @@ pub struct RocmBackend {
     hip_stream: Option<HipStream>,
     d_activations: Option<HipDeviceBuffer>,
     d_norm_out: Option<HipDeviceBuffer>,
+    #[allow(dead_code)]
     d_weights: Option<HipDeviceBuffer>,
 }
 

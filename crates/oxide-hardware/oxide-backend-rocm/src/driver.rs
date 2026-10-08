@@ -5,7 +5,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 pub type hipError_t = i32;
 pub type hipStream_t = *mut c_void;
@@ -27,38 +27,33 @@ type HipStreamDestroyFn = unsafe extern "C" fn(hipStream_t) -> hipError_t;
 type HipStreamSynchronizeFn = unsafe extern "C" fn(hipStream_t) -> hipError_t;
 type HipDeviceSynchronizeFn = unsafe extern "C" fn() -> hipError_t;
 
-static HIP_LOAD_ATTEMPTED: AtomicBool = AtomicBool::new(false);
-static mut HIP_LIB_HANDLE: *mut c_void = ptr::null_mut();
+#[derive(Debug, Clone, Copy)]
+pub struct HipDriverApi {
+    pub set_device: Option<HipSetDeviceFn>,
+    pub get_device: Option<HipGetDeviceFn>,
+    pub get_device_count: Option<HipGetDeviceCountFn>,
+    pub malloc: Option<HipMallocFn>,
+    pub free: Option<HipFreeFn>,
+    pub memcpy_async: Option<HipMemcpyAsyncFn>,
+    pub stream_create: Option<HipStreamCreateFn>,
+    pub stream_destroy: Option<HipStreamDestroyFn>,
+    pub stream_synchronize: Option<HipStreamSynchronizeFn>,
+    pub device_synchronize: Option<HipDeviceSynchronizeFn>,
+}
 
-static mut HIP_SET_DEVICE: Option<HipSetDeviceFn> = None;
-static mut HIP_GET_DEVICE: Option<HipGetDeviceFn> = None;
-static mut HIP_GET_DEVICE_COUNT: Option<HipGetDeviceCountFn> = None;
-static mut HIP_MALLOC: Option<HipMallocFn> = None;
-static mut HIP_FREE: Option<HipFreeFn> = None;
-static mut HIP_MEMCPY_ASYNC: Option<HipMemcpyAsyncFn> = None;
-static mut HIP_STREAM_CREATE: Option<HipStreamCreateFn> = None;
-static mut HIP_STREAM_DESTROY: Option<HipStreamDestroyFn> = None;
-static mut HIP_STREAM_SYNCHRONIZE: Option<HipStreamSynchronizeFn> = None;
-static mut HIP_DEVICE_SYNCHRONIZE: Option<HipDeviceSynchronizeFn> = None;
+unsafe impl Send for HipDriverApi {}
+unsafe impl Sync for HipDriverApi {}
 
-extern "C" {
+static HIP_API: OnceLock<Option<HipDriverApi>> = OnceLock::new();
+
+unsafe extern "C" {
     fn dlopen(filename: *const std::os::raw::c_char, flag: i32) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const std::os::raw::c_char) -> *mut c_void;
 }
 
 const RTLD_NOW: i32 = 2;
 
-/// Checks and dynamically loads `libamdhip64.so` if available on the system.
-pub fn is_hip_available() -> bool {
-    ensure_hip_loaded();
-    unsafe { HIP_MALLOC.is_some() }
-}
-
-fn ensure_hip_loaded() {
-    if HIP_LOAD_ATTEMPTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
+fn init_hip_api() -> Option<HipDriverApi> {
     let candidates = [
         c"libamdhip64.so",
         c"libamdhip64.so.6",
@@ -66,36 +61,54 @@ fn ensure_hip_loaded() {
         c"/opt/rocm/lib/libamdhip64.so",
     ];
 
-    unsafe {
-        for &cand in &candidates {
-            let handle = dlopen(cand.as_ptr(), RTLD_NOW);
-            if !handle.is_null() {
-                HIP_LIB_HANDLE = handle;
-                break;
-            }
+    let mut handle = ptr::null_mut();
+    for &cand in &candidates {
+        // SAFETY: Calling dlopen with valid C string and RTLD_NOW.
+        let h = unsafe { dlopen(cand.as_ptr(), RTLD_NOW) };
+        if !h.is_null() {
+            handle = h;
+            break;
         }
+    }
 
-        if !HIP_LIB_HANDLE.is_null() {
-            HIP_SET_DEVICE = load_sym(HIP_LIB_HANDLE, c"hipSetDevice");
-            HIP_GET_DEVICE = load_sym(HIP_LIB_HANDLE, c"hipGetDevice");
-            HIP_GET_DEVICE_COUNT = load_sym(HIP_LIB_HANDLE, c"hipGetDeviceCount");
-            HIP_MALLOC = load_sym(HIP_LIB_HANDLE, c"hipMalloc");
-            HIP_FREE = load_sym(HIP_LIB_HANDLE, c"hipFree");
-            HIP_MEMCPY_ASYNC = load_sym(HIP_LIB_HANDLE, c"hipMemcpyAsync");
-            HIP_STREAM_CREATE = load_sym(HIP_LIB_HANDLE, c"hipStreamCreate");
-            HIP_STREAM_DESTROY = load_sym(HIP_LIB_HANDLE, c"hipStreamDestroy");
-            HIP_STREAM_SYNCHRONIZE = load_sym(HIP_LIB_HANDLE, c"hipStreamSynchronize");
-            HIP_DEVICE_SYNCHRONIZE = load_sym(HIP_LIB_HANDLE, c"hipDeviceSynchronize");
-        }
+    if handle.is_null() {
+        return None;
+    }
+
+    // SAFETY: Loading function symbols from valid library handle.
+    unsafe {
+        Some(HipDriverApi {
+            set_device: load_sym(handle, c"hipSetDevice"),
+            get_device: load_sym(handle, c"hipGetDevice"),
+            get_device_count: load_sym(handle, c"hipGetDeviceCount"),
+            malloc: load_sym(handle, c"hipMalloc"),
+            free: load_sym(handle, c"hipFree"),
+            memcpy_async: load_sym(handle, c"hipMemcpyAsync"),
+            stream_create: load_sym(handle, c"hipStreamCreate"),
+            stream_destroy: load_sym(handle, c"hipStreamDestroy"),
+            stream_synchronize: load_sym(handle, c"hipStreamSynchronize"),
+            device_synchronize: load_sym(handle, c"hipDeviceSynchronize"),
+        })
     }
 }
 
+pub fn get_hip_api() -> Option<&'static HipDriverApi> {
+    HIP_API.get_or_init(init_hip_api).as_ref()
+}
+
+/// Checks and dynamically loads `libamdhip64.so` if available on the system.
+pub fn is_hip_available() -> bool {
+    get_hip_api().is_some()
+}
+
 unsafe fn load_sym<T>(handle: *mut c_void, name: &std::ffi::CStr) -> Option<T> {
-    let sym = dlsym(handle, name.as_ptr());
+    // SAFETY: Calling dlsym with valid handle and name.
+    let sym = unsafe { dlsym(handle, name.as_ptr()) };
     if sym.is_null() {
         None
     } else {
-        Some(std::mem::transmute_copy(&sym))
+        // SAFETY: Transmuting function pointer retrieved from dlsym to target signature.
+        Some(unsafe { std::mem::transmute_copy(&sym) })
     }
 }
 
@@ -111,11 +124,11 @@ unsafe impl Sync for HipDeviceBuffer {}
 
 impl HipDeviceBuffer {
     pub fn allocate(size_bytes: usize) -> Result<Self, String> {
-        ensure_hip_loaded();
-        unsafe {
-            if let Some(malloc_fn) = HIP_MALLOC {
+        if let Some(api) = get_hip_api() {
+            if let Some(malloc_fn) = api.malloc {
                 let mut d_ptr: *mut c_void = ptr::null_mut();
-                let status = malloc_fn(&mut d_ptr, size_bytes);
+                // SAFETY: Calling hipMalloc with valid pointers.
+                let status = unsafe { malloc_fn(&mut d_ptr, size_bytes) };
                 if status == HIP_SUCCESS {
                     return Ok(Self {
                         ptr: d_ptr,
@@ -133,9 +146,12 @@ impl HipDeviceBuffer {
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer".to_string());
         }
-        unsafe {
-            if let Some(cpy_fn) = HIP_MEMCPY_ASYNC {
-                let status = cpy_fn(self.ptr, src.as_ptr().cast(), bytes, HIP_MEMCPY_HOST_TO_DEVICE, stream);
+        if let Some(api) = get_hip_api() {
+            if let Some(cpy_fn) = api.memcpy_async {
+                // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
+                let status = unsafe {
+                    cpy_fn(self.ptr, src.as_ptr().cast(), bytes, HIP_MEMCPY_HOST_TO_DEVICE, stream)
+                };
                 if status == HIP_SUCCESS {
                     return Ok(());
                 }
@@ -150,9 +166,12 @@ impl HipDeviceBuffer {
         if bytes > self.size_bytes {
             return Err("Destination slice exceeds device buffer".to_string());
         }
-        unsafe {
-            if let Some(cpy_fn) = HIP_MEMCPY_ASYNC {
-                let status = cpy_fn(dst.as_mut_ptr().cast(), self.ptr, bytes, HIP_MEMCPY_DEVICE_TO_HOST, stream);
+        if let Some(api) = get_hip_api() {
+            if let Some(cpy_fn) = api.memcpy_async {
+                // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
+                let status = unsafe {
+                    cpy_fn(dst.as_mut_ptr().cast(), self.ptr, bytes, HIP_MEMCPY_DEVICE_TO_HOST, stream)
+                };
                 if status == HIP_SUCCESS {
                     return Ok(());
                 }
@@ -184,9 +203,12 @@ impl HipDeviceBuffer {
 impl Drop for HipDeviceBuffer {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            unsafe {
-                if let Some(free_fn) = HIP_FREE {
-                    let _ = free_fn(self.ptr);
+            if let Some(api) = get_hip_api() {
+                if let Some(free_fn) = api.free {
+                    // SAFETY: Freeing valid device pointer.
+                    unsafe {
+                        let _ = free_fn(self.ptr);
+                    }
                 }
             }
             self.ptr = ptr::null_mut();
@@ -205,11 +227,11 @@ unsafe impl Sync for HipStream {}
 
 impl HipStream {
     pub fn new() -> Result<Self, String> {
-        ensure_hip_loaded();
-        unsafe {
-            if let Some(create_fn) = HIP_STREAM_CREATE {
+        if let Some(api) = get_hip_api() {
+            if let Some(create_fn) = api.stream_create {
                 let mut stream: hipStream_t = ptr::null_mut();
-                let status = create_fn(&mut stream);
+                // SAFETY: Calling hipStreamCreate.
+                let status = unsafe { create_fn(&mut stream) };
                 if status == HIP_SUCCESS {
                     return Ok(Self { stream });
                 }
@@ -226,9 +248,10 @@ impl HipStream {
     }
 
     pub fn synchronize(&self) -> Result<(), String> {
-        unsafe {
-            if let Some(sync_fn) = HIP_STREAM_SYNCHRONIZE {
-                let status = sync_fn(self.stream);
+        if let Some(api) = get_hip_api() {
+            if let Some(sync_fn) = api.stream_synchronize {
+                // SAFETY: Calling hipStreamSynchronize.
+                let status = unsafe { sync_fn(self.stream) };
                 if status == HIP_SUCCESS {
                     return Ok(());
                 }
@@ -242,9 +265,12 @@ impl HipStream {
 impl Drop for HipStream {
     fn drop(&mut self) {
         if !self.stream.is_null() {
-            unsafe {
-                if let Some(destroy_fn) = HIP_STREAM_DESTROY {
-                    let _ = destroy_fn(self.stream);
+            if let Some(api) = get_hip_api() {
+                if let Some(destroy_fn) = api.stream_destroy {
+                    // SAFETY: Destroying valid hipStream.
+                    unsafe {
+                        let _ = destroy_fn(self.stream);
+                    }
                 }
             }
             self.stream = ptr::null_mut();
