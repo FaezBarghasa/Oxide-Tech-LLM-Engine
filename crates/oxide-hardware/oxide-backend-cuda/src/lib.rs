@@ -20,11 +20,13 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod graph;
 pub mod kernels;
 pub mod nccl;
 
 pub use arch::KernelExecutionPlan;
+pub use driver::{CudaDeviceBuffer, CudaStream};
 pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
 pub use kernels::CudaLlmKernels;
 pub use nccl::{CudaDeviceClusterArray, NcclCommunicator};
@@ -46,6 +48,10 @@ pub struct CudaBackend {
     host_token_buffer: Vec<u32>,
     profile: GpuDeviceProfile,
     execution_plan: KernelExecutionPlan,
+    stream: Option<CudaStream>,
+    d_activations: Option<CudaDeviceBuffer>,
+    d_norm_out: Option<CudaDeviceBuffer>,
+    d_weights: Option<CudaDeviceBuffer>,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -62,6 +68,7 @@ impl fmt::Debug for CudaBackend {
             .field("execution_plan", &self.execution_plan)
             .field("event_counter", &self.current_event_id)
             .field("host_token_buffer_len", &self.host_token_buffer.len())
+            .field("has_real_stream", &self.stream.is_some())
             .finish()
     }
 }
@@ -81,12 +88,33 @@ impl CudaBackend {
         });
         let execution_plan = KernelExecutionPlan::for_profile(&profile);
 
+        // Attempt real physical device initialization
+        let stream = CudaStream::new().ok();
+        let (d_activations, d_norm_out, d_weights) = if stream.is_some() {
+            let _ = unsafe { driver::cudaSetDevice(device_id as i32) };
+            let act = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
+            let norm = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
+            let mut w = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
+            if let (Some(w_buf), Some(st)) = (&mut w, &stream) {
+                let init_w = vec![1.0f32; 128];
+                let _ = w_buf.copy_from_host_async(&init_w, st.raw());
+                let _ = st.synchronize();
+            }
+            (act, norm, w)
+        } else {
+            (None, None, None)
+        };
+
         Self {
             device_id,
             current_event_id: 0,
             host_token_buffer: vec![0; max_slots],
             profile,
             execution_plan,
+            stream,
+            d_activations,
+            d_norm_out,
+            d_weights,
         }
     }
 
@@ -129,10 +157,45 @@ impl HardwareBackend for CudaBackend {
                 let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
                 *act = sign * mag * 0.1;
             }
+
             let mut norm_out = [0.0f32; 128];
-            let weights = [1.0f32; 128];
-            let _ =
-                CudaLlmKernels::dispatch_rmsnorm(&mut norm_out, &activations, &weights, 128, 1e-5);
+
+            // If real CUDA device stream and memory buffers are active, execute on physical GPU
+            if let (Some(stream), Some(d_act), Some(d_norm), Some(d_w)) = (
+                &self.stream,
+                &mut self.d_activations,
+                &mut self.d_norm_out,
+                &self.d_weights,
+            ) {
+                let raw_stream = stream.raw();
+                let _ = d_act.copy_from_host_async(&activations, raw_stream);
+
+                // SAFETY: Calling C-ABI launch_cuda_rmsnorm with valid device pointers and stream.
+                unsafe {
+                    driver::launch_cuda_rmsnorm(
+                        d_norm.as_typed_ptr::<f32>(),
+                        d_act.as_typed_ptr::<f32>(),
+                        d_w.as_typed_ptr::<f32>(),
+                        1,
+                        128,
+                        1e-5,
+                        raw_stream,
+                    );
+                }
+
+                let _ = d_norm.copy_to_host_async(&mut norm_out, raw_stream);
+                let _ = stream.synchronize();
+            } else {
+                let weights = [1.0f32; 128];
+                let _ = CudaLlmKernels::dispatch_rmsnorm(
+                    &mut norm_out,
+                    &activations,
+                    &weights,
+                    128,
+                    1e-5,
+                );
+            }
+
             let next_tok = (cmd.input_token.wrapping_add(1) + (norm_out[0].abs() as u32)).max(1);
             self.host_token_buffer[slot] = next_tok;
         }
@@ -154,6 +217,9 @@ impl HardwareBackend for CudaBackend {
     }
 
     fn synchronize(&self) -> Result<()> {
+        if let Some(stream) = &self.stream {
+            let _ = stream.synchronize();
+        }
         Ok(())
     }
 }

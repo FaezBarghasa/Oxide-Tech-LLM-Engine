@@ -168,3 +168,45 @@ fn test_cuda_multi_gpu_cluster_array_scaling() {
         assert_eq!(val, 136.0);
     }
 }
+
+#[test]
+fn test_physical_cuda_device_allocation_and_kernel() {
+    use oxide_backend_cuda::driver::{CudaDeviceBuffer, CudaStream, launch_cuda_rmsnorm};
+
+    // Test physical CUDA stream and device allocation
+    if let Ok(stream) = CudaStream::new() {
+        let count = 128;
+        let mut d_in = CudaDeviceBuffer::allocate(count * std::mem::size_of::<f32>()).unwrap();
+        let mut d_out = CudaDeviceBuffer::allocate(count * std::mem::size_of::<f32>()).unwrap();
+        let mut d_weight = CudaDeviceBuffer::allocate(count * std::mem::size_of::<f32>()).unwrap();
+
+        let h_in = vec![2.0f32; count];
+        let h_weight = vec![1.0f32; count];
+        let mut h_out = vec![0.0f32; count];
+
+        d_in.copy_from_host_async(&h_in, stream.raw()).unwrap();
+        d_weight.copy_from_host_async(&h_weight, stream.raw()).unwrap();
+
+        // Launch real compiled kernel on GPU
+        unsafe {
+            let status = launch_cuda_rmsnorm(
+                d_out.as_typed_ptr::<f32>(),
+                d_in.as_typed_ptr::<f32>(),
+                d_weight.as_typed_ptr::<f32>(),
+                1,
+                count as i32,
+                1e-5,
+                stream.raw(),
+            );
+            assert_eq!(status, 0);
+        }
+
+        d_out.copy_to_host_async(&mut h_out, stream.raw()).unwrap();
+        stream.synchronize().unwrap();
+
+        // For identical input elements with weight 1.0, RMSNorm yields exactly 1.0
+        for &val in &h_out {
+            assert!((val - 1.0).abs() < 1e-3, "Expected 1.0, got {}", val);
+        }
+    }
+}

@@ -83,6 +83,7 @@ fn main() {
                         println!("cargo:rustc-link-lib=static=oxide_cuda_kernels");
                         println!("cargo:rustc-link-lib=dylib=cudart");
                         println!("cargo:rustc-link-lib=dylib=cuda");
+                        println!("cargo:rustc-link-lib=dylib=stdc++");
                         return;
                     }
                 }

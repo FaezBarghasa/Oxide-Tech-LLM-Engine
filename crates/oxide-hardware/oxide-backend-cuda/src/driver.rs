@@ -9,13 +9,13 @@ pub type cudaError_t = i32;
 pub type cudaStream_t = *mut c_void;
 pub type cudaEvent_t = *mut c_void;
 
-pub const cudaSuccess: cudaError_t = 0;
-pub const cudaMemcpyHostToDevice: u32 = 1;
-pub const cudaMemcpyDeviceToHost: u32 = 2;
-pub const cudaMemcpyDeviceToDevice: u32 = 3;
+pub const CUDA_SUCCESS: cudaError_t = 0;
+pub const CUDA_MEMCPY_HOST_TO_DEVICE: u32 = 1;
+pub const CUDA_MEMCPY_DEVICE_TO_HOST: u32 = 2;
+pub const CUDA_MEMCPY_DEVICE_TO_DEVICE: u32 = 3;
 
 #[link(name = "cudart")]
-extern "C" {
+unsafe extern "C" {
     pub fn cudaSetDevice(device: i32) -> cudaError_t;
     pub fn cudaGetDevice(device: *mut i32) -> cudaError_t;
     pub fn cudaGetDeviceCount(count: *mut i32) -> cudaError_t;
@@ -40,7 +40,7 @@ extern "C" {
 type const_ptr = *const c_void;
 
 #[link(name = "oxide_cuda_kernels", kind = "static")]
-extern "C" {
+unsafe extern "C" {
     pub fn launch_cuda_rmsnorm(
         output: *mut f32,
         input: *const f32,
@@ -124,7 +124,7 @@ impl CudaDeviceBuffer {
         let mut d_ptr: *mut c_void = ptr::null_mut();
         // SAFETY: Calling cudaMalloc with valid pointer and size.
         let status = unsafe { cudaMalloc(&mut d_ptr, size_bytes) };
-        if status != cudaSuccess {
+        if status != CUDA_SUCCESS {
             return Err(format!("cudaMalloc failed with status code {}", status));
         }
         Ok(Self {
@@ -145,11 +145,11 @@ impl CudaDeviceBuffer {
                 self.ptr,
                 src.as_ptr().cast(),
                 bytes,
-                cudaMemcpyHostToDevice,
+                CUDA_MEMCPY_HOST_TO_DEVICE,
                 stream,
             )
         };
-        if status != cudaSuccess {
+        if status != CUDA_SUCCESS {
             return Err(format!("cudaMemcpyAsync (H2D) failed with code {}", status));
         }
         Ok(())
@@ -167,11 +167,11 @@ impl CudaDeviceBuffer {
                 dst.as_mut_ptr().cast(),
                 self.ptr,
                 bytes,
-                cudaMemcpyDeviceToHost,
+                CUDA_MEMCPY_DEVICE_TO_HOST,
                 stream,
             )
         };
-        if status != cudaSuccess {
+        if status != CUDA_SUCCESS {
             return Err(format!("cudaMemcpyAsync (D2H) failed with code {}", status));
         }
         Ok(())
@@ -223,7 +223,7 @@ impl CudaStream {
         let mut stream: cudaStream_t = ptr::null_mut();
         // SAFETY: Creating a cudaStream.
         let status = unsafe { cudaStreamCreate(&mut stream) };
-        if status != cudaSuccess {
+        if status != CUDA_SUCCESS {
             return Err(format!("cudaStreamCreate failed with status code {}", status));
         }
         Ok(Self { stream })
@@ -238,7 +238,7 @@ impl CudaStream {
     pub fn synchronize(&self) -> Result<(), String> {
         // SAFETY: Calling cudaStreamSynchronize.
         let status = unsafe { cudaStreamSynchronize(self.stream) };
-        if status != cudaSuccess {
+        if status != CUDA_SUCCESS {
             return Err(format!("cudaStreamSynchronize failed with code {}", status));
         }
         Ok(())
