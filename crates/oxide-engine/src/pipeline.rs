@@ -374,10 +374,44 @@ impl SpecializedPipeline {
             oxide_models::Llama3Model::from_model_name_or_path(model_query_or_path)?
         };
 
-        if backend_name.eq_ignore_ascii_case("cuda") && weights_override.is_none() {
-            let backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
-            return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
+        if weights_override.is_none() {
+            match backend_name.to_ascii_lowercase().as_str() {
+                "cuda" => {
+                    let backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+                    return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
+                }
+                "rocm" => {
+                    let backend = RocmBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Rocm(OxideEngine::new(backend, model.config)));
+                }
+                "tpu" => {
+                    let backend = TpuBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Tpu(OxideEngine::new(backend, model.config)));
+                }
+                "intel" => {
+                    let backend = IntelBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Intel(OxideEngine::new(backend, model.config)));
+                }
+                "metal" => {
+                    let backend = MetalBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Metal(OxideEngine::new(backend, model.config)));
+                }
+                "qualcomm" | "snapdragon" => {
+                    let backend = QualcommBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Qualcomm(OxideEngine::new(backend, model.config)));
+                }
+                "rknn" | "rockchip" => {
+                    let backend = RknnBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Rknn(OxideEngine::new(backend, model.config)));
+                }
+                "hailo" => {
+                    let backend = HailoBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Hailo(OxideEngine::new(backend, model.config)));
+                }
+                _ => {}
+            }
         }
+
 
         let kv_cache = (0..model.config.num_layers)
             .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
