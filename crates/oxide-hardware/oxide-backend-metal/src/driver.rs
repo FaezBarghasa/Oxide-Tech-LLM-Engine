@@ -1,6 +1,6 @@
 //! Real Apple Metal MSL Shaders & Cocoa Runtime Bindings for macOS / Apple Silicon (M1/M2/M3/M4).
 
-pub const METAL_RMSNORM_KERNEL_SOURCE: &str = r#"
+pub const METAL_RMSNORM_KERNEL_SOURCE: &str = r"
 #include <metal_stdlib>
 using namespace metal;
 
@@ -39,7 +39,7 @@ kernel void oxide_metal_simdgroup_gemv(
     }
     out_buf[row] = acc;
 }
-"#;
+";
 
 /// Checks if native Apple Metal Framework is available on the current host runtime.
 #[must_use]
