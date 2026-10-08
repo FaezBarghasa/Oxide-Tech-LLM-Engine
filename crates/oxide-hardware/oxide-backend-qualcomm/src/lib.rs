@@ -19,10 +19,12 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod kernels;
 pub mod qnn;
 
 pub use arch::QualcommExecutionPlan;
+pub use driver::is_qnn_available;
 pub use kernels::QualcommLlmKernels;
 use oxide_core::error::Result;
 use oxide_core::hardware::{
