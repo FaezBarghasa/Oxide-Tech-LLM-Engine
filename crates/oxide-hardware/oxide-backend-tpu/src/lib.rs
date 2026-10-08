@@ -22,10 +22,12 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod ici;
 pub mod kernels;
 
 pub use arch::TpuExecutionPlan;
+pub use driver::{is_cloud_tpu_available, is_edgetpu_available};
 pub use ici::TpuIciCommunicator;
 pub use kernels::TpuLlmKernels;
 
