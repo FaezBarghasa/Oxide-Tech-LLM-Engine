@@ -679,6 +679,78 @@ unsafe fn dot_q4_k_avx2(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> 
     }
 }
 
+/// Compute dot product between a Q6_K super-block (210 bytes = 256 weights) and 256 f32 activations.
+#[inline]
+#[must_use]
+pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
+    let mut sum = 0.0f32;
+    for i in 0..128 {
+        let byte_l = ql[i];
+        let qh_idx = i / 2;
+        let shift = (i % 2) * 4;
+        let byte_h = (qh[qh_idx] >> shift) & 0x0F;
+
+        let h0 = byte_h & 0x03;
+        let h1 = (byte_h >> 2) & 0x03;
+
+        let q0 = ((h0 << 4) | (byte_l & 0x0F)) as i8 - 32;
+        let q1 = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i8 - 32;
+
+        sum += (q0 as f32) * act[i] + (q1 as f32) * act[i + 128];
+    }
+    sum * d
+}
+
+/// Multithreaded Q6_K Matrix-Vector Multiplication across all CPU cores and threads.
+pub fn gemv_q6_k(
+    matrix: &[crate::int_quant::BlockQ6_K],
+    vector: &[f32],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    assert!(n.is_multiple_of(256), "n must be a multiple of 256 for Q6_K");
+    let blocks_per_row = n / 256;
+    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q6_K blocks");
+    assert!(vector.len() >= n, "Insufficient vector length");
+    assert!(output.len() >= m, "Insufficient output length");
+
+    if m <= 8 {
+        for row in 0..m {
+            let row_offset = row * blocks_per_row;
+            let mut acc = 0.0f32;
+            for b in 0..blocks_per_row {
+                let blk = &matrix[row_offset + b];
+                let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+                    .try_into()
+                    .expect("slice length 256");
+                acc += dot_q6_k(&blk.ql, &blk.qh, act_chunk, blk.d.to_f32());
+            }
+            output[row] = acc;
+        }
+    } else {
+        output[..m]
+            .par_chunks_mut(16)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * 16;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    let row = base_row + i;
+                    let row_offset = row * blocks_per_row;
+                    let mut acc = 0.0f32;
+                    for b in 0..blocks_per_row {
+                        let blk = &matrix[row_offset + b];
+                        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+                            .try_into()
+                            .expect("slice length 256");
+                        acc += dot_q6_k(&blk.ql, &blk.qh, act_chunk, blk.d.to_f32());
+                    }
+                    *out_val = acc;
+                }
+            });
+    }
+}
+
 /// AMX (Advanced Matrix Extensions) Tile Configuration and Compute Engine.
 /// Provides architectural abstractions for Intel Xeon / Sapphire Rapids AMX tile registers (`TMM0`..`TMM7`).
 pub mod amx {
