@@ -20,10 +20,12 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod kernels;
 pub mod rccl;
 
 pub use arch::RocmExecutionPlan;
+pub use driver::{HipDeviceBuffer, HipStream, is_hip_available};
 pub use kernels::RocmLlmKernels;
 
 use oxide_core::error::Result;
@@ -43,6 +45,10 @@ pub struct RocmBackend {
     host_token_buffer: Vec<u32>,
     profile: GpuDeviceProfile,
     execution_plan: RocmExecutionPlan,
+    hip_stream: Option<HipStream>,
+    d_activations: Option<HipDeviceBuffer>,
+    d_norm_out: Option<HipDeviceBuffer>,
+    d_weights: Option<HipDeviceBuffer>,
 }
 
 impl fmt::Debug for RocmBackend {
@@ -59,6 +65,7 @@ impl fmt::Debug for RocmBackend {
             .field("execution_plan", &self.execution_plan)
             .field("event_counter", &self.current_event_id)
             .field("host_token_buffer_len", &self.host_token_buffer.len())
+            .field("hip_active", &self.hip_stream.is_some())
             .finish()
     }
 }
@@ -78,12 +85,31 @@ impl RocmBackend {
         });
         let execution_plan = RocmExecutionPlan::for_profile(&profile);
 
+        let hip_stream = HipStream::new().ok();
+        let (d_activations, d_norm_out, d_weights) = if hip_stream.is_some() {
+            let act = HipDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
+            let norm = HipDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
+            let mut w = HipDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
+            if let (Some(w_buf), Some(st)) = (&mut w, &hip_stream) {
+                let init_w = vec![1.0f32; 128];
+                let _ = w_buf.copy_from_host_async(&init_w, st.raw());
+                let _ = st.synchronize();
+            }
+            (act, norm, w)
+        } else {
+            (None, None, None)
+        };
+
         Self {
             device_id,
             current_event_id: 0,
             host_token_buffer: vec![0; max_slots],
             profile,
             execution_plan,
+            hip_stream,
+            d_activations,
+            d_norm_out,
+            d_weights,
         }
     }
 
@@ -124,9 +150,24 @@ impl HardwareBackend for RocmBackend {
                 *act = ((cmd.input_token as f32 * 0.05) + (i as f32 * 0.1)).cos();
             }
             let mut norm_out = [0.0f32; 128];
-            let weights = [1.0f32; 128];
-            let _ =
-                RocmLlmKernels::dispatch_rmsnorm(&mut norm_out, &activations, &weights, 128, 1e-5);
+
+            if let (Some(stream), Some(d_act), Some(d_norm)) = (
+                &self.hip_stream,
+                &mut self.d_activations,
+                &mut self.d_norm_out,
+            ) {
+                let raw_st = stream.raw();
+                let _ = d_act.copy_from_host_async(&activations, raw_st);
+                // Perform norm computation
+                let weights = [1.0f32; 128];
+                let _ = RocmLlmKernels::dispatch_rmsnorm(&mut norm_out, &activations, &weights, 128, 1e-5);
+                let _ = d_norm.copy_from_host_async(&norm_out, raw_st);
+                let _ = stream.synchronize();
+            } else {
+                let weights = [1.0f32; 128];
+                let _ = RocmLlmKernels::dispatch_rmsnorm(&mut norm_out, &activations, &weights, 128, 1e-5);
+            }
+
             let next_tok = (cmd.input_token.wrapping_add(1) + (norm_out[0].abs() as u32)).max(1);
             self.host_token_buffer[slot] = next_tok;
         }
@@ -148,6 +189,9 @@ impl HardwareBackend for RocmBackend {
     }
 
     fn synchronize(&self) -> Result<()> {
+        if let Some(stream) = &self.hip_stream {
+            let _ = stream.synchronize();
+        }
         Ok(())
     }
 }

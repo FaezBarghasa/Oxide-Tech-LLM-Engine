@@ -177,7 +177,7 @@ fn test_physical_cuda_device_allocation_and_kernel() {
     if let Ok(stream) = CudaStream::new() {
         let count = 128;
         let mut d_in = CudaDeviceBuffer::allocate(count * std::mem::size_of::<f32>()).unwrap();
-        let mut d_out = CudaDeviceBuffer::allocate(count * std::mem::size_of::<f32>()).unwrap();
+        let d_out = CudaDeviceBuffer::allocate(count * std::mem::size_of::<f32>()).unwrap();
         let mut d_weight = CudaDeviceBuffer::allocate(count * std::mem::size_of::<f32>()).unwrap();
 
         let h_in = vec![2.0f32; count];
