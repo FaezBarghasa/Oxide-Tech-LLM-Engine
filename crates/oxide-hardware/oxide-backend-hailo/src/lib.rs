@@ -22,10 +22,12 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod hailort;
 pub mod kernels;
 
 pub use arch::HailoExecutionPlan;
+pub use driver::is_hailo_available;
 pub use hailort::{HailoVStreamBuffer, HailoVirtualStream};
 pub use kernels::HailoLlmKernels;
 use oxide_core::error::Result;

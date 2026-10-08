@@ -20,10 +20,12 @@
 )]
 
 pub mod arch;
+pub mod driver;
 pub mod kernels;
 pub mod rknn;
 
 pub use arch::RknnExecutionPlan;
+pub use driver::is_rknn_available;
 pub use kernels::RknnLlmKernels;
 use oxide_core::error::Result;
 
