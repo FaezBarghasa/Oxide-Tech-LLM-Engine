@@ -65,7 +65,7 @@ impl ModelMetadata {
         for (name, info) in &gguf.tensors {
             let shape: Vec<usize> = info.dimensions.iter().map(|&d| d as usize).collect();
             if name == "token_embd.weight" && !shape.is_empty() {
-                vocab_size = shape[0] as u32;
+                vocab_size = shape.iter().max().copied().unwrap_or(128_256) as u32;
             }
             let element_count: usize = shape.iter().product();
             let size_bytes = match info.quant_type {

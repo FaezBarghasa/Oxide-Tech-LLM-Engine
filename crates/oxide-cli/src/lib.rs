@@ -666,20 +666,32 @@ fn run_chat_session(
     if let Some(p) = prompt {
         println!("Prompt: {p}");
         let tokens = tokenizer.encode(p);
-        let mut cur_token = tokens.last().copied().unwrap_or(1);
+        let prompt_tokens = if tokens.is_empty() { vec![1] } else { tokens };
+
         print!("Assistant: ");
         let _ = std::io::Write::flush(&mut std::io::stdout());
 
         let t_start = std::time::Instant::now();
-        let mut ttft = None;
-        let mut gen_count = 0usize;
+        let mut cur_token = 1u32;
 
-        for _ in 0..64 {
+        // 1. Prefill prompt tokens through transformer forward pass
+        for &tok in &prompt_tokens {
+            let cmd = StepCommand::new(1, tok, 0, false);
+            let step_res = pipeline.step(&cmd)?;
+            cur_token = step_res.sampled_token;
+        }
+        let ttft = Some(t_start.elapsed());
+
+        // 2. Decode first sampled token and continuation tokens
+        let mut gen_count = 0usize;
+        let first_text = tokenizer.decode_token(cur_token);
+        print!("{first_text}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        gen_count += 1;
+
+        for _ in 1..64 {
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
-            if ttft.is_none() {
-                ttft = Some(t_start.elapsed());
-            }
             gen_count += 1;
             cur_token = step_res.sampled_token;
             let text = tokenizer.decode_token(cur_token);
@@ -690,6 +702,7 @@ fn run_chat_session(
             }
         }
         let elapsed = t_start.elapsed();
+
         println!();
         if let Some(first_tok_time) = ttft {
             let gen_u32 = u32::try_from(gen_count).unwrap_or(u32::MAX);

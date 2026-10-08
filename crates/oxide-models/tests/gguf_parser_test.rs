@@ -55,3 +55,44 @@ fn test_gguf_synthetic_binary_parsing() {
     assert_eq!(t.dimensions, vec![4096, 4096]);
     assert_eq!(t.quant_type, GgufQuantType::Q4_0);
 }
+
+#[test]
+fn test_real_gguf_models_in_home_dir() {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/jrad".to_string());
+    let models_dir = std::path::Path::new(&home).join("models");
+    if !models_dir.exists() {
+        println!("No ~/models directory found, skipping real model parse test.");
+        return;
+    }
+
+    let candidate = models_dir.join("DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf");
+    if candidate.exists() {
+        println!("Testing parse of real model: {}", candidate.display());
+        let file = std::fs::File::open(&candidate).expect("Failed to open real GGUF model");
+        let mmap = unsafe { memmap2::Mmap::map(&file).expect("Failed to mmap real GGUF model") };
+        let parsed = GgufFile::parse(&mmap).expect("Failed to parse real GGUF model");
+        let arch = parsed.architecture();
+        println!("Parsed architecture: {arch}, tensor count: {}", parsed.tensors.len());
+        for (k, v) in &parsed.metadata {
+            if k.contains("count") || k.contains("length") || k.contains("dim") {
+                println!("  meta {k} = {v:?}");
+            }
+        }
+        if let Some(t) = parsed.tensors.get("token_embd.weight") {
+
+            println!("token_embd.weight dims: {:?}, quant: {:?}", t.dimensions, t.quant_type);
+        }
+        if let Some(t) = parsed.tensors.get("output.weight") {
+            println!("output.weight dims: {:?}, quant: {:?}", t.dimensions, t.quant_type);
+        }
+        for (name, t) in &parsed.tensors {
+            if name.starts_with("blk.0.") {
+                println!("  {name} dims: {:?}, quant: {:?}", t.dimensions, t.quant_type);
+            }
+        }
+        assert!(!parsed.tensors.is_empty(), "Real model should have tensors");
+        assert!(parsed.tensor_data_offset > 0, "Tensor data offset must be positive");
+    }
+}
+
+

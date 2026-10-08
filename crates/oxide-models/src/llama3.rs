@@ -99,7 +99,7 @@ impl Llama3Config {
         let vocab_size = gguf
             .tensors
             .get("token_embd.weight")
-            .and_then(|t| t.dimensions.first().copied())
+            .and_then(|t| t.dimensions.iter().max().copied())
             .unwrap_or(128_256) as usize;
 
         Self {
@@ -381,10 +381,56 @@ impl Llama3Model {
                         }
                     }
                 }
+                crate::formats::GgufQuantType::Q6_K => {
+                    // Q6_K block size: 128 (ql) + 64 (qh) + 16 (scales) + 2 (d) = 210 bytes per 256 weights
+                    let block_size = 210;
+                    let num_blocks = (target.len() / 256).min(avail.len() / block_size);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let ql = &block_raw[0..128];
+                        let qh = &block_raw[128..192];
+                        let d_raw = u16::from_le_bytes([block_raw[208], block_raw[209]]);
+                        let d = oxide_quant::f16(d_raw).to_f32();
+                        let start = b_idx * 256;
+                        for i in 0..128 {
+                            let byte_l = ql[i];
+                            let qh_idx = i / 2;
+                            let shift = (i % 2) * 4;
+                            let byte_h = (qh[qh_idx] >> shift) & 0x0F;
+                            let h0 = byte_h & 0x03;
+                            let h1 = (byte_h >> 2) & 0x03;
+                            let q0 = ((h0 << 4) | (byte_l & 0x0F)) as i8 - 32;
+                            let q1 = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i8 - 32;
+                            target[start + i] = (q0 as f32) * d;
+                            target[start + i + 128] = (q1 as f32) * d;
+                        }
+                    }
+                }
+                crate::formats::GgufQuantType::Q5_K_M | crate::formats::GgufQuantType::Q5_0 => {
+                    let block_size = 22; // 2 bytes f16 scale + 4 bytes qh + 16 bytes qs
+                    let num_blocks = (target.len() / 32).min(avail.len() / block_size);
+                    for b_idx in 0..num_blocks {
+                        let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                        let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                        let d = oxide_quant::f16(d_raw).to_f32();
+                        let qh = u32::from_le_bytes([block_raw[2], block_raw[3], block_raw[4], block_raw[5]]);
+                        let start = b_idx * 32;
+                        for i in 0..16 {
+                            let byte = block_raw[6 + i];
+                            let h0 = ((qh >> i) & 1) as i8;
+                            let h1 = ((qh >> (i + 16)) & 1) as i8;
+                            let q0 = (((byte & 0x0F) as i8) | (h0 << 4)) - 16;
+                            let q1 = ((((byte >> 4) & 0x0F) as i8) | (h1 << 4)) - 16;
+                            target[start + i] = (q0 as f32) * d;
+                            target[start + i + 16] = (q1 as f32) * d;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
     }
+
 
     /// Loads tensor weights from GGUF binary container.
     pub fn load_from_gguf(&mut self, gguf: &GgufFile, data_slice: &[u8]) -> Result<()> {
