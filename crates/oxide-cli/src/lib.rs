@@ -935,10 +935,31 @@ async fn run_server_with_options(
         }
     };
 
+    let batch_engine = {
+        let p = std::path::Path::new(model);
+        if p.exists() {
+            if let Ok(m) = oxide_models::Llama3Model::from_file(p) {
+                let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+                let engine = oxide_engine::ContinuousBatchingEngine::new(
+                    Arc::new(m),
+                    max_slots,
+                    kv_device_blocks.max(1024),
+                    cmd_rx,
+                );
+                engine.spawn();
+                Some(oxide_engine::EngineHandle::new(cmd_tx))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
     let state = ServerState {
         pipeline: default_pipeline,
         model_manager: Some(model_manager),
-        batch_engine: None,
+        batch_engine,
         dfa_grammar,
         slot_manager,
         kv_cache,
@@ -949,6 +970,7 @@ async fn run_server_with_options(
 
     Ok(())
 }
+
 
 /// Runs automated hardware benchmarks across all real compute targets on this device:
 /// - AMD Ryzen 7 7745HX (Raw CPU: Zen 4, AVX2 + AVX-512)
