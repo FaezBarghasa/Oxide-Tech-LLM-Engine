@@ -36,7 +36,9 @@ pub struct HailoDriverApi {
     pub release_hef: Option<HailoReleaseHefFn>,
 }
 
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Send for HailoDriverApi {}
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Sync for HailoDriverApi {}
 
 static HAILO_API: OnceLock<Option<HailoDriverApi>> = OnceLock::new();

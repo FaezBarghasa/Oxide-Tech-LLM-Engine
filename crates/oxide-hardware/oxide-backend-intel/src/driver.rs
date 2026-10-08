@@ -55,7 +55,9 @@ pub struct LevelZeroDriverApi {
     pub mem_free: Option<ZeMemFreeFn>,
 }
 
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Send for LevelZeroDriverApi {}
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Sync for LevelZeroDriverApi {}
 
 static ZE_API: OnceLock<Option<LevelZeroDriverApi>> = OnceLock::new();
@@ -130,31 +132,37 @@ pub struct LevelZeroDeviceBuffer {
     context: ze_context_handle_t,
 }
 
+// SAFETY: Device pointer is exclusively managed and deallocated via Level-Zero context.
 unsafe impl Send for LevelZeroDeviceBuffer {}
+// SAFETY: Device pointer is exclusively managed and deallocated via Level-Zero context.
 unsafe impl Sync for LevelZeroDeviceBuffer {}
 
 impl LevelZeroDeviceBuffer {
-    pub fn allocate(context: ze_context_handle_t, device: ze_device_handle_t, size_bytes: usize) -> Result<Self, String> {
-        if let Some(api) = get_ze_api() {
-            if let Some(alloc_fn) = api.mem_alloc_device {
-                let desc = ze_device_mem_alloc_desc_t {
-                    stype: 0x10006, // ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC
-                    pNext: ptr::null(),
-                    flags: 0,
-                    ordinal: 0,
-                };
-                let mut d_ptr: *mut c_void = ptr::null_mut();
-                // SAFETY: Calling zeMemAllocDevice with valid descriptors and handles.
-                let status = unsafe { alloc_fn(context, &desc, size_bytes, 64, device, &mut d_ptr) };
-                if status == ZE_RESULT_SUCCESS {
-                    return Ok(Self {
-                        ptr: d_ptr,
-                        size_bytes,
-                        context,
-                    });
-                }
-                return Err(format!("zeMemAllocDevice failed with code {}", status));
+    /// Allocates physical memory on an Intel GPU device.
+    ///
+    /// # Safety
+    /// `context` and `device` must be valid, initialized Level-Zero handles.
+    pub unsafe fn allocate(context: ze_context_handle_t, device: ze_device_handle_t, size_bytes: usize) -> Result<Self, String> {
+        if let Some(api) = get_ze_api()
+            && let Some(alloc_fn) = api.mem_alloc_device
+        {
+            let desc = ze_device_mem_alloc_desc_t {
+                stype: 0x10006, // ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC
+                pNext: ptr::null(),
+                flags: 0,
+                ordinal: 0,
+            };
+            let mut d_ptr: *mut c_void = ptr::null_mut();
+            // SAFETY: Calling zeMemAllocDevice with valid descriptors and handles.
+            let status = unsafe { alloc_fn(context, &raw const desc, size_bytes, 64, device, &raw mut d_ptr) };
+            if status == ZE_RESULT_SUCCESS {
+                return Ok(Self {
+                    ptr: d_ptr,
+                    size_bytes,
+                    context,
+                });
             }
+            return Err(format!("zeMemAllocDevice failed with code {status}"));
         }
         Err("Intel Level-Zero driver is not available".to_string())
     }
@@ -180,14 +188,13 @@ impl LevelZeroDeviceBuffer {
 
 impl Drop for LevelZeroDeviceBuffer {
     fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            if let Some(api) = get_ze_api() {
-                if let Some(free_fn) = api.mem_free {
-                    // SAFETY: Freeing device buffer with matching context.
-                    unsafe {
-                        let _ = free_fn(self.context, self.ptr);
-                    }
-                }
+        if !self.ptr.is_null()
+            && let Some(api) = get_ze_api()
+            && let Some(free_fn) = api.mem_free
+        {
+            // SAFETY: Freeing device buffer with matching context.
+            unsafe {
+                let _ = free_fn(self.context, self.ptr);
             }
             self.ptr = ptr::null_mut();
         }

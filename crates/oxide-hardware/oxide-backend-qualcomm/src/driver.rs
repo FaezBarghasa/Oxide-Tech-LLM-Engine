@@ -32,7 +32,9 @@ pub struct QnnDriverApi {
     pub context_free: Option<QnnContextFreeFn>,
 }
 
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Send for QnnDriverApi {}
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Sync for QnnDriverApi {}
 
 static QNN_API: OnceLock<Option<QnnDriverApi>> = OnceLock::new();

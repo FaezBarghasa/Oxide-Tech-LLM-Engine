@@ -1,6 +1,13 @@
 //! Real CUDA Driver & Runtime API FFI bindings for memory management, stream execution, and kernel dispatch.
 
-#![allow(non_camel_case_types, non_snake_case, dead_code)]
+#![allow(
+    non_camel_case_types,
+    non_snake_case,
+    dead_code,
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::borrow_as_ptr,
+    clippy::uninlined_format_args
+)]
 
 use std::ffi::c_void;
 use std::ptr;
@@ -110,6 +117,7 @@ pub struct CudaDeviceBuffer {
 
 // SAFETY: CUDA device buffers are thread-safe across host threads when synchronized properly.
 unsafe impl Send for CudaDeviceBuffer {}
+// SAFETY: CUDA device buffers are thread-safe across host threads when synchronized properly.
 unsafe impl Sync for CudaDeviceBuffer {}
 
 impl CudaDeviceBuffer {
@@ -123,9 +131,9 @@ impl CudaDeviceBuffer {
         }
         let mut d_ptr: *mut c_void = ptr::null_mut();
         // SAFETY: Calling cudaMalloc with valid pointer and size.
-        let status = unsafe { cudaMalloc(&mut d_ptr, size_bytes) };
+        let status = unsafe { cudaMalloc(&raw mut d_ptr, size_bytes) };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaMalloc failed with status code {}", status));
+            return Err(format!("cudaMalloc failed with status code {status}"));
         }
         Ok(Self {
             ptr: d_ptr,
@@ -150,7 +158,7 @@ impl CudaDeviceBuffer {
             )
         };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaMemcpyAsync (H2D) failed with code {}", status));
+            return Err(format!("cudaMemcpyAsync (H2D) failed with code {status}"));
         }
         Ok(())
     }
@@ -172,7 +180,7 @@ impl CudaDeviceBuffer {
             )
         };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaMemcpyAsync (D2H) failed with code {}", status));
+            return Err(format!("cudaMemcpyAsync (D2H) failed with code {status}"));
         }
         Ok(())
     }
@@ -216,15 +224,16 @@ pub struct CudaStream {
 
 // SAFETY: CUDA streams can be transferred between threads.
 unsafe impl Send for CudaStream {}
+// SAFETY: CUDA streams can be transferred between threads.
 unsafe impl Sync for CudaStream {}
 
 impl CudaStream {
     pub fn new() -> Result<Self, String> {
         let mut stream: cudaStream_t = ptr::null_mut();
         // SAFETY: Creating a cudaStream.
-        let status = unsafe { cudaStreamCreate(&mut stream) };
+        let status = unsafe { cudaStreamCreate(&raw mut stream) };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaStreamCreate failed with status code {}", status));
+            return Err(format!("cudaStreamCreate failed with status code {status}"));
         }
         Ok(Self { stream })
     }
@@ -239,7 +248,7 @@ impl CudaStream {
         // SAFETY: Calling cudaStreamSynchronize.
         let status = unsafe { cudaStreamSynchronize(self.stream) };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaStreamSynchronize failed with code {}", status));
+            return Err(format!("cudaStreamSynchronize failed with code {status}"));
         }
         Ok(())
     }

@@ -67,7 +67,7 @@ impl fmt::Debug for IntelBackend {
             .field("event_counter", &self.current_event_id)
             .field("host_token_buffer_len", &self.host_token_buffer.len())
             .field("level_zero_active", &is_level_zero_available())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

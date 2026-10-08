@@ -69,7 +69,7 @@ impl fmt::Debug for CudaBackend {
             .field("event_counter", &self.current_event_id)
             .field("host_token_buffer_len", &self.host_token_buffer.len())
             .field("has_real_stream", &self.stream.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -91,6 +91,8 @@ impl CudaBackend {
         // Attempt real physical device initialization
         let stream = CudaStream::new().ok();
         let (d_activations, d_norm_out, d_weights) = if stream.is_some() {
+            #[allow(clippy::cast_possible_wrap)]
+            // SAFETY: device_id is a valid integer device index passed to cudaSetDevice.
             let _ = unsafe { driver::cudaSetDevice(device_id as i32) };
             let act = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
             let norm = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();

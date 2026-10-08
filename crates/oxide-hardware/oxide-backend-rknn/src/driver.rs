@@ -47,7 +47,9 @@ pub struct RknnDriverApi {
     pub outputs_release: Option<RknnOutputsReleaseFn>,
 }
 
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Send for RknnDriverApi {}
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Sync for RknnDriverApi {}
 
 static RKNN_API: OnceLock<Option<RknnDriverApi>> = OnceLock::new();

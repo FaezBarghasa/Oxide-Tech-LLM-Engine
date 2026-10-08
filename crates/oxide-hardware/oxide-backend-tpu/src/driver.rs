@@ -30,7 +30,9 @@ pub struct EdgeTpuDriverApi {
     pub create_device: Option<EdgeTpuCreateDeviceFn>,
 }
 
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Send for EdgeTpuDriverApi {}
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Sync for EdgeTpuDriverApi {}
 
 static EDGETPU_API: OnceLock<Option<EdgeTpuDriverApi>> = OnceLock::new();
@@ -46,7 +48,9 @@ pub struct PjrtTpuDriverApi {
     pub client_create: Option<PjrtClientCreateFn>,
 }
 
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Send for PjrtTpuDriverApi {}
+// SAFETY: Function pointer table is immutable and thread-safe.
 unsafe impl Sync for PjrtTpuDriverApi {}
 
 static PJRT_API: OnceLock<Option<PjrtTpuDriverApi>> = OnceLock::new();
