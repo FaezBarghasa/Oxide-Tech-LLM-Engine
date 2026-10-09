@@ -23,14 +23,14 @@ impl MockEngineContext {
     #[must_use]
     pub fn new() -> Self {
         let cfg = oxide_models::llama3::Llama3Config::tiny_test_config();
-        let model = oxide_models::Llama3Model::new(cfg);
-        let kv_cache = (0..model.config.num_layers)
+        let model = Arc::new(oxide_models::Llama3Model::new(cfg));
+        let kv_cache_layers = (0..model.config.num_layers)
             .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
             .collect();
         let scratch = model.create_scratch();
         let pipeline = SpecializedPipeline::Llama3Dense {
-            model,
-            kv_cache,
+            model: (*model).clone(),
+            kv_cache: kv_cache_layers,
             seq_positions: std::collections::HashMap::new(),
             scratch: Box::new(scratch),
         };
@@ -39,10 +39,36 @@ impl MockEngineContext {
         let dfa_grammar = Arc::new(crate::dfa::DfaSchemaGrammar::new_simple_json_validator());
         let slot_manager = Arc::new(Mutex::new(ContinuousBatchingSlotManager::new(16)));
 
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let engine_handle = oxide_engine::EngineHandle::new(cmd_tx);
+        let mut batch_engine = oxide_engine::ContinuousBatchingEngine::new(
+            Arc::clone(&model),
+            16,
+            128,
+            cmd_rx,
+        );
+
+        if tokio::runtime::Handle::try_current().is_ok() {
+            batch_engine.spawn();
+        } else {
+            std::thread::Builder::new()
+                .name("batch-engine".to_string())
+                .spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap();
+                    rt.block_on(async move {
+                        batch_engine.run_loop().await;
+                    });
+                })
+                .expect("Failed to spawn batch engine thread");
+        }
+
         let state = ServerState {
             pipeline: Arc::new(Mutex::new(pipeline)),
             model_manager: None,
-            batch_engine: None,
+            batch_engine: Some(engine_handle),
             dfa_grammar,
             slot_manager,
             kv_cache,

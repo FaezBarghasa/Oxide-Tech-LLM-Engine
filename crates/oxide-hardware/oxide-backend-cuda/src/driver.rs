@@ -31,6 +31,7 @@ unsafe extern "C" {
     pub fn cudaMemcpy(dst: *mut c_void, src: const_ptr, count: usize, kind: u32) -> cudaError_t;
     pub fn cudaMemcpyAsync(dst: *mut c_void, src: const_ptr, count: usize, kind: u32, stream: cudaStream_t) -> cudaError_t;
     pub fn cudaMemset(dev_ptr: *mut c_void, value: i32, count: usize) -> cudaError_t;
+    pub fn cudaMemsetAsync(dev_ptr: *mut c_void, value: i32, count: usize, stream: cudaStream_t) -> cudaError_t;
     pub fn cudaStreamCreate(stream: *mut cudaStream_t) -> cudaError_t;
     pub fn cudaStreamDestroy(stream: cudaStream_t) -> cudaError_t;
     pub fn cudaStreamSynchronize(stream: cudaStream_t) -> cudaError_t;
@@ -201,6 +202,26 @@ impl CudaDeviceBuffer {
     #[must_use]
     pub fn size_bytes(&self) -> usize {
         self.size_bytes
+    }
+
+    pub fn memset_zero(&mut self) -> Result<(), String> {
+        if !self.ptr.is_null() && self.size_bytes > 0 {
+            let status = unsafe { cudaMemset(self.ptr, 0, self.size_bytes) };
+            if status != CUDA_SUCCESS {
+                return Err(format!("cudaMemset failed: {status}"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn memset_async(&mut self, value: i32, stream: cudaStream_t) -> Result<(), String> {
+        if !self.ptr.is_null() && self.size_bytes > 0 {
+            let status = unsafe { cudaMemsetAsync(self.ptr, value, self.size_bytes, stream) };
+            if status != CUDA_SUCCESS {
+                return Err(format!("cudaMemsetAsync failed: {status}"));
+            }
+        }
+        Ok(())
     }
 }
 
