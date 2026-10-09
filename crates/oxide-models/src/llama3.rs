@@ -616,8 +616,8 @@ impl Llama3Model {
         gguf: &GgufFile,
         tensor_name: &str,
         data_slice: &[u8],
-        m: usize,
-        n: usize,
+        default_m: usize,
+        default_n: usize,
     ) -> Option<QuantizedTensor> {
         let info = gguf.tensors.get(tensor_name)?;
         let offset = gguf.tensor_data_offset + info.offset as usize;
@@ -625,6 +625,16 @@ impl Llama3Model {
             return None;
         }
         let avail = &data_slice[offset..];
+
+        // Read real tensor dimensions from GGUF metadata table
+        let (m, n) = if info.dimensions.len() >= 2 {
+            // In GGML/GGUF dimension layout: dimensions[0] is columns (n), dimensions[1] is rows (m)
+            (info.dimensions[1] as usize, info.dimensions[0] as usize)
+        } else if info.dimensions.len() == 1 {
+            (info.dimensions[0] as usize, 1)
+        } else {
+            (default_m, default_n)
+        };
 
         match info.quant_type {
             crate::formats::GgufQuantType::Q4_K_M | crate::formats::GgufQuantType::Q4_1 => {
@@ -879,7 +889,26 @@ impl Llama3Model {
 
     /// Pre-allocated scratch buffers to guarantee zero dynamic allocations in the token generation loop.
     pub fn create_scratch(&self) -> Llama3ScratchBuffers {
-        Llama3ScratchBuffers::new(&self.config)
+        let mut scratch = Llama3ScratchBuffers::new(&self.config);
+        for layer in &self.layers {
+            let q_dim = layer.q_proj.rows();
+            if q_dim > scratch.q.len() {
+                scratch.q.resize(q_dim, 0.0);
+                scratch.attn_out.resize(q_dim, 0.0);
+            }
+            let k_dim = layer.k_proj.rows();
+            if k_dim > scratch.k.len() {
+                scratch.k.resize(k_dim, 0.0);
+                scratch.v.resize(k_dim, 0.0);
+            }
+            let inter = layer.gate_proj.rows().max(layer.up_proj.rows());
+            if inter > scratch.gate.len() {
+                scratch.gate.resize(inter, 0.0);
+                scratch.up.resize(inter, 0.0);
+                scratch.activated.resize(inter, 0.0);
+            }
+        }
+        scratch
     }
 
     /// Computes a single autoregressive forward step reusing pre-allocated scratch buffers.
