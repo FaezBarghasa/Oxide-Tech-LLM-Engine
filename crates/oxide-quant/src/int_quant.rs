@@ -7,7 +7,7 @@
 // ============================================================================
 
 /// Q4_0: 32 weights per block. 1x FP16 scale + 16 bytes (32 nibbles).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ4_0 {
     pub scale: f16,
@@ -367,7 +367,7 @@ impl BlockQ5_1 {
 // ============================================================================
 
 /// Q8_0: 32 weights per block. 1x FP16 scale + 32 signed int8 values = 34 bytes.
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ8_0 {
     pub scale: f16,
@@ -598,7 +598,7 @@ impl BlockQ3_K {
 }
 
 /// Q6_K: 256 weights per super-block (6-bit weights: 4-bit low + 2-bit high).
-#[repr(C, align(32))]
+#[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockQ6_K {
     pub ql: [u8; 128], // Lower 4 bits for 256 weights = 128 bytes

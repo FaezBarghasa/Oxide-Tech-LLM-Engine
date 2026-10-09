@@ -1099,37 +1099,45 @@ pub fn gemv_q8_0(
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
+    #[cfg(target_arch = "x86_64")]
+    let use_avx512 = is_x86_feature_detected!("avx512f");
+    #[cfg(target_arch = "x86_64")]
+    let use_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+
+    let compute_row = |row: usize| -> f32 {
+        let row_offset = row * blocks_per_row;
+        let mut acc = 0.0f32;
+        for b in 0..blocks_per_row {
+            let blk = &matrix[row_offset + b];
+            let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                .try_into()
+                .expect("slice length 32");
+            #[cfg(target_arch = "x86_64")]
+            if use_avx512 {
+                acc += unsafe { dot_q8_0_avx512(&blk.qs, act_chunk, blk.scale.to_f32()) };
+                continue;
+            } else if use_avx2 {
+                acc += unsafe { dot_q8_0_avx2(&blk.qs, act_chunk, blk.scale.to_f32()) };
+                continue;
+            }
+            acc += dot_q8_0_portable(&blk.qs, act_chunk, blk.scale.to_f32());
+        }
+        acc
+    };
+
     if m <= 8 {
         for row in 0..m {
-            let row_offset = row * blocks_per_row;
-            let mut acc = 0.0f32;
-            for b in 0..blocks_per_row {
-                let blk = &matrix[row_offset + b];
-                let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
-                    .try_into()
-                    .expect("slice length 32");
-                acc += dot_q8_0(&blk.qs, act_chunk, blk.scale.to_f32());
-            }
-            output[row] = acc;
+            output[row] = compute_row(row);
         }
     } else {
+        let chunk_size = (m / 32).clamp(8, 32);
         output[..m]
-            .par_chunks_mut(16)
+            .par_chunks_mut(chunk_size)
             .enumerate()
             .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * 16;
+                let base_row = chunk_idx * chunk_size;
                 for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    let row = base_row + i;
-                    let row_offset = row * blocks_per_row;
-                    let mut acc = 0.0f32;
-                    for b in 0..blocks_per_row {
-                        let blk = &matrix[row_offset + b];
-                        let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
-                            .try_into()
-                            .expect("slice length 32");
-                        acc += dot_q8_0(&blk.qs, act_chunk, blk.scale.to_f32());
-                    }
-                    *out_val = acc;
+                    *out_val = compute_row(base_row + i);
                 }
             });
     }
@@ -1208,38 +1216,45 @@ pub fn gemv_q4_k(
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
+    #[cfg(target_arch = "x86_64")]
+    let use_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw");
+    #[cfg(target_arch = "x86_64")]
+    let use_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+
+    let compute_row = |row: usize| -> f32 {
+        let row_offset = row * blocks_per_row;
+        let mut acc = 0.0f32;
+        for b in 0..blocks_per_row {
+            let blk = &matrix[row_offset + b];
+            let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+                .try_into()
+                .expect("slice length 256");
+            #[cfg(target_arch = "x86_64")]
+            if use_avx512 {
+                acc += unsafe { dot_q4_k_avx512(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32()) };
+                continue;
+            } else if use_avx2 {
+                acc += unsafe { dot_q4_k_avx2(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32()) };
+                continue;
+            }
+            acc += dot_q4_k_portable(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
+        }
+        acc
+    };
+
     if m <= 8 {
         for row in 0..m {
-            let row_offset = row * blocks_per_row;
-            let mut acc = 0.0f32;
-            for b in 0..blocks_per_row {
-                let blk = &matrix[row_offset + b];
-                let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
-                    .try_into()
-                    .expect("slice length 256");
-                acc += dot_q4_k(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
-            }
-            output[row] = acc;
+            output[row] = compute_row(row);
         }
     } else {
-        let chunk_size = (m / 16).clamp(32, 128);
+        let chunk_size = (m / 32).clamp(8, 32);
         output[..m]
             .par_chunks_mut(chunk_size)
             .enumerate()
             .for_each(|(chunk_idx, out_chunk)| {
                 let base_row = chunk_idx * chunk_size;
                 for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    let row = base_row + i;
-                    let row_offset = row * blocks_per_row;
-                    let mut acc = 0.0f32;
-                    for b in 0..blocks_per_row {
-                        let blk = &matrix[row_offset + b];
-                        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
-                            .try_into()
-                            .expect("slice length 256");
-                        acc += dot_q4_k(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
-                    }
-                    *out_val = acc;
+                    *out_val = compute_row(base_row + i);
                 }
             });
     }
