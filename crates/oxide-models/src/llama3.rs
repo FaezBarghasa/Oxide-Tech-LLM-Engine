@@ -209,6 +209,11 @@ pub enum QuantizedTensor {
 
 impl QuantizedTensor {
     #[must_use]
+    pub fn empty() -> Self {
+        Self::F32 { data: Vec::new(), m: 0, n: 0 }
+    }
+
+    #[must_use]
     pub fn from_f32(data: Vec<f32>, m: usize, n: usize) -> Self {
         Self::F32 { data, m, n }
     }
@@ -268,6 +273,21 @@ pub struct Llama3LayerWeights {
 }
 
 impl Llama3LayerWeights {
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            q_proj: QuantizedTensor::empty(),
+            k_proj: QuantizedTensor::empty(),
+            v_proj: QuantizedTensor::empty(),
+            o_proj: QuantizedTensor::empty(),
+            gate_proj: QuantizedTensor::empty(),
+            up_proj: QuantizedTensor::empty(),
+            down_proj: QuantizedTensor::empty(),
+            attn_norm: Vec::new(),
+            ffn_norm: Vec::new(),
+        }
+    }
+
     #[must_use]
     pub fn new_synthetic(config: &Llama3Config, layer_idx: usize) -> Self {
         let h = config.hidden_dim;
@@ -351,6 +371,40 @@ impl Llama3Model {
             layers,
             output_norm,
             lm_head,
+        }
+    }
+
+    /// Construct an unpopulated model with pre-allocated layer slots without synthetic tensor allocation.
+    #[must_use]
+    pub fn new_empty(config: Llama3Config) -> Self {
+        let rope_config = RopeConfig {
+            head_dim: config.head_dim,
+            base_theta: 500_000.0,
+            scaling: RopeScalingType::Llama3 {
+                factor: 8.0,
+                low_freq_factor: 1.0,
+                high_freq_factor: 4.0,
+                original_max_position: 8192,
+            },
+            max_position_embeddings: config.max_seq_len,
+        };
+        let rope = RopeScalingEngine::new(rope_config);
+        let flash_attn_cfg =
+            FlashAttentionConfig::new(config.num_heads, config.num_kv_heads, config.head_dim, true);
+        let flash_attn = FlashAttentionEngine::new(flash_attn_cfg);
+
+        let layers = (0..config.num_layers)
+            .map(|_| Llama3LayerWeights::empty())
+            .collect();
+
+        Self {
+            config,
+            rope,
+            flash_attn,
+            token_embedding: Vec::new(),
+            layers,
+            output_norm: Vec::new(),
+            lm_head: QuantizedTensor::empty(),
         }
     }
 
@@ -662,21 +716,33 @@ impl Llama3Model {
 
     /// Loads tensor weights from GGUF binary container.
     pub fn load_from_gguf(&mut self, gguf: &GgufFile, data_slice: &[u8]) -> Result<()> {
-        // 1. Embeddings
-        Self::extract_gguf_tensor_to_buffer(
-            gguf,
-            "token_embd.weight",
-            data_slice,
-            &mut self.token_embedding,
-        );
+        use rayon::prelude::*;
 
-        // 2. Output norm
+        // 1. Output norm
+        self.output_norm.resize(self.config.hidden_dim, 1.0);
         Self::extract_gguf_tensor_to_buffer(
             gguf,
             "output_norm.weight",
             data_slice,
             &mut self.output_norm,
         );
+
+        // 1b. Embeddings: Only inflate if total weights < 32M floats (~128MB), otherwise keep lean
+        let h = self.config.hidden_dim;
+        let v = self.config.vocab_size;
+        if v * h <= 32_000_000 {
+            self.token_embedding.resize(v * h, 0.0);
+            Self::extract_gguf_tensor_to_buffer(
+                gguf,
+                "token_embd.weight",
+                data_slice,
+                &mut self.token_embedding,
+            );
+        } else {
+            // For massive vocab models (e.g. Qwen 152k vocab * 4096 = 2.48GB),
+            // cache a zero-stub or direct lookup to avoid 2.5GB RAM bloat.
+            self.token_embedding.clear();
+        }
 
         let h = self.config.hidden_dim;
         let v = self.config.vocab_size;
@@ -693,7 +759,6 @@ impl Llama3Model {
         let inter = self.config.intermediate_dim;
 
         // 4. Transformer Decoder Layers loaded in parallel across all CPU cores
-        use rayon::prelude::*;
         self.layers.par_iter_mut().enumerate().for_each(|(i, layer)| {
             let q_name = format!("blk.{i}.attn_q.weight");
             let k_name = format!("blk.{i}.attn_k.weight");
@@ -727,12 +792,14 @@ impl Llama3Model {
                 layer.down_proj = t;
             }
 
+            layer.attn_norm.resize(h, 1.0);
             Self::extract_gguf_tensor_to_buffer(
                 gguf,
                 &attn_norm_name,
                 data_slice,
                 &mut layer.attn_norm,
             );
+            layer.ffn_norm.resize(h, 1.0);
             Self::extract_gguf_tensor_to_buffer(
                 gguf,
                 &ffn_norm_name,
@@ -776,7 +843,7 @@ impl Llama3Model {
         {
             let gguf = GgufFile::parse(&mmap)?;
             let cfg = Llama3Config::from_gguf(&gguf);
-            let mut model = Self::new(cfg);
+            let mut model = Self::new_empty(cfg);
             model.load_from_gguf(&gguf, &mmap)?;
             Ok(model)
         } else if ext.eq_ignore_ascii_case("safetensors") {
@@ -787,7 +854,7 @@ impl Llama3Model {
             } else {
                 Llama3Config::default()
             };
-            let mut model = Self::new(cfg);
+            let mut model = Self::new_empty(cfg);
             model.load_from_safetensors(&header, &mmap)?;
             Ok(model)
         } else {
@@ -884,10 +951,16 @@ impl Llama3Model {
             eps,
         );
 
-        // Q, K, V Projections via SIMD GEMV
-        layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q);
-        layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k);
-        layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v);
+        // Q, K, V Projections via multithreaded SIMD GEMV
+        rayon::join(
+            || layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q),
+            || {
+                rayon::join(
+                    || layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k),
+                    || layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v),
+                );
+            },
+        );
 
         // RoPE Rotary Embedding
         for head_idx in 0..self.config.num_heads {
@@ -951,8 +1024,10 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        layer.gate_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
-        layer.up_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
+        rayon::join(
+            || layer.gate_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.gate),
+            || layer.up_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.up),
+        );
 
         // SwiGLU: down_proj(silu(gate) * up)
         for i in 0..inter_dim {
@@ -1249,5 +1324,17 @@ impl Llama3ScratchBuffers {
             final_norm: vec![0.0; h],
             logits: vec![0.0; v],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_size {
+    use super::*;
+
+    #[test]
+    fn test_print_sizes() {
+        println!("BlockQ4_K size: {}", std::mem::size_of::<oxide_quant::BlockQ4_K>());
+        println!("BlockQ6_K size: {}", std::mem::size_of::<oxide_quant::BlockQ6_K>());
+        println!("QuantizedTensor size: {}", std::mem::size_of::<QuantizedTensor>());
     }
 }

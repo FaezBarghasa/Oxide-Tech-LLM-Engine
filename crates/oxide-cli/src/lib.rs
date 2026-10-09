@@ -1308,12 +1308,43 @@ pub fn run_all_hardware_benchmarks(
             continue;
         }
 
-        let Some(ref mut pipeline) = base_pipeline else {
-            println!(
-                "{:<48} | {:>12} | {:>14} | {:>10} | {:>10} | {:>10}",
-                target.name, "ERR", "Model Error", "N/A", "N/A", "N/A"
-            );
-            continue;
+        // Lazy pipeline dispatch per target
+        let mut target_pipeline_storage = if matches!(target.backend_name, "cuda" | "cpu_nvidia") {
+            SpecializedPipeline::from_model_or_path(
+                model,
+                "cuda",
+                Some("NVIDIA GeForce RTX 4060 Laptop"),
+                1,
+                None,
+            ).ok()
+        } else {
+            None
+        };
+        let pipeline: &mut SpecializedPipeline = match target.backend_name {
+            "cuda" | "cpu_nvidia" => {
+                if let Some(ref mut p) = target_pipeline_storage {
+                    p
+                } else if let Some(ref mut p) = base_pipeline {
+                    p
+                } else {
+                    println!(
+                        "{:<48} | {:>12} | {:>14} | {:>10} | {:>10} | {:>10}",
+                        target.name, "ERR", "Model Error", "N/A", "N/A", "N/A"
+                    );
+                    continue;
+                }
+            }
+            _ => {
+                if let Some(ref mut p) = base_pipeline {
+                    p
+                } else {
+                    println!(
+                        "{:<48} | {:>12} | {:>14} | {:>10} | {:>10} | {:>10}",
+                        target.name, "ERR", "Model Error", "N/A", "N/A", "N/A"
+                    );
+                    continue;
+                }
+            }
         };
 
         // 1. Measure real TTFT (Time To First Token) with actual prefill command

@@ -575,28 +575,53 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
     // SAFETY: Verified AVX-512F / AVX-512BW support and valid buffers.
     unsafe {
         let mask_0f = _mm_set1_epi8(0x0F);
-        let mut sum_q_vec = _mm512_setzero_ps();
-        let mut sum_act_vec = _mm512_setzero_ps();
+        let mut sum_q_vec0 = _mm512_setzero_ps();
+        let mut sum_act_vec0 = _mm512_setzero_ps();
+        let mut sum_q_vec1 = _mm512_setzero_ps();
+        let mut sum_act_vec1 = _mm512_setzero_ps();
 
-        for i in 0..8 {
-            let base_byte = i * 16;
-            let base_act = i * 16;
+        for i in (0..8).step_by(2) {
+            // Iteration i
+            let base_byte0 = i * 16;
+            let base_act0 = i * 16;
 
-            let raw = _mm_loadu_si128(qs.as_ptr().add(base_byte).cast());
-            let lo_nibbles = _mm_and_si128(raw, mask_0f);
-            let hi_shifted = _mm_srli_epi16(raw, 4);
-            let hi_nibbles = _mm_and_si128(hi_shifted, mask_0f);
+            let raw0 = _mm_loadu_si128(qs.as_ptr().add(base_byte0).cast());
+            let lo_nibbles0 = _mm_and_si128(raw0, mask_0f);
+            let hi_shifted0 = _mm_srli_epi16(raw0, 4);
+            let hi_nibbles0 = _mm_and_si128(hi_shifted0, mask_0f);
 
-            let f32_q0 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo_nibbles));
-            let act0 = _mm512_loadu_ps(act.as_ptr().add(base_act));
-            sum_q_vec = _mm512_fmadd_ps(f32_q0, act0, sum_q_vec);
-            sum_act_vec = _mm512_add_ps(sum_act_vec, act0);
+            let f32_q0_0 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo_nibbles0));
+            let act0_0 = _mm512_loadu_ps(act.as_ptr().add(base_act0));
+            sum_q_vec0 = _mm512_fmadd_ps(f32_q0_0, act0_0, sum_q_vec0);
+            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act0_0);
 
-            let f32_q1 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi_nibbles));
-            let act1 = _mm512_loadu_ps(act.as_ptr().add(base_act + 128));
-            sum_q_vec = _mm512_fmadd_ps(f32_q1, act1, sum_q_vec);
-            sum_act_vec = _mm512_add_ps(sum_act_vec, act1);
+            let f32_q1_0 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi_nibbles0));
+            let act1_0 = _mm512_loadu_ps(act.as_ptr().add(base_act0 + 128));
+            sum_q_vec0 = _mm512_fmadd_ps(f32_q1_0, act1_0, sum_q_vec0);
+            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act1_0);
+
+            // Iteration i + 1
+            let base_byte1 = (i + 1) * 16;
+            let base_act1 = (i + 1) * 16;
+
+            let raw1 = _mm_loadu_si128(qs.as_ptr().add(base_byte1).cast());
+            let lo_nibbles1 = _mm_and_si128(raw1, mask_0f);
+            let hi_shifted1 = _mm_srli_epi16(raw1, 4);
+            let hi_nibbles1 = _mm_and_si128(hi_shifted1, mask_0f);
+
+            let f32_q0_1 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo_nibbles1));
+            let act0_1 = _mm512_loadu_ps(act.as_ptr().add(base_act1));
+            sum_q_vec1 = _mm512_fmadd_ps(f32_q0_1, act0_1, sum_q_vec1);
+            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act0_1);
+
+            let f32_q1_1 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi_nibbles1));
+            let act1_1 = _mm512_loadu_ps(act.as_ptr().add(base_act1 + 128));
+            sum_q_vec1 = _mm512_fmadd_ps(f32_q1_1, act1_1, sum_q_vec1);
+            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act1_1);
         }
+
+        let sum_q_vec = _mm512_add_ps(sum_q_vec0, sum_q_vec1);
+        let sum_act_vec = _mm512_add_ps(sum_act_vec0, sum_act_vec1);
 
         let mut buf_q = [0.0f32; 16];
         let mut buf_act = [0.0f32; 16];
@@ -730,6 +755,7 @@ unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f3
         _mm512_set1_epi32, _mm512_setzero_ps, _mm512_storeu_ps, _mm512_sub_ps,
     };
 
+    // SAFETY: Verified AVX-512F / AVX-512BW support and valid buffers.
     unsafe {
         let mut sum_vec = _mm512_setzero_ps();
         let thirty_two = _mm512_set1_epi32(32);
@@ -786,6 +812,7 @@ unsafe fn dot_q6_k_avx2(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32)
         _mm256_set1_epi32, _mm256_setzero_ps, _mm256_storeu_ps, _mm256_sub_ps,
     };
 
+    // SAFETY: Verified AVX2 and FMA support and valid slices.
     unsafe {
         let mut sum_vec = _mm256_setzero_ps();
         let thirty_two = _mm256_set1_epi32(32);
@@ -857,11 +884,12 @@ pub fn gemv_q6_k(
             output[row] = acc;
         }
     } else {
+        let chunk_size = (m / 16).clamp(32, 128);
         output[..m]
-            .par_chunks_mut(16)
+            .par_chunks_mut(chunk_size)
             .enumerate()
             .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * 16;
+                let base_row = chunk_idx * chunk_size;
                 for (i, out_val) in out_chunk.iter_mut().enumerate() {
                     let row = base_row + i;
                     let row_offset = row * blocks_per_row;
@@ -1194,11 +1222,12 @@ pub fn gemv_q4_k(
             output[row] = acc;
         }
     } else {
+        let chunk_size = (m / 16).clamp(32, 128);
         output[..m]
-            .par_chunks_mut(16)
+            .par_chunks_mut(chunk_size)
             .enumerate()
             .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * 16;
+                let base_row = chunk_idx * chunk_size;
                 for (i, out_val) in out_chunk.iter_mut().enumerate() {
                     let row = base_row + i;
                     let row_offset = row * blocks_per_row;

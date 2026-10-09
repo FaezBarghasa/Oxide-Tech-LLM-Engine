@@ -297,6 +297,43 @@ impl SpecializedPipeline {
                 .collect();
             let scratch = Box::new(model.create_scratch());
 
+            let norm_backend = backend_name.to_ascii_lowercase().replace('-', "_");
+            match norm_backend.as_str() {
+                "cuda" => {
+                    let backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+                    return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
+                }
+                "rocm" => {
+                    let backend = RocmBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Rocm(OxideEngine::new(backend, model.config)));
+                }
+                "tpu" => {
+                    let backend = TpuBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Tpu(OxideEngine::new(backend, model.config)));
+                }
+                "intel" => {
+                    let backend = IntelBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Intel(OxideEngine::new(backend, model.config)));
+                }
+                "metal" => {
+                    let backend = MetalBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Metal(OxideEngine::new(backend, model.config)));
+                }
+                "qualcomm" | "snapdragon" => {
+                    let backend = QualcommBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Qualcomm(OxideEngine::new(backend, model.config)));
+                }
+                "rknn" | "rockchip" => {
+                    let backend = RknnBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Rknn(OxideEngine::new(backend, model.config)));
+                }
+                "hailo" => {
+                    let backend = HailoBackend::new(0, max_slots);
+                    return Ok(Self::Llama3Hailo(OxideEngine::new(backend, model.config)));
+                }
+                _ => {}
+            }
+
             let is_apu = backend_name.eq_ignore_ascii_case("apu");
             let is_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu_igpu");
             let auto_apu = backend_name.eq_ignore_ascii_case("cpu")
