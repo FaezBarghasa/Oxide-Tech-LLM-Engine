@@ -26,7 +26,8 @@ type HipGetDeviceFn = unsafe extern "C" fn(*mut i32) -> hipError_t;
 type HipGetDeviceCountFn = unsafe extern "C" fn(*mut i32) -> hipError_t;
 type HipMallocFn = unsafe extern "C" fn(*mut *mut c_void, usize) -> hipError_t;
 type HipFreeFn = unsafe extern "C" fn(*mut c_void) -> hipError_t;
-type HipMemcpyAsyncFn = unsafe extern "C" fn(*mut c_void, *const c_void, usize, u32, hipStream_t) -> hipError_t;
+type HipMemcpyAsyncFn =
+    unsafe extern "C" fn(*mut c_void, *const c_void, usize, u32, hipStream_t) -> hipError_t;
 type HipStreamCreateFn = unsafe extern "C" fn(*mut hipStream_t) -> hipError_t;
 type HipStreamDestroyFn = unsafe extern "C" fn(hipStream_t) -> hipError_t;
 type HipStreamSynchronizeFn = unsafe extern "C" fn(hipStream_t) -> hipError_t;
@@ -150,7 +151,11 @@ impl HipDeviceBuffer {
         Err("HIP runtime is not loaded".to_string())
     }
 
-    pub fn copy_from_host_async<T>(&mut self, src: &[T], stream: hipStream_t) -> Result<(), String> {
+    pub fn copy_from_host_async<T>(
+        &mut self,
+        src: &[T],
+        stream: hipStream_t,
+    ) -> Result<(), String> {
         let bytes = std::mem::size_of_val(src);
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer".to_string());
@@ -160,7 +165,13 @@ impl HipDeviceBuffer {
         {
             // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
             let status = unsafe {
-                cpy_fn(self.ptr, src.as_ptr().cast(), bytes, HIP_MEMCPY_HOST_TO_DEVICE, stream)
+                cpy_fn(
+                    self.ptr,
+                    src.as_ptr().cast(),
+                    bytes,
+                    HIP_MEMCPY_HOST_TO_DEVICE,
+                    stream,
+                )
             };
             if status == HIP_SUCCESS {
                 return Ok(());
@@ -180,7 +191,13 @@ impl HipDeviceBuffer {
         {
             // SAFETY: Calling hipMemcpyAsync with valid pointers and stream.
             let status = unsafe {
-                cpy_fn(dst.as_mut_ptr().cast(), self.ptr, bytes, HIP_MEMCPY_DEVICE_TO_HOST, stream)
+                cpy_fn(
+                    dst.as_mut_ptr().cast(),
+                    self.ptr,
+                    bytes,
+                    HIP_MEMCPY_DEVICE_TO_HOST,
+                    stream,
+                )
             };
             if status == HIP_SUCCESS {
                 return Ok(());

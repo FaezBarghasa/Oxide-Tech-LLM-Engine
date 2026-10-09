@@ -161,12 +161,24 @@ impl HardwareBackend for RocmBackend {
                 let _ = d_act.copy_from_host_async(&activations, raw_st);
                 // Perform norm computation
                 let weights = [1.0f32; 128];
-                let _ = RocmLlmKernels::dispatch_rmsnorm(&mut norm_out, &activations, &weights, 128, 1e-5);
+                let _ = RocmLlmKernels::dispatch_rmsnorm(
+                    &mut norm_out,
+                    &activations,
+                    &weights,
+                    128,
+                    1e-5,
+                );
                 let _ = d_norm.copy_from_host_async(&norm_out, raw_st);
                 let _ = stream.synchronize();
             } else {
                 let weights = [1.0f32; 128];
-                let _ = RocmLlmKernels::dispatch_rmsnorm(&mut norm_out, &activations, &weights, 128, 1e-5);
+                let _ = RocmLlmKernels::dispatch_rmsnorm(
+                    &mut norm_out,
+                    &activations,
+                    &weights,
+                    128,
+                    1e-5,
+                );
             }
 
             let next_tok = (cmd.input_token.wrapping_add(1) + (norm_out[0].abs() as u32)).max(1);

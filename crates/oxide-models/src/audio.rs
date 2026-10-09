@@ -137,7 +137,9 @@ impl AudioServingEngine {
                 let mut imag_acc = 0.0f32;
 
                 for (n, &sample) in slice.iter().enumerate() {
-                    let hann = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / slice.len() as f32).cos());
+                    let hann = 0.5
+                        * (1.0
+                            - (2.0 * std::f32::consts::PI * n as f32 / slice.len() as f32).cos());
                     let val = (sample as f32 / 32768.0) * hann;
                     let angle = omega * n as f32;
                     real_acc += val * angle.cos();

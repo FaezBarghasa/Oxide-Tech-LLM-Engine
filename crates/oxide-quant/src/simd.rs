@@ -864,9 +864,15 @@ pub fn gemv_q6_k(
     n: usize,
     output: &mut [f32],
 ) {
-    assert!(n.is_multiple_of(256), "n must be a multiple of 256 for Q6_K");
+    assert!(
+        n.is_multiple_of(256),
+        "n must be a multiple of 256 for Q6_K"
+    );
     let blocks_per_row = n / 256;
-    assert!(matrix.len() >= m * blocks_per_row, "Insufficient Q6_K blocks");
+    assert!(
+        matrix.len() >= m * blocks_per_row,
+        "Insufficient Q6_K blocks"
+    );
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
@@ -1114,9 +1120,11 @@ pub fn gemv_q8_0(
                 .expect("slice length 32");
             #[cfg(target_arch = "x86_64")]
             if use_avx512 {
+                // SAFETY: Target feature AVX-512 has been checked via is_x86_feature_detected!.
                 acc += unsafe { dot_q8_0_avx512(&blk.qs, act_chunk, blk.scale.to_f32()) };
                 continue;
             } else if use_avx2 {
+                // SAFETY: Target feature AVX2 has been checked via is_x86_feature_detected!.
                 acc += unsafe { dot_q8_0_avx2(&blk.qs, act_chunk, blk.scale.to_f32()) };
                 continue;
             }
@@ -1231,10 +1239,15 @@ pub fn gemv_q4_k(
                 .expect("slice length 256");
             #[cfg(target_arch = "x86_64")]
             if use_avx512 {
-                acc += unsafe { dot_q4_k_avx512(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32()) };
+                // SAFETY: Target feature AVX-512 has been checked via is_x86_feature_detected!.
+                acc += unsafe {
+                    dot_q4_k_avx512(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32())
+                };
                 continue;
             } else if use_avx2 {
-                acc += unsafe { dot_q4_k_avx2(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32()) };
+                // SAFETY: Target feature AVX2 has been checked via is_x86_feature_detected!.
+                acc +=
+                    unsafe { dot_q4_k_avx2(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32()) };
                 continue;
             }
             acc += dot_q4_k_portable(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());

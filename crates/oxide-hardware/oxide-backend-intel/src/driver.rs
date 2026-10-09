@@ -31,8 +31,13 @@ pub struct ze_device_mem_alloc_desc_t {
 
 type ZeInitFn = unsafe extern "C" fn(ze_init_flags_t) -> ze_result_t;
 type ZeDriverGetFn = unsafe extern "C" fn(*mut u32, *mut ze_driver_handle_t) -> ze_result_t;
-type ZeDeviceGetFn = unsafe extern "C" fn(ze_driver_handle_t, *mut u32, *mut ze_device_handle_t) -> ze_result_t;
-type ZeContextCreateFn = unsafe extern "C" fn(ze_driver_handle_t, *const c_void, *mut ze_context_handle_t) -> ze_result_t;
+type ZeDeviceGetFn =
+    unsafe extern "C" fn(ze_driver_handle_t, *mut u32, *mut ze_device_handle_t) -> ze_result_t;
+type ZeContextCreateFn = unsafe extern "C" fn(
+    ze_driver_handle_t,
+    *const c_void,
+    *mut ze_context_handle_t,
+) -> ze_result_t;
 type ZeContextDestroyFn = unsafe extern "C" fn(ze_context_handle_t) -> ze_result_t;
 type ZeMemAllocDeviceFn = unsafe extern "C" fn(
     ze_context_handle_t,
@@ -142,7 +147,11 @@ impl LevelZeroDeviceBuffer {
     ///
     /// # Safety
     /// `context` and `device` must be valid, initialized Level-Zero handles.
-    pub unsafe fn allocate(context: ze_context_handle_t, device: ze_device_handle_t, size_bytes: usize) -> Result<Self, String> {
+    pub unsafe fn allocate(
+        context: ze_context_handle_t,
+        device: ze_device_handle_t,
+        size_bytes: usize,
+    ) -> Result<Self, String> {
         if let Some(api) = get_ze_api()
             && let Some(alloc_fn) = api.mem_alloc_device
         {
@@ -154,7 +163,16 @@ impl LevelZeroDeviceBuffer {
             };
             let mut d_ptr: *mut c_void = ptr::null_mut();
             // SAFETY: Calling zeMemAllocDevice with valid descriptors and handles.
-            let status = unsafe { alloc_fn(context, &raw const desc, size_bytes, 64, device, &raw mut d_ptr) };
+            let status = unsafe {
+                alloc_fn(
+                    context,
+                    &raw const desc,
+                    size_bytes,
+                    64,
+                    device,
+                    &raw mut d_ptr,
+                )
+            };
             if status == ZE_RESULT_SUCCESS {
                 return Ok(Self {
                     ptr: d_ptr,

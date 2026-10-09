@@ -105,7 +105,8 @@ pub async fn messages_handler(
         stream: stream_mode,
     };
 
-    let Some(slot_guard) = crate::LeasedSlotGuard::lease(&state.slot_manager, slot_request).await else {
+    let Some(slot_guard) = crate::LeasedSlotGuard::lease(&state.slot_manager, slot_request).await
+    else {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({

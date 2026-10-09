@@ -185,7 +185,9 @@ fn test_physical_cuda_device_allocation_and_kernel() {
         let mut h_out = vec![0.0f32; count];
 
         d_in.copy_from_host_async(&h_in, stream.raw()).unwrap();
-        d_weight.copy_from_host_async(&h_weight, stream.raw()).unwrap();
+        d_weight
+            .copy_from_host_async(&h_weight, stream.raw())
+            .unwrap();
 
         // Launch real compiled kernel on GPU
         unsafe {

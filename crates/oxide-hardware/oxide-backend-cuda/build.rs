@@ -91,5 +91,7 @@ fn main() {
         }
     }
 
-    println!("cargo:warning=NVCC not found or compilation skipped; CUDA kernels will run via fallback.");
+    println!(
+        "cargo:warning=NVCC not found or compilation skipped; CUDA kernels will run via fallback."
+    );
 }

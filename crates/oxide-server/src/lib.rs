@@ -426,7 +426,8 @@ async fn chat_completions_handler(
     };
 
     // Acquire RAII slot lease
-    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await else {
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await
+    else {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -446,13 +447,16 @@ async fn chat_completions_handler(
 
     // High-throughput Continuous Batching path (zero lock contention on hot loop)
     if let Some(engine) = &state.batch_engine {
-        match engine.generate_stream(
-            req_id.clone(),
-            slot_request.prompt_tokens.clone(),
-            max_tokens,
-            slot_request.temperature,
-            slot_request.top_p,
-        ).await {
+        match engine
+            .generate_stream(
+                req_id.clone(),
+                slot_request.prompt_tokens.clone(),
+                max_tokens,
+                slot_request.temperature,
+                slot_request.top_p,
+            )
+            .await
+        {
             Ok(mut token_rx) => {
                 if stream_mode {
                     let stream = async_stream::stream! {
@@ -522,7 +526,9 @@ async fn chat_completions_handler(
                 return Json(response).into_response();
             }
             Err(e) => {
-                tracing::warn!("ContinuousBatchingEngine enqueue rejected: {e}. Falling back to pipeline.");
+                tracing::warn!(
+                    "ContinuousBatchingEngine enqueue rejected: {e}. Falling back to pipeline."
+                );
             }
         }
     }
@@ -653,7 +659,8 @@ async fn completions_handler(
         stream: false,
     };
 
-    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await else {
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await
+    else {
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -671,46 +678,48 @@ async fn completions_handler(
 
     // High-throughput Continuous Batching path for completions
     if let Some(engine) = &state.batch_engine
-        && let Ok(mut token_rx) = engine.generate_stream(
-            req_id.clone(),
-            slot_request.prompt_tokens.clone(),
-            max_tokens,
-            slot_request.temperature,
-            slot_request.top_p,
-        ).await
+        && let Ok(mut token_rx) = engine
+            .generate_stream(
+                req_id.clone(),
+                slot_request.prompt_tokens.clone(),
+                max_tokens,
+                slot_request.temperature,
+                slot_request.top_p,
+            )
+            .await
     {
-            let mut generated_text = String::new();
-            let mut completion_tokens = 0;
+        let mut generated_text = String::new();
+        let mut completion_tokens = 0;
 
-            while let Some(event) = token_rx.recv().await {
-                generated_text.push_str(&tokenizer.decode_token(event.token_id));
-                completion_tokens += 1;
-                if event.is_terminal {
-                    break;
-                }
+        while let Some(event) = token_rx.recv().await {
+            generated_text.push_str(&tokenizer.decode_token(event.token_id));
+            completion_tokens += 1;
+            if event.is_terminal {
+                break;
             }
-
-            drop(slot_guard);
-
-            let resp = CompletionResponse {
-                id: req_id,
-                object: "text_completion".to_string(),
-                created: 1_728_000_000,
-                model: payload.model,
-                choices: vec![CompletionChoice {
-                    text: generated_text,
-                    index: 0,
-                    finish_reason: "stop".to_string(),
-                }],
-                usage: UsageStatistics {
-                    prompt_tokens: prompt_len,
-                    completion_tokens,
-                    total_tokens: prompt_len + completion_tokens,
-                },
-            };
-
-            return Json(resp).into_response();
         }
+
+        drop(slot_guard);
+
+        let resp = CompletionResponse {
+            id: req_id,
+            object: "text_completion".to_string(),
+            created: 1_728_000_000,
+            model: payload.model,
+            choices: vec![CompletionChoice {
+                text: generated_text,
+                index: 0,
+                finish_reason: "stop".to_string(),
+            }],
+            usage: UsageStatistics {
+                prompt_tokens: prompt_len,
+                completion_tokens,
+                total_tokens: prompt_len + completion_tokens,
+            },
+        };
+
+        return Json(resp).into_response();
+    }
 
     let sampling_config = SamplingConfig {
         temperature: payload.temperature.unwrap_or(0.7),

@@ -100,7 +100,9 @@ impl PagedKvArena {
     pub fn allocate_block(&self) -> Option<u32> {
         let block_id = self.free_blocks.pop()?;
         for layer in &self.blocks {
-            layer[block_id as usize].ref_count.store(1, Ordering::Relaxed);
+            layer[block_id as usize]
+                .ref_count
+                .store(1, Ordering::Relaxed);
         }
         Some(block_id)
     }

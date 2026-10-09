@@ -223,7 +223,8 @@ impl ContinuousBatchingEngine {
         }
 
         // Insert new physical blocks into Radix cache for subsequent prompt reuse
-        self.radix_cache.insert(&prompt_tokens, &block_table.block_ids);
+        self.radix_cache
+            .insert(&prompt_tokens, &block_table.block_ids);
 
         // Next token to decode is the last prompt token
         let initial_token = *prompt_tokens.last().unwrap_or(&1);
@@ -382,6 +383,8 @@ impl EngineHandle {
 
     /// Cancel a running generation request.
     pub fn cancel(&self, request_id: String) {
-        let _ = self.sender.send(EngineCommand::CancelRequest { request_id });
+        let _ = self
+            .sender
+            .send(EngineCommand::CancelRequest { request_id });
     }
 }

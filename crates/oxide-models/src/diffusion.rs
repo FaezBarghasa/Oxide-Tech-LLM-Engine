@@ -168,7 +168,8 @@ impl DiffusionEngine {
 
         // 2. Scheduler Step Update
         match self.config.scheduler {
-            DiffusionSchedulerType::EulerDiscrete | DiffusionSchedulerType::RectifiedFlowMatching => {
+            DiffusionSchedulerType::EulerDiscrete
+            | DiffusionSchedulerType::RectifiedFlowMatching => {
                 // Euler / Flow-matching step: x_{t-1} = x_t - dt * v_\theta
                 for (x, &noise) in self
                     .latent_buffer
@@ -180,8 +181,14 @@ impl DiffusionEngine {
             }
             DiffusionSchedulerType::Ddim => {
                 // DDIM step: x_{t-1} = \sqrt{\alpha_{t-1}} * (x_t - \sqrt{1 - \alpha_t} * \epsilon) / \sqrt{\alpha_t} + \sqrt{1 - \alpha_{t-1}} * \epsilon
-                let alpha_curr = (t_curr * std::f32::consts::FRAC_PI_2).cos().powi(2).max(1e-4);
-                let alpha_next = (t_next * std::f32::consts::FRAC_PI_2).cos().powi(2).max(1e-4);
+                let alpha_curr = (t_curr * std::f32::consts::FRAC_PI_2)
+                    .cos()
+                    .powi(2)
+                    .max(1e-4);
+                let alpha_next = (t_next * std::f32::consts::FRAC_PI_2)
+                    .cos()
+                    .powi(2)
+                    .max(1e-4);
                 let sqrt_alpha_curr = alpha_curr.sqrt();
                 let sqrt_one_minus_alpha_curr = (1.0 - alpha_curr).max(0.0).sqrt();
                 let sqrt_alpha_next = alpha_next.sqrt();

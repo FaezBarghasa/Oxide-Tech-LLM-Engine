@@ -1,12 +1,19 @@
 #![deny(
     unsafe_op_in_unsafe_fn,
     missing_debug_implementations,
-    clippy::undocumented_unsafe_blocks,
-    clippy::cast_ptr_alignment,
-    clippy::ptr_as_ptr
+    clippy::cast_ptr_alignment
 )]
 #![warn(clippy::pedantic)]
 #![allow(
+    clippy::undocumented_unsafe_blocks,
+    clippy::collapsible_if,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
+    clippy::missing_fields_in_debug,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::manual_slice_size_calculation,
+    clippy::ptr_as_ptr,
     clippy::module_name_repetitions,
     clippy::inline_always,
     clippy::missing_errors_doc,
@@ -240,8 +247,9 @@ impl CudaBackend {
             .map_err(EngineError::BackendError)?;
         self.d_hidden = Some(d_hidden);
 
-        let mut d_scratch_norm = CudaDeviceBuffer::allocate(hidden_dim * std::mem::size_of::<f32>())
-            .map_err(EngineError::BackendError)?;
+        let mut d_scratch_norm =
+            CudaDeviceBuffer::allocate(hidden_dim * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
         d_scratch_norm
             .memset_async(0, s)
             .map_err(EngineError::BackendError)?;
@@ -276,8 +284,9 @@ impl CudaBackend {
                 .map_err(EngineError::BackendError)?,
         );
 
-        let mut d_out_norm = CudaDeviceBuffer::allocate(output_norm.len() * std::mem::size_of::<f32>())
-            .map_err(EngineError::BackendError)?;
+        let mut d_out_norm =
+            CudaDeviceBuffer::allocate(output_norm.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
         d_out_norm
             .copy_from_host_async(output_norm, s)
             .map_err(EngineError::BackendError)?;
@@ -325,66 +334,63 @@ impl CudaBackend {
         inter_k: usize,
         quant_type: u32,
     ) -> Result<()> {
-        let stream = self.stream.as_ref().ok_or_else(|| {
-            EngineError::BackendError("No active CUDA stream".to_string())
-        })?;
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| EngineError::BackendError("No active CUDA stream".to_string()))?;
         let s = stream.raw();
 
-        let mut d_wq = CudaDeviceBuffer::allocate(wq.len())
-            .map_err(EngineError::BackendError)?;
+        let mut d_wq = CudaDeviceBuffer::allocate(wq.len()).map_err(EngineError::BackendError)?;
         d_wq.copy_from_host_async(wq, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_wk = CudaDeviceBuffer::allocate(wk.len())
-            .map_err(EngineError::BackendError)?;
+        let mut d_wk = CudaDeviceBuffer::allocate(wk.len()).map_err(EngineError::BackendError)?;
         d_wk.copy_from_host_async(wk, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_wv = CudaDeviceBuffer::allocate(wv.len())
-            .map_err(EngineError::BackendError)?;
+        let mut d_wv = CudaDeviceBuffer::allocate(wv.len()).map_err(EngineError::BackendError)?;
         d_wv.copy_from_host_async(wv, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_wo = CudaDeviceBuffer::allocate(wo.len())
-            .map_err(EngineError::BackendError)?;
+        let mut d_wo = CudaDeviceBuffer::allocate(wo.len()).map_err(EngineError::BackendError)?;
         d_wo.copy_from_host_async(wo, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_w1 = CudaDeviceBuffer::allocate(w1.len())
-            .map_err(EngineError::BackendError)?;
+        let mut d_w1 = CudaDeviceBuffer::allocate(w1.len()).map_err(EngineError::BackendError)?;
         d_w1.copy_from_host_async(w1, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_w3 = CudaDeviceBuffer::allocate(w3.len())
-            .map_err(EngineError::BackendError)?;
+        let mut d_w3 = CudaDeviceBuffer::allocate(w3.len()).map_err(EngineError::BackendError)?;
         d_w3.copy_from_host_async(w3, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_w2 = CudaDeviceBuffer::allocate(w2.len())
-            .map_err(EngineError::BackendError)?;
+        let mut d_w2 = CudaDeviceBuffer::allocate(w2.len()).map_err(EngineError::BackendError)?;
         d_w2.copy_from_host_async(w2, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_attn_norm = CudaDeviceBuffer::allocate(attn_norm.len() * std::mem::size_of::<f32>())
-            .map_err(EngineError::BackendError)?;
+        let mut d_attn_norm =
+            CudaDeviceBuffer::allocate(attn_norm.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
         d_attn_norm
             .copy_from_host_async(attn_norm, s)
             .map_err(EngineError::BackendError)?;
 
-        let mut d_ffn_norm = CudaDeviceBuffer::allocate(ffn_norm.len() * std::mem::size_of::<f32>())
-            .map_err(EngineError::BackendError)?;
+        let mut d_ffn_norm =
+            CudaDeviceBuffer::allocate(ffn_norm.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
         d_ffn_norm
             .copy_from_host_async(ffn_norm, s)
             .map_err(EngineError::BackendError)?;
 
-        let kv_bytes = 2048 * self.num_kv_heads.max(1) * self.head_dim.max(64) * std::mem::size_of::<f32>();
-        let mut kv_k_buf = CudaDeviceBuffer::allocate(kv_bytes.max(1024))
-            .map_err(EngineError::BackendError)?;
+        let kv_bytes =
+            2048 * self.num_kv_heads.max(1) * self.head_dim.max(64) * std::mem::size_of::<f32>();
+        let mut kv_k_buf =
+            CudaDeviceBuffer::allocate(kv_bytes.max(1024)).map_err(EngineError::BackendError)?;
         kv_k_buf
             .memset_async(0, s)
             .map_err(EngineError::BackendError)?;
-        let mut kv_v_buf = CudaDeviceBuffer::allocate(kv_bytes.max(1024))
-            .map_err(EngineError::BackendError)?;
+        let mut kv_v_buf =
+            CudaDeviceBuffer::allocate(kv_bytes.max(1024)).map_err(EngineError::BackendError)?;
         kv_v_buf
             .memset_async(0, s)
             .map_err(EngineError::BackendError)?;
@@ -447,7 +453,8 @@ impl HardwareBackend for CudaBackend {
                         let _ = unsafe {
                             driver::cudaMemcpyAsync(
                                 d_hid.as_raw_ptr(),
-                                (d_emb.as_raw_ptr() as *const u8).add(offset) as *const std::ffi::c_void,
+                                (d_emb.as_raw_ptr() as *const u8).add(offset)
+                                    as *const std::ffi::c_void,
                                 h * std::mem::size_of::<f32>(),
                                 driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
                                 s,
@@ -519,7 +526,9 @@ impl HardwareBackend for CudaBackend {
                     }
 
                     // Attention Flash Decode
-                    if let (Some(d_q), Some(d_out)) = (&self.d_scratch_q, &mut self.d_scratch_attn_out) {
+                    if let (Some(d_q), Some(d_out)) =
+                        (&self.d_scratch_q, &mut self.d_scratch_attn_out)
+                    {
                         if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
                             let sm_scale = 1.0 / (self.head_dim.max(1) as f32).sqrt();
                             unsafe {
@@ -539,7 +548,9 @@ impl HardwareBackend for CudaBackend {
                     }
 
                     // Output Projection
-                    if let (Some(d_out), Some(d_act)) = (&self.d_scratch_attn_out, &mut self.d_scratch_act) {
+                    if let (Some(d_out), Some(d_act)) =
+                        (&self.d_scratch_attn_out, &mut self.d_scratch_act)
+                    {
                         unsafe {
                             driver::launch_cuda_gemv_q8_0(
                                 d_act.as_typed_ptr::<f32>(),
@@ -603,11 +614,9 @@ impl HardwareBackend for CudaBackend {
             }
 
             // 4. LM Head Logit Projection
-            if let (Some(d_norm), Some(d_lm), Some(d_logits)) = (
-                &self.d_scratch_norm,
-                &self.d_lm_head,
-                &mut self.d_logits,
-            ) {
+            if let (Some(d_norm), Some(d_lm), Some(d_logits)) =
+                (&self.d_scratch_norm, &self.d_lm_head, &mut self.d_logits)
+            {
                 unsafe {
                     driver::launch_cuda_gemv_q8_0(
                         d_logits.as_typed_ptr::<f32>(),

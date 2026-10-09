@@ -21,7 +21,8 @@ pub struct edgetpu_device {
 
 type EdgeTpuListDevicesFn = unsafe extern "C" fn(*mut usize) -> *mut edgetpu_device;
 type EdgeTpuFreeDevicesFn = unsafe extern "C" fn(*mut edgetpu_device);
-type EdgeTpuCreateDeviceFn = unsafe extern "C" fn(edgetpu_device_type, *const std::os::raw::c_char) -> *mut c_void;
+type EdgeTpuCreateDeviceFn =
+    unsafe extern "C" fn(edgetpu_device_type, *const std::os::raw::c_char) -> *mut c_void;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTpuDriverApi {

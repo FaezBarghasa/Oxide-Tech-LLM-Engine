@@ -15,11 +15,24 @@ pub type Qnn_GraphHandle_t = *mut c_void;
 
 pub const QNN_SUCCESS: Qnn_ErrorHandle_t = 0;
 
-type QnnBackendCreateFn = unsafe extern "C" fn(*const c_void, *const c_void, *mut Qnn_BackendHandle_t) -> Qnn_ErrorHandle_t;
+type QnnBackendCreateFn = unsafe extern "C" fn(
+    *const c_void,
+    *const c_void,
+    *mut Qnn_BackendHandle_t,
+) -> Qnn_ErrorHandle_t;
 type QnnBackendFreeFn = unsafe extern "C" fn(Qnn_BackendHandle_t) -> Qnn_ErrorHandle_t;
-type QnnDeviceCreateFn = unsafe extern "C" fn(*const c_void, *const c_void, *mut Qnn_DeviceHandle_t) -> Qnn_ErrorHandle_t;
+type QnnDeviceCreateFn = unsafe extern "C" fn(
+    *const c_void,
+    *const c_void,
+    *mut Qnn_DeviceHandle_t,
+) -> Qnn_ErrorHandle_t;
 type QnnDeviceFreeFn = unsafe extern "C" fn(Qnn_DeviceHandle_t) -> Qnn_ErrorHandle_t;
-type QnnContextCreateFn = unsafe extern "C" fn(Qnn_BackendHandle_t, Qnn_DeviceHandle_t, *const c_void, *mut Qnn_ContextHandle_t) -> Qnn_ErrorHandle_t;
+type QnnContextCreateFn = unsafe extern "C" fn(
+    Qnn_BackendHandle_t,
+    Qnn_DeviceHandle_t,
+    *const c_void,
+    *mut Qnn_ContextHandle_t,
+) -> Qnn_ErrorHandle_t;
 type QnnContextFreeFn = unsafe extern "C" fn(Qnn_ContextHandle_t, *mut c_void) -> Qnn_ErrorHandle_t;
 
 #[derive(Debug, Clone, Copy)]

@@ -23,9 +23,11 @@ pub struct hailo_vdevice_params_t {
     pub group_id: *const std::os::raw::c_char,
 }
 
-type HailoCreateVDeviceFn = unsafe extern "C" fn(*const hailo_vdevice_params_t, *mut hailo_vdevice) -> hailo_status;
+type HailoCreateVDeviceFn =
+    unsafe extern "C" fn(*const hailo_vdevice_params_t, *mut hailo_vdevice) -> hailo_status;
 type HailoReleaseVDeviceFn = unsafe extern "C" fn(hailo_vdevice) -> hailo_status;
-type HailoCreateHefFileFn = unsafe extern "C" fn(*mut hailo_hef, *const std::os::raw::c_char) -> hailo_status;
+type HailoCreateHefFileFn =
+    unsafe extern "C" fn(*mut hailo_hef, *const std::os::raw::c_char) -> hailo_status;
 type HailoReleaseHefFn = unsafe extern "C" fn(hailo_hef) -> hailo_status;
 
 #[derive(Debug, Clone, Copy)]

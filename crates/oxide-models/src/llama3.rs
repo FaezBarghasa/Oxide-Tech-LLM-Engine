@@ -210,32 +210,56 @@ pub enum QuantizedTensor {
 impl QuantizedTensor {
     #[must_use]
     pub fn empty() -> Self {
-        Self::F32 { data: std::borrow::Cow::Borrowed(&[]), m: 0, n: 0 }
+        Self::F32 {
+            data: std::borrow::Cow::Borrowed(&[]),
+            m: 0,
+            n: 0,
+        }
     }
 
     #[must_use]
     pub fn from_f32(data: Vec<f32>, m: usize, n: usize) -> Self {
-        Self::F32 { data: std::borrow::Cow::Owned(data), m, n }
+        Self::F32 {
+            data: std::borrow::Cow::Owned(data),
+            m,
+            n,
+        }
     }
 
     #[must_use]
     pub fn from_f32_slice(data: &'static [f32], m: usize, n: usize) -> Self {
-        Self::F32 { data: std::borrow::Cow::Borrowed(data), m, n }
+        Self::F32 {
+            data: std::borrow::Cow::Borrowed(data),
+            m,
+            n,
+        }
     }
 
     #[must_use]
     pub fn from_q4_k_slice(blocks: &'static [oxide_quant::BlockQ4_K], m: usize, n: usize) -> Self {
-        Self::Q4_K { blocks: std::borrow::Cow::Borrowed(blocks), m, n }
+        Self::Q4_K {
+            blocks: std::borrow::Cow::Borrowed(blocks),
+            m,
+            n,
+        }
     }
 
     #[must_use]
     pub fn from_q6_k_slice(blocks: &'static [oxide_quant::BlockQ6_K], m: usize, n: usize) -> Self {
-        Self::Q6_K { blocks: std::borrow::Cow::Borrowed(blocks), m, n }
+        Self::Q6_K {
+            blocks: std::borrow::Cow::Borrowed(blocks),
+            m,
+            n,
+        }
     }
 
     #[must_use]
     pub fn from_q8_0_slice(blocks: &'static [oxide_quant::BlockQ8_0], m: usize, n: usize) -> Self {
-        Self::Q8_0 { blocks: std::borrow::Cow::Borrowed(blocks), m, n }
+        Self::Q8_0 {
+            blocks: std::borrow::Cow::Borrowed(blocks),
+            m,
+            n,
+        }
     }
 
     #[must_use]
@@ -280,18 +304,42 @@ impl QuantizedTensor {
     #[must_use]
     pub fn as_raw_bytes(&self) -> &[u8] {
         match self {
-            Self::F32 { data, .. } => unsafe {
-                std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * std::mem::size_of::<f32>())
-            },
-            Self::Q4_K { blocks, .. } => unsafe {
-                std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * std::mem::size_of::<oxide_quant::BlockQ4_K>())
-            },
-            Self::Q6_K { blocks, .. } => unsafe {
-                std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * std::mem::size_of::<oxide_quant::BlockQ6_K>())
-            },
-            Self::Q8_0 { blocks, .. } => unsafe {
-                std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * std::mem::size_of::<oxide_quant::BlockQ8_0>())
-            },
+            Self::F32 { data, .. } => {
+                // SAFETY: f32 slice trivially reinterprets as u8 slice without alignment fault.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        data.as_ptr().cast::<u8>(),
+                        data.len() * std::mem::size_of::<f32>(),
+                    )
+                }
+            }
+            Self::Q4_K { blocks, .. } => {
+                // SAFETY: BlockQ4_K slice trivially reinterprets as u8 slice without alignment fault.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        blocks.as_ptr().cast::<u8>(),
+                        blocks.len() * std::mem::size_of::<oxide_quant::BlockQ4_K>(),
+                    )
+                }
+            }
+            Self::Q6_K { blocks, .. } => {
+                // SAFETY: BlockQ6_K slice trivially reinterprets as u8 slice without alignment fault.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        blocks.as_ptr().cast::<u8>(),
+                        blocks.len() * std::mem::size_of::<oxide_quant::BlockQ6_K>(),
+                    )
+                }
+            }
+            Self::Q8_0 { blocks, .. } => {
+                // SAFETY: BlockQ8_0 slice trivially reinterprets as u8 slice without alignment fault.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        blocks.as_ptr().cast::<u8>(),
+                        blocks.len() * std::mem::size_of::<oxide_quant::BlockQ8_0>(),
+                    )
+                }
+            }
         }
     }
 
@@ -351,13 +399,41 @@ impl Llama3LayerWeights {
 
         let seed = layer_idx as f32 * 0.31;
         Self {
-            q_proj: QuantizedTensor::from_f32(fill_weight(q_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.1), q_dim, h),
-            k_proj: QuantizedTensor::from_f32(fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.2), kv_dim, h),
-            v_proj: QuantizedTensor::from_f32(fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.3), kv_dim, h),
-            o_proj: QuantizedTensor::from_f32(fill_weight(h * q_dim, 1.0 / (q_dim as f32).sqrt(), seed + 0.4), h, q_dim),
-            gate_proj: QuantizedTensor::from_f32(fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.5), inter, h),
-            up_proj: QuantizedTensor::from_f32(fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.6), inter, h),
-            down_proj: QuantizedTensor::from_f32(fill_weight(h * inter, 1.0 / (inter as f32).sqrt(), seed + 0.7), h, inter),
+            q_proj: QuantizedTensor::from_f32(
+                fill_weight(q_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.1),
+                q_dim,
+                h,
+            ),
+            k_proj: QuantizedTensor::from_f32(
+                fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.2),
+                kv_dim,
+                h,
+            ),
+            v_proj: QuantizedTensor::from_f32(
+                fill_weight(kv_dim * h, 1.0 / (h as f32).sqrt(), seed + 0.3),
+                kv_dim,
+                h,
+            ),
+            o_proj: QuantizedTensor::from_f32(
+                fill_weight(h * q_dim, 1.0 / (q_dim as f32).sqrt(), seed + 0.4),
+                h,
+                q_dim,
+            ),
+            gate_proj: QuantizedTensor::from_f32(
+                fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.5),
+                inter,
+                h,
+            ),
+            up_proj: QuantizedTensor::from_f32(
+                fill_weight(inter * h, 1.0 / (h as f32).sqrt(), seed + 0.6),
+                inter,
+                h,
+            ),
+            down_proj: QuantizedTensor::from_f32(
+                fill_weight(h * inter, 1.0 / (inter as f32).sqrt(), seed + 0.7),
+                h,
+                inter,
+            ),
             attn_norm: vec![1.0; h],
             ffn_norm: vec![1.0; h],
         }
@@ -372,9 +448,9 @@ pub struct Llama3Model {
     pub flash_attn: FlashAttentionEngine,
     pub token_embedding: Vec<f32>, // [vocab_size, hidden_dim]
     pub layers: Vec<Llama3LayerWeights>,
-    pub output_norm: Vec<f32>, // [hidden_dim]
+    pub output_norm: Vec<f32>,    // [hidden_dim]
     pub lm_head: QuantizedTensor, // [vocab_size, hidden_dim]
-    pub _mmap: Option<std::sync::Arc<memmap2::Mmap>>,
+    pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
 }
 
 impl Llama3Model {
@@ -420,7 +496,7 @@ impl Llama3Model {
             layers,
             output_norm,
             lm_head,
-            _mmap: None,
+            mmap_handle: None,
         }
     }
 
@@ -455,7 +531,7 @@ impl Llama3Model {
             layers,
             output_norm: Vec::new(),
             lm_head: QuantizedTensor::empty(),
-            _mmap: None,
+            mmap_handle: None,
         }
     }
 
@@ -504,17 +580,16 @@ impl Llama3Model {
                 crate::formats::GgufQuantType::F16 => {
                     use rayon::prelude::*;
                     let count = target.len().min(avail.len() / 2);
-                    target[..count]
-                        .par_chunks_mut(1024)
-                        .enumerate()
-                        .for_each(|(chunk_idx, chunk)| {
+                    target[..count].par_chunks_mut(1024).enumerate().for_each(
+                        |(chunk_idx, chunk)| {
                             let base_idx = chunk_idx * 1024;
                             for (j, val) in chunk.iter_mut().enumerate() {
                                 let i = base_idx + j;
                                 let raw = u16::from_le_bytes([avail[i * 2], avail[i * 2 + 1]]);
                                 *val = oxide_quant::f16(raw).to_f32();
                             }
-                        });
+                        },
+                    );
                 }
                 crate::formats::GgufQuantType::Q8_0 => {
                     use rayon::prelude::*;
@@ -528,7 +603,8 @@ impl Llama3Model {
                             let n_b = c_slice.len() / 32;
                             for b in 0..n_b {
                                 let b_idx = base_b + b;
-                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let block_raw =
+                                    &avail[b_idx * block_size..(b_idx + 1) * block_size];
                                 let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
                                 let scale = oxide_quant::f16(scale_raw).to_f32();
                                 let start = b * 32;
@@ -551,7 +627,8 @@ impl Llama3Model {
                             let n_b = c_slice.len() / 32;
                             for b in 0..n_b {
                                 let b_idx = base_b + b;
-                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let block_raw =
+                                    &avail[b_idx * block_size..(b_idx + 1) * block_size];
                                 let scale_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
                                 let scale = oxide_quant::f16(scale_raw).to_f32();
                                 let start = b * 32;
@@ -577,7 +654,8 @@ impl Llama3Model {
                             let n_b = c_slice.len() / 256;
                             for b in 0..n_b {
                                 let b_idx = base_b + b;
-                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let block_raw =
+                                    &avail[b_idx * block_size..(b_idx + 1) * block_size];
                                 let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
                                 let dmin_raw = u16::from_le_bytes([block_raw[2], block_raw[3]]);
                                 let d = oxide_quant::f16(d_raw).to_f32();
@@ -606,7 +684,8 @@ impl Llama3Model {
                             let n_b = c_slice.len() / 256;
                             for b in 0..n_b {
                                 let b_idx = base_b + b;
-                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let block_raw =
+                                    &avail[b_idx * block_size..(b_idx + 1) * block_size];
                                 let ql = &block_raw[0..128];
                                 let qh = &block_raw[128..192];
                                 let d_raw = u16::from_le_bytes([block_raw[208], block_raw[209]]);
@@ -639,10 +718,16 @@ impl Llama3Model {
                             let n_b = c_slice.len() / 32;
                             for b in 0..n_b {
                                 let b_idx = base_b + b;
-                                let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                                let block_raw =
+                                    &avail[b_idx * block_size..(b_idx + 1) * block_size];
                                 let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
                                 let d = oxide_quant::f16(d_raw).to_f32();
-                                let qh = u32::from_le_bytes([block_raw[2], block_raw[3], block_raw[4], block_raw[5]]);
+                                let qh = u32::from_le_bytes([
+                                    block_raw[2],
+                                    block_raw[3],
+                                    block_raw[4],
+                                    block_raw[5],
+                                ]);
                                 let start = b * 32;
                                 for i in 0..16 {
                                     let byte = block_raw[6 + i];
@@ -660,7 +745,6 @@ impl Llama3Model {
             }
         }
     }
-
 
     /// Helper to extract a tensor directly into a `QuantizedTensor` with zero-copy mmap slicing.
     fn extract_gguf_tensor(
@@ -694,10 +778,14 @@ impl Llama3Model {
                 let needed_bytes = num_blocks * block_size;
                 if avail.len() >= needed_bytes {
                     let ptr = avail.as_ptr();
-                    if (ptr as usize) % std::mem::align_of::<oxide_quant::BlockQ4_K>() == 0 {
+                    if (ptr as usize).is_multiple_of(std::mem::align_of::<oxide_quant::BlockQ4_K>())
+                    {
                         // SAFETY: Valid pointer with verified alignment, length, and block size
                         let blocks = unsafe {
-                            std::slice::from_raw_parts(ptr as *const oxide_quant::BlockQ4_K, num_blocks)
+                            std::slice::from_raw_parts(
+                                ptr.cast::<oxide_quant::BlockQ4_K>(),
+                                num_blocks,
+                            )
                         };
                         Some(QuantizedTensor::from_q4_k_slice(blocks, m, n))
                     } else {
@@ -717,7 +805,11 @@ impl Llama3Model {
                                 qs,
                             });
                         }
-                        Some(QuantizedTensor::Q4_K { blocks: std::borrow::Cow::Owned(blocks), m, n })
+                        Some(QuantizedTensor::Q4_K {
+                            blocks: std::borrow::Cow::Owned(blocks),
+                            m,
+                            n,
+                        })
                     }
                 } else {
                     None
@@ -729,10 +821,14 @@ impl Llama3Model {
                 let needed_bytes = num_blocks * block_size;
                 if avail.len() >= needed_bytes {
                     let ptr = avail.as_ptr();
-                    if (ptr as usize) % std::mem::align_of::<oxide_quant::BlockQ6_K>() == 0 {
+                    if (ptr as usize).is_multiple_of(std::mem::align_of::<oxide_quant::BlockQ6_K>())
+                    {
                         // SAFETY: Valid pointer with verified alignment, length, and block size
                         let blocks = unsafe {
-                            std::slice::from_raw_parts(ptr as *const oxide_quant::BlockQ6_K, num_blocks)
+                            std::slice::from_raw_parts(
+                                ptr.cast::<oxide_quant::BlockQ6_K>(),
+                                num_blocks,
+                            )
                         };
                         Some(QuantizedTensor::from_q6_k_slice(blocks, m, n))
                     } else {
@@ -755,7 +851,11 @@ impl Llama3Model {
                                 d: oxide_quant::f16(d_raw),
                             });
                         }
-                        Some(QuantizedTensor::Q6_K { blocks: std::borrow::Cow::Owned(blocks), m, n })
+                        Some(QuantizedTensor::Q6_K {
+                            blocks: std::borrow::Cow::Owned(blocks),
+                            m,
+                            n,
+                        })
                     }
                 } else {
                     None
@@ -767,10 +867,14 @@ impl Llama3Model {
                 let needed_bytes = num_blocks * block_size;
                 if avail.len() >= needed_bytes {
                     let ptr = avail.as_ptr();
-                    if (ptr as usize) % std::mem::align_of::<oxide_quant::BlockQ8_0>() == 0 {
+                    if (ptr as usize).is_multiple_of(std::mem::align_of::<oxide_quant::BlockQ8_0>())
+                    {
                         // SAFETY: Valid pointer with verified alignment, length, and block size
                         let blocks = unsafe {
-                            std::slice::from_raw_parts(ptr as *const oxide_quant::BlockQ8_0, num_blocks)
+                            std::slice::from_raw_parts(
+                                ptr.cast::<oxide_quant::BlockQ8_0>(),
+                                num_blocks,
+                            )
                         };
                         Some(QuantizedTensor::from_q8_0_slice(blocks, m, n))
                     } else {
@@ -787,7 +891,11 @@ impl Llama3Model {
                                 qs,
                             });
                         }
-                        Some(QuantizedTensor::Q8_0 { blocks: std::borrow::Cow::Owned(blocks), m, n })
+                        Some(QuantizedTensor::Q8_0 {
+                            blocks: std::borrow::Cow::Owned(blocks),
+                            m,
+                            n,
+                        })
                     }
                 } else {
                     None
@@ -838,7 +946,9 @@ impl Llama3Model {
         // 3. LM Head (if distinct from embeddings)
         if let Some(t) = Self::extract_gguf_tensor(gguf, "output.weight", data_slice, v, h) {
             self.lm_head = t;
-        } else if let Some(t) = Self::extract_gguf_tensor(gguf, "token_embd.weight", data_slice, v, h) {
+        } else if let Some(t) =
+            Self::extract_gguf_tensor(gguf, "token_embd.weight", data_slice, v, h)
+        {
             // Tied weights: token_embd.weight serves as lm_head
             self.lm_head = t;
         } else {
@@ -849,54 +959,57 @@ impl Llama3Model {
         let inter = self.config.intermediate_dim;
 
         // 4. Transformer Decoder Layers loaded in parallel across all CPU cores
-        self.layers.par_iter_mut().enumerate().for_each(|(i, layer)| {
-            let q_name = format!("blk.{i}.attn_q.weight");
-            let k_name = format!("blk.{i}.attn_k.weight");
-            let v_name = format!("blk.{i}.attn_v.weight");
-            let o_name = format!("blk.{i}.attn_output.weight");
-            let gate_name = format!("blk.{i}.ffn_gate.weight");
-            let up_name = format!("blk.{i}.ffn_up.weight");
-            let down_name = format!("blk.{i}.ffn_down.weight");
-            let attn_norm_name = format!("blk.{i}.attn_norm.weight");
-            let ffn_norm_name = format!("blk.{i}.ffn_norm.weight");
+        self.layers
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, layer)| {
+                let q_name = format!("blk.{i}.attn_q.weight");
+                let k_name = format!("blk.{i}.attn_k.weight");
+                let v_name = format!("blk.{i}.attn_v.weight");
+                let o_name = format!("blk.{i}.attn_output.weight");
+                let gate_name = format!("blk.{i}.ffn_gate.weight");
+                let up_name = format!("blk.{i}.ffn_up.weight");
+                let down_name = format!("blk.{i}.ffn_down.weight");
+                let attn_norm_name = format!("blk.{i}.attn_norm.weight");
+                let ffn_norm_name = format!("blk.{i}.ffn_norm.weight");
 
-            if let Some(t) = Self::extract_gguf_tensor(gguf, &q_name, data_slice, q_dim, h) {
-                layer.q_proj = t;
-            }
-            if let Some(t) = Self::extract_gguf_tensor(gguf, &k_name, data_slice, kv_dim, h) {
-                layer.k_proj = t;
-            }
-            if let Some(t) = Self::extract_gguf_tensor(gguf, &v_name, data_slice, kv_dim, h) {
-                layer.v_proj = t;
-            }
-            if let Some(t) = Self::extract_gguf_tensor(gguf, &o_name, data_slice, h, q_dim) {
-                layer.o_proj = t;
-            }
-            if let Some(t) = Self::extract_gguf_tensor(gguf, &gate_name, data_slice, inter, h) {
-                layer.gate_proj = t;
-            }
-            if let Some(t) = Self::extract_gguf_tensor(gguf, &up_name, data_slice, inter, h) {
-                layer.up_proj = t;
-            }
-            if let Some(t) = Self::extract_gguf_tensor(gguf, &down_name, data_slice, h, inter) {
-                layer.down_proj = t;
-            }
+                if let Some(t) = Self::extract_gguf_tensor(gguf, &q_name, data_slice, q_dim, h) {
+                    layer.q_proj = t;
+                }
+                if let Some(t) = Self::extract_gguf_tensor(gguf, &k_name, data_slice, kv_dim, h) {
+                    layer.k_proj = t;
+                }
+                if let Some(t) = Self::extract_gguf_tensor(gguf, &v_name, data_slice, kv_dim, h) {
+                    layer.v_proj = t;
+                }
+                if let Some(t) = Self::extract_gguf_tensor(gguf, &o_name, data_slice, h, q_dim) {
+                    layer.o_proj = t;
+                }
+                if let Some(t) = Self::extract_gguf_tensor(gguf, &gate_name, data_slice, inter, h) {
+                    layer.gate_proj = t;
+                }
+                if let Some(t) = Self::extract_gguf_tensor(gguf, &up_name, data_slice, inter, h) {
+                    layer.up_proj = t;
+                }
+                if let Some(t) = Self::extract_gguf_tensor(gguf, &down_name, data_slice, h, inter) {
+                    layer.down_proj = t;
+                }
 
-            layer.attn_norm.resize(h, 1.0);
-            Self::extract_gguf_tensor_to_buffer(
-                gguf,
-                &attn_norm_name,
-                data_slice,
-                &mut layer.attn_norm,
-            );
-            layer.ffn_norm.resize(h, 1.0);
-            Self::extract_gguf_tensor_to_buffer(
-                gguf,
-                &ffn_norm_name,
-                data_slice,
-                &mut layer.ffn_norm,
-            );
-        });
+                layer.attn_norm.resize(h, 1.0);
+                Self::extract_gguf_tensor_to_buffer(
+                    gguf,
+                    &attn_norm_name,
+                    data_slice,
+                    &mut layer.attn_norm,
+                );
+                layer.ffn_norm.resize(h, 1.0);
+                Self::extract_gguf_tensor_to_buffer(
+                    gguf,
+                    &ffn_norm_name,
+                    data_slice,
+                    &mut layer.ffn_norm,
+                );
+            });
 
         Ok(())
     }
@@ -928,8 +1041,9 @@ impl Llama3Model {
         };
 
         let mmap = std::sync::Arc::new(mmap);
-        // SAFETY: mmap is kept alive by `model._mmap` for the lifetime of the returned model.
-        let data_slice: &'static [u8] = unsafe { std::slice::from_raw_parts(mmap.as_ptr(), mmap.len()) };
+        // SAFETY: mmap is kept alive by `model.mmap_handle` for the lifetime of the returned model.
+        let data_slice: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(mmap.as_ptr(), mmap.len()) };
 
         let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
         if ext.eq_ignore_ascii_case("gguf")
@@ -938,7 +1052,7 @@ impl Llama3Model {
             let gguf = GgufFile::parse(data_slice)?;
             let cfg = Llama3Config::from_gguf(&gguf);
             let mut model = Self::new_empty(cfg);
-            model._mmap = Some(mmap);
+            model.mmap_handle = Some(mmap);
             model.load_from_gguf(&gguf, data_slice)?;
             Ok(model)
         } else if ext.eq_ignore_ascii_case("safetensors") {
@@ -950,7 +1064,7 @@ impl Llama3Model {
                 Llama3Config::default()
             };
             let mut model = Self::new_empty(cfg);
-            model._mmap = Some(mmap);
+            model.mmap_handle = Some(mmap);
             model.load_from_safetensors(&header, data_slice)?;
             Ok(model)
         } else {
@@ -1123,7 +1237,9 @@ impl Llama3Model {
             );
         }
 
-        layer.o_proj.gemv(&scratch.attn_out, &mut scratch.o_proj_out);
+        layer
+            .o_proj
+            .gemv(&scratch.attn_out, &mut scratch.o_proj_out);
 
         // Residual 1
         for i in 0..h {
@@ -1140,8 +1256,16 @@ impl Llama3Model {
 
         let inter_dim = self.config.intermediate_dim;
         rayon::join(
-            || layer.gate_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.gate),
-            || layer.up_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.up),
+            || {
+                layer
+                    .gate_proj
+                    .gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
+            },
+            || {
+                layer
+                    .up_proj
+                    .gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
+            },
         );
 
         // SwiGLU: down_proj(silu(gate) * up)
@@ -1151,7 +1275,9 @@ impl Llama3Model {
             scratch.activated[i] = silu_g * scratch.up[i];
         }
 
-        layer.down_proj.gemv(&scratch.activated, &mut scratch.mlp_out);
+        layer
+            .down_proj
+            .gemv(&scratch.activated, &mut scratch.mlp_out);
 
         // Residual 2
         for i in 0..h {
@@ -1235,7 +1361,9 @@ impl Llama3Model {
             );
         }
 
-        layer.o_proj.gemv(&scratch.attn_out, &mut scratch.o_proj_out);
+        layer
+            .o_proj
+            .gemv(&scratch.attn_out, &mut scratch.o_proj_out);
 
         // Residual 1
         for i in 0..h {
@@ -1251,8 +1379,12 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        layer.gate_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
-        layer.up_proj.gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
+        layer
+            .gate_proj
+            .gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
+        layer
+            .up_proj
+            .gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
 
         // SwiGLU: down_proj(silu(gate) * up)
         for i in 0..inter_dim {
@@ -1261,7 +1393,9 @@ impl Llama3Model {
             scratch.activated[i] = silu_g * scratch.up[i];
         }
 
-        layer.down_proj.gemv(&scratch.activated, &mut scratch.mlp_out);
+        layer
+            .down_proj
+            .gemv(&scratch.activated, &mut scratch.mlp_out);
 
         // Residual 2
         for i in 0..h {
@@ -1328,7 +1462,6 @@ impl Llama3Model {
 
         Ok(())
     }
-
 
     /// Forward pass through a range of transformer decoder layers [start_layer..end_layer].
     pub fn forward_layers(
@@ -1448,8 +1581,17 @@ mod tests_size {
 
     #[test]
     fn test_print_sizes() {
-        println!("BlockQ4_K size: {}", std::mem::size_of::<oxide_quant::BlockQ4_K>());
-        println!("BlockQ6_K size: {}", std::mem::size_of::<oxide_quant::BlockQ6_K>());
-        println!("QuantizedTensor size: {}", std::mem::size_of::<QuantizedTensor>());
+        println!(
+            "BlockQ4_K size: {}",
+            std::mem::size_of::<oxide_quant::BlockQ4_K>()
+        );
+        println!(
+            "BlockQ6_K size: {}",
+            std::mem::size_of::<oxide_quant::BlockQ6_K>()
+        );
+        println!(
+            "QuantizedTensor size: {}",
+            std::mem::size_of::<QuantizedTensor>()
+        );
     }
 }

@@ -30,11 +30,13 @@ pub struct rknn_output {
     pub size: u32,
 }
 
-type RknnInitFn = unsafe extern "C" fn(*mut rknn_context, *mut c_void, u32, u32, *mut c_void) -> i32;
+type RknnInitFn =
+    unsafe extern "C" fn(*mut rknn_context, *mut c_void, u32, u32, *mut c_void) -> i32;
 type RknnDestroyFn = unsafe extern "C" fn(rknn_context) -> i32;
 type RknnInputsSetFn = unsafe extern "C" fn(rknn_context, u32, *mut rknn_input) -> i32;
 type RknnRunFn = unsafe extern "C" fn(rknn_context, *mut c_void) -> i32;
-type RknnOutputsGetFn = unsafe extern "C" fn(rknn_context, u32, *mut rknn_output, *mut c_void) -> i32;
+type RknnOutputsGetFn =
+    unsafe extern "C" fn(rknn_context, u32, *mut rknn_output, *mut c_void) -> i32;
 type RknnOutputsReleaseFn = unsafe extern "C" fn(rknn_context, u32, *mut rknn_output) -> i32;
 
 #[derive(Debug, Clone, Copy)]

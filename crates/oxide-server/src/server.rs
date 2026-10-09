@@ -41,12 +41,8 @@ impl MockEngineContext {
 
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let engine_handle = oxide_engine::EngineHandle::new(cmd_tx);
-        let mut batch_engine = oxide_engine::ContinuousBatchingEngine::new(
-            Arc::clone(&model),
-            16,
-            128,
-            cmd_rx,
-        );
+        let mut batch_engine =
+            oxide_engine::ContinuousBatchingEngine::new(Arc::clone(&model), 16, 128, cmd_rx);
 
         if tokio::runtime::Handle::try_current().is_ok() {
             batch_engine.spawn();

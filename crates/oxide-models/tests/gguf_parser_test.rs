@@ -72,27 +72,39 @@ fn test_real_gguf_models_in_home_dir() {
         let mmap = unsafe { memmap2::Mmap::map(&file).expect("Failed to mmap real GGUF model") };
         let parsed = GgufFile::parse(&mmap).expect("Failed to parse real GGUF model");
         let arch = parsed.architecture();
-        println!("Parsed architecture: {arch}, tensor count: {}", parsed.tensors.len());
+        println!(
+            "Parsed architecture: {arch}, tensor count: {}",
+            parsed.tensors.len()
+        );
         for (k, v) in &parsed.metadata {
             if k.contains("count") || k.contains("length") || k.contains("dim") {
                 println!("  meta {k} = {v:?}");
             }
         }
         if let Some(t) = parsed.tensors.get("token_embd.weight") {
-
-            println!("token_embd.weight dims: {:?}, quant: {:?}", t.dimensions, t.quant_type);
+            println!(
+                "token_embd.weight dims: {:?}, quant: {:?}",
+                t.dimensions, t.quant_type
+            );
         }
         if let Some(t) = parsed.tensors.get("output.weight") {
-            println!("output.weight dims: {:?}, quant: {:?}", t.dimensions, t.quant_type);
+            println!(
+                "output.weight dims: {:?}, quant: {:?}",
+                t.dimensions, t.quant_type
+            );
         }
         for (name, t) in &parsed.tensors {
             if name.starts_with("blk.0.") {
-                println!("  {name} dims: {:?}, quant: {:?}", t.dimensions, t.quant_type);
+                println!(
+                    "  {name} dims: {:?}, quant: {:?}",
+                    t.dimensions, t.quant_type
+                );
             }
         }
         assert!(!parsed.tensors.is_empty(), "Real model should have tensors");
-        assert!(parsed.tensor_data_offset > 0, "Tensor data offset must be positive");
+        assert!(
+            parsed.tensor_data_offset > 0,
+            "Tensor data offset must be positive"
+        );
     }
 }
-
-

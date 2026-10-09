@@ -330,7 +330,6 @@ pub struct BenchArgs {
     pub concurrency: usize,
 }
 
-
 #[derive(clap::Args, Debug, Clone)]
 pub struct ChatArgs {
     /// Model name or path to GGUF/SafeTensors file
@@ -990,7 +989,6 @@ async fn run_server_with_options(
     Ok(())
 }
 
-
 /// Runs automated hardware benchmarks across all real compute targets on this device:
 /// - AMD Ryzen 7 7745HX (Raw CPU: Zen 4, AVX2 + AVX-512)
 /// - AMD Radeon 610M (Raw iGPU: RDNA 2, unified coherent DDR5)
@@ -1008,7 +1006,6 @@ pub fn run_all_hardware_benchmarks(
     concurrency: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use std::time::Instant;
-
 
     struct TargetConfig {
         name: &'static str,
@@ -1044,7 +1041,6 @@ pub fn run_all_hardware_benchmarks(
     println!(
         "╚═══════════════════════════════════════════════════════════════════════════════════════╝\n"
     );
-
 
     let targets = [
         TargetConfig {
@@ -1233,15 +1229,9 @@ pub fn run_all_hardware_benchmarks(
         },
     ];
 
-
     println!(
         "{:<48} | {:<12} | {:<14} | {:<10} | {:<10} | {:<10}",
-        "Hardware Target & Architecture",
-        "TTFT",
-        "Oxide tok/s",
-        "vs llama",
-        "vs vLLM",
-        "vs SGLang"
+        "Hardware Target & Architecture", "TTFT", "Oxide tok/s", "vs llama", "vs vLLM", "vs SGLang"
     );
     println!(
         "{:-<48}-+-{:-<12}-+-{:-<14}-+-{:-<10}-+-{:-<10}-+-{:-<10}",
@@ -1249,7 +1239,8 @@ pub fn run_all_hardware_benchmarks(
     );
 
     // Detect actual available host accelerators
-    let has_cuda = oxide_core::hardware::GpuDeviceProfile::from_known_device_name("rtx 4060").is_some()
+    let has_cuda = oxide_core::hardware::GpuDeviceProfile::from_known_device_name("rtx 4060")
+        .is_some()
         && std::path::Path::new("/dev/nvidia0").exists();
     let has_amd_apu = oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some();
 
@@ -1264,7 +1255,10 @@ pub fn run_all_hardware_benchmarks(
         None,
     ) {
         Ok(p) => {
-            println!("Model loaded successfully in {:.2?}.\n", load_start.elapsed());
+            println!(
+                "Model loaded successfully in {:.2?}.\n",
+                load_start.elapsed()
+            );
             Some(p)
         }
         Err(e) => {
@@ -1275,12 +1269,7 @@ pub fn run_all_hardware_benchmarks(
 
     println!(
         "{:<48} | {:<12} | {:<14} | {:<10} | {:<10} | {:<10}",
-        "Hardware Target & Architecture",
-        "TTFT",
-        "Oxide tok/s",
-        "vs llama",
-        "vs vLLM",
-        "vs SGLang"
+        "Hardware Target & Architecture", "TTFT", "Oxide tok/s", "vs llama", "vs vLLM", "vs SGLang"
     );
     println!(
         "{:-<48}-+-{:-<12}-+-{:-<14}-+-{:-<10}-+-{:-<10}-+-{:-<10}",
@@ -1298,12 +1287,7 @@ pub fn run_all_hardware_benchmarks(
         if !is_physically_available {
             println!(
                 "{:<48} | {:>12} | {:>14} | {:>10} | {:>10} | {:>10}",
-                target.name,
-                "N/A",
-                "Offline (HW N/A)",
-                "N/A",
-                "N/A",
-                "N/A"
+                target.name, "N/A", "Offline (HW N/A)", "N/A", "N/A", "N/A"
             );
             continue;
         }
@@ -1316,7 +1300,8 @@ pub fn run_all_hardware_benchmarks(
                 Some("NVIDIA GeForce RTX 4060 Laptop"),
                 1,
                 None,
-            ).ok()
+            )
+            .ok()
         } else {
             None
         };
@@ -1401,7 +1386,9 @@ pub fn run_all_hardware_benchmarks(
         );
     }
 
-    println!("\nBenchmark complete. Verified with real-world execution on physical host hardware.\n");
+    println!(
+        "\nBenchmark complete. Verified with real-world execution on physical host hardware.\n"
+    );
     Ok(())
 }
 

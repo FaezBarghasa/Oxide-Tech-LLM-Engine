@@ -29,9 +29,20 @@ unsafe extern "C" {
     pub fn cudaMalloc(dev_ptr: *mut *mut c_void, size: usize) -> cudaError_t;
     pub fn cudaFree(dev_ptr: *mut c_void) -> cudaError_t;
     pub fn cudaMemcpy(dst: *mut c_void, src: const_ptr, count: usize, kind: u32) -> cudaError_t;
-    pub fn cudaMemcpyAsync(dst: *mut c_void, src: const_ptr, count: usize, kind: u32, stream: cudaStream_t) -> cudaError_t;
+    pub fn cudaMemcpyAsync(
+        dst: *mut c_void,
+        src: const_ptr,
+        count: usize,
+        kind: u32,
+        stream: cudaStream_t,
+    ) -> cudaError_t;
     pub fn cudaMemset(dev_ptr: *mut c_void, value: i32, count: usize) -> cudaError_t;
-    pub fn cudaMemsetAsync(dev_ptr: *mut c_void, value: i32, count: usize, stream: cudaStream_t) -> cudaError_t;
+    pub fn cudaMemsetAsync(
+        dev_ptr: *mut c_void,
+        value: i32,
+        count: usize,
+        stream: cudaStream_t,
+    ) -> cudaError_t;
     pub fn cudaStreamCreate(stream: *mut cudaStream_t) -> cudaError_t;
     pub fn cudaStreamDestroy(stream: cudaStream_t) -> cudaError_t;
     pub fn cudaStreamSynchronize(stream: cudaStream_t) -> cudaError_t;
@@ -102,11 +113,7 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
-    pub fn fwht_kernel_128(
-        d_out: *mut f32,
-        d_in: *const f32,
-        num_blocks: i32,
-    );
+    pub fn fwht_kernel_128(d_out: *mut f32, d_in: *const f32, num_blocks: i32);
 }
 
 /// Safe wrapper around an allocated physical GPU buffer on the CUDA device.
@@ -143,7 +150,11 @@ impl CudaDeviceBuffer {
     }
 
     /// Asynchronously copies memory from host slice into device memory.
-    pub fn copy_from_host_async<T>(&mut self, src: &[T], stream: cudaStream_t) -> Result<(), String> {
+    pub fn copy_from_host_async<T>(
+        &mut self,
+        src: &[T],
+        stream: cudaStream_t,
+    ) -> Result<(), String> {
         let bytes = std::mem::size_of_val(src);
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer capacity".to_string());

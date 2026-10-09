@@ -300,7 +300,44 @@ impl SpecializedPipeline {
             let norm_backend = backend_name.to_ascii_lowercase().replace('-', "_");
             match norm_backend.as_str() {
                 "cuda" => {
-                    let backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+                    let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+                    // SAFETY: Reinterprets f32 embedding slice as raw bytes for GPU upload without alignment hazard.
+                    let token_embd_bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            model.token_embedding.as_ptr().cast::<u8>(),
+                            model.token_embedding.len() * std::mem::size_of::<f32>(),
+                        )
+                    };
+                    let _ = backend.configure_model(
+                        model.config.hidden_dim,
+                        model.config.vocab_size,
+                        model.config.num_heads,
+                        model.config.num_kv_heads,
+                        model.config.head_dim,
+                        &model.output_norm,
+                        model.lm_head.as_raw_bytes(),
+                        token_embd_bytes,
+                    );
+                    for layer in &model.layers {
+                        let _ = backend.add_layer_weights(
+                            layer.q_proj.as_raw_bytes(),
+                            layer.k_proj.as_raw_bytes(),
+                            layer.v_proj.as_raw_bytes(),
+                            layer.o_proj.as_raw_bytes(),
+                            layer.gate_proj.as_raw_bytes(),
+                            layer.up_proj.as_raw_bytes(),
+                            layer.down_proj.as_raw_bytes(),
+                            &layer.attn_norm,
+                            &layer.ffn_norm,
+                            layer.q_proj.rows(),
+                            layer.q_proj.cols(),
+                            layer.k_proj.rows(),
+                            layer.k_proj.cols(),
+                            layer.gate_proj.rows(),
+                            layer.gate_proj.cols(),
+                            layer.q_proj.quant_type(),
+                        );
+                    }
                     return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
                 }
                 "rocm" => {
@@ -321,7 +358,10 @@ impl SpecializedPipeline {
                 }
                 "qualcomm" | "snapdragon" => {
                     let backend = QualcommBackend::new(0, max_slots);
-                    return Ok(Self::Llama3Qualcomm(OxideEngine::new(backend, model.config)));
+                    return Ok(Self::Llama3Qualcomm(OxideEngine::new(
+                        backend,
+                        model.config,
+                    )));
                 }
                 "rknn" | "rockchip" => {
                     let backend = RknnBackend::new(0, max_slots);
@@ -407,9 +447,10 @@ impl SpecializedPipeline {
         match backend_name.to_ascii_lowercase().as_str() {
             "cuda" => {
                 let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+                // SAFETY: Reinterprets f32 embedding slice as raw bytes for GPU upload without alignment hazard.
                 let token_embd_bytes = unsafe {
                     std::slice::from_raw_parts(
-                        model.token_embedding.as_ptr() as *const u8,
+                        model.token_embedding.as_ptr().cast::<u8>(),
                         model.token_embedding.len() * std::mem::size_of::<f32>(),
                     )
                 };
@@ -463,7 +504,10 @@ impl SpecializedPipeline {
             }
             "qualcomm" | "snapdragon" => {
                 let backend = QualcommBackend::new(0, max_slots);
-                return Ok(Self::Llama3Qualcomm(OxideEngine::new(backend, model.config)));
+                return Ok(Self::Llama3Qualcomm(OxideEngine::new(
+                    backend,
+                    model.config,
+                )));
             }
             "rknn" | "rockchip" => {
                 let backend = RknnBackend::new(0, max_slots);
@@ -475,7 +519,6 @@ impl SpecializedPipeline {
             }
             _ => {}
         }
-
 
         let kv_cache = (0..model.config.num_layers)
             .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
