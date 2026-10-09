@@ -276,6 +276,34 @@ impl QuantizedTensor {
             }
         }
     }
+
+    #[must_use]
+    pub fn as_raw_bytes(&self) -> &[u8] {
+        match self {
+            Self::F32 { data, .. } => unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * std::mem::size_of::<f32>())
+            },
+            Self::Q4_K { blocks, .. } => unsafe {
+                std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * std::mem::size_of::<oxide_quant::BlockQ4_K>())
+            },
+            Self::Q6_K { blocks, .. } => unsafe {
+                std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * std::mem::size_of::<oxide_quant::BlockQ6_K>())
+            },
+            Self::Q8_0 { blocks, .. } => unsafe {
+                std::slice::from_raw_parts(blocks.as_ptr() as *const u8, blocks.len() * std::mem::size_of::<oxide_quant::BlockQ8_0>())
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn quant_type(&self) -> u32 {
+        match self {
+            Self::F32 { .. } => 0,
+            Self::Q4_K { .. } => 1,
+            Self::Q6_K { .. } => 2,
+            Self::Q8_0 { .. } => 3,
+        }
+    }
 }
 
 /// Single Transformer Decoder Layer Weights.
