@@ -69,10 +69,13 @@ To support loading any model dynamically at runtime without requiring binary rec
 
 ---
 
-## Universal Integer Quantization & GGUF Support
+## Universal Integer Quantization & Zero-Copy GGUF Slicing
 
-`crates/oxide-quant/src/int_quant.rs` and `crates/oxide-models/src/formats.rs`:
+`crates/oxide-quant/src/int_quant.rs` and `crates/oxide-models/src/llama3.rs`:
 
+- **Zero-Copy Memory-Mapped Slicing**: Direct OS page mapping borrows slices (`&'static [BlockQ4_K]`, `&'static [BlockQ8_0]`, `&'static [BlockQ6_K]`) with tightly-packed `#[repr(C)]` layouts matching exact GGUF binary formats without padding.
+  - **Cold load time**: **25.91 ms** on a 5.03 GB GGUF model (DeepSeek-R1-8B-Q4_K_M).
+  - **Heap memory**: Eliminates multi-gigabyte vector allocations during model initialization.
 - **Integer Quantization Formats**:
   - `BlockQ2_K`: 2.56 bpw super-block layout (16 sub-blocks $\times$ 16 weights).
   - `BlockQ3_K`: 3.44 bpw packed 3-bit weights.

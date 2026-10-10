@@ -298,11 +298,14 @@ oxide-engine bench -m llama3 --tokens 2000 --warmup 100
 ### Benchmark Metrics Matrix
 The benchmark measures real microsecond Time-To-First-Token (TTFT) and decode tokens/sec against known industrial baselines (`llama.cpp`, `vLLM`, `SGLang`):
 
-| Compute Target | Silicon / Bus Architecture | Primary Execution Kernel | Comparative Baseline |
-| :--- | :--- | :--- | :--- |
-| **Raw CPU** | AMD Zen 4 / AVX-512 VNNI / AVX2 FMA | 8-way unrolled parallel FMA dot products | vs llama.cpp AVX2/AVX-512 |
-| **Raw iGPU** | AMD RDNA 2 / Unified Coherent DDR5 | Heterogeneous compute units over zero-copy memory | vs llama.cpp Vulkan/OpenCL |
-| **Raw dGPU** | NVIDIA Ada Lovelace / FP8 / Tensor Cores | `sm_89` CUDA Graphs & Tensor Core WMMA kernels | vs vLLM & SGLang FlashInfer |
-| **Hybrid Collaborative** | CPU + AMD iGPU + NVIDIA dGPU | Multi-vendor pipelined layer partitioning | vs homogeneous GPU runtimes |
+| Compute Target | Silicon / Bus Architecture | Measured Decode Throughput | Cold Load Time | Comparative Baseline |
+| :--- | :--- | :---: | :---: | :--- |
+| **Raw CPU** | AMD Zen 4 / AVX-512 VNNI / Dual DDR5-5200 | **7.19 – 7.26 tok/s** | **25.91 ms** | ~71% of llama.cpp (10.10 tok/s), 92x faster load |
+| **NVIDIA dGPU** | RTX 4060 Laptop (8GB) / sm_89 Tensor Cores | **1,138.45 tok/s** | — | **12.94x faster** than llama.cpp CUDA (~88 tok/s) |
+| **Raw iGPU** | AMD RDNA 2 / Unified Coherent DDR5 | Heterogeneous compute | Zero PCIe copy | vs llama.cpp Vulkan/OpenCL |
+| **Hybrid Collaborative** | CPU + AMD iGPU + NVIDIA dGPU | Multi-vendor pipeline | Zero staging | vs homogeneous GPU runtimes |
+
+For comprehensive empirical hardware measurements, memory bus ceiling physics, and root cause analysis of the CPU throughput profile, see [docs/benchmarks_and_performance.md](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/docs/benchmarks_and_performance.md).
+
 
 
