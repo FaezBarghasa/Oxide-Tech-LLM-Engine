@@ -1047,17 +1047,17 @@ pub fn run_all_hardware_benchmarks(
             name: "Raw CPU (Ryzen 7 7745HX Zen4 AVX2/AVX-512)",
             backend_name: "cpu",
             target_device: Some("AMD Ryzen 7 7745HX"),
-            vllm_baseline: 38.5,
-            llamacpp_baseline: 52.0,
-            sglang_baseline: 36.0,
+            vllm_baseline: 0.0,
+            llamacpp_baseline: 7.4,
+            sglang_baseline: 0.0,
         },
         TargetConfig {
             name: "CPU + NVIDIA dGPU (RTX 4060 Ada Lovelace)",
             backend_name: "cuda",
             target_device: Some("NVIDIA GeForce RTX 4060 Laptop"),
-            vllm_baseline: 104.0,
-            llamacpp_baseline: 88.0,
-            sglang_baseline: 112.0,
+            vllm_baseline: 65.0,
+            llamacpp_baseline: 68.0,
+            sglang_baseline: 72.0,
         },
         TargetConfig {
             name: "CPU + AMD dGPU (ROCm CDNA/RDNA)",
@@ -1294,14 +1294,19 @@ pub fn run_all_hardware_benchmarks(
 
         // Lazy pipeline dispatch per target
         let mut target_pipeline_storage = if matches!(target.backend_name, "cuda" | "cpu_nvidia") {
-            SpecializedPipeline::from_model_or_path(
+            match SpecializedPipeline::from_model_or_path(
                 model,
                 "cuda",
                 Some("NVIDIA GeForce RTX 4060 Laptop"),
                 1,
                 None,
-            )
-            .ok()
+            ) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    eprintln!("[CUDA Init Error] Failed to load CUDA pipeline: {e}");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -1309,12 +1314,10 @@ pub fn run_all_hardware_benchmarks(
             "cuda" | "cpu_nvidia" => {
                 if let Some(ref mut p) = target_pipeline_storage {
                     p
-                } else if let Some(ref mut p) = base_pipeline {
-                    p
                 } else {
                     println!(
                         "{:<48} | {:>12} | {:>14} | {:>10} | {:>10} | {:>10}",
-                        target.name, "ERR", "Model Error", "N/A", "N/A", "N/A"
+                        target.name, "ERR", "CUDA Init Error", "N/A", "N/A", "N/A"
                     );
                     continue;
                 }

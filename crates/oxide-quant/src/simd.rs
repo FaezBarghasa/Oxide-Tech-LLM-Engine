@@ -567,61 +567,129 @@ fn dot_q4_k_portable(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
 unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     use core::arch::x86_64::{
-        _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm512_add_ps,
+        _mm_and_si128, _mm_loadu_si128, _mm_prefetch, _mm_set1_epi8, _mm_srli_epi16, _mm512_add_ps,
         _mm512_cvtepi8_epi32, _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps,
-        _mm512_setzero_ps, _mm512_storeu_ps,
+        _mm512_setzero_ps, _mm512_storeu_ps, _MM_HINT_T0,
     };
 
     // SAFETY: Verified AVX-512F / AVX-512BW support and valid buffers.
     unsafe {
+        // Prefetch high activation slice into L1 cache
+        _mm_prefetch(act.as_ptr().add(128).cast(), _MM_HINT_T0);
+
         let mask_0f = _mm_set1_epi8(0x0F);
+        // 4 independent FMA accumulator chains to fully saturate 2x 512-bit FMA units on Zen 4
         let mut sum_q_vec0 = _mm512_setzero_ps();
         let mut sum_act_vec0 = _mm512_setzero_ps();
         let mut sum_q_vec1 = _mm512_setzero_ps();
         let mut sum_act_vec1 = _mm512_setzero_ps();
+        let mut sum_q_vec2 = _mm512_setzero_ps();
+        let mut sum_act_vec2 = _mm512_setzero_ps();
+        let mut sum_q_vec3 = _mm512_setzero_ps();
+        let mut sum_act_vec3 = _mm512_setzero_ps();
 
-        for i in (0..8).step_by(2) {
-            // Iteration i
-            let base_byte0 = i * 16;
-            let base_act0 = i * 16;
+        // Pass 1: i = 0, 1, 2, 3 (first 64 bytes -> 128 activations)
+        {
+            // Block 0
+            let raw0 = _mm_loadu_si128(qs.as_ptr().cast());
+            let lo0 = _mm_and_si128(raw0, mask_0f);
+            let hi0 = _mm_and_si128(_mm_srli_epi16(raw0, 4), mask_0f);
+            let act_lo0 = _mm512_loadu_ps(act.as_ptr());
+            let act_hi0 = _mm512_loadu_ps(act.as_ptr().add(128));
+            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo0)), act_lo0, sum_q_vec0);
+            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo0);
+            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi0)), act_hi0, sum_q_vec1);
+            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi0);
 
-            let raw0 = _mm_loadu_si128(qs.as_ptr().add(base_byte0).cast());
-            let lo_nibbles0 = _mm_and_si128(raw0, mask_0f);
-            let hi_shifted0 = _mm_srli_epi16(raw0, 4);
-            let hi_nibbles0 = _mm_and_si128(hi_shifted0, mask_0f);
+            // Block 1
+            let raw1 = _mm_loadu_si128(qs.as_ptr().add(16).cast());
+            let lo1 = _mm_and_si128(raw1, mask_0f);
+            let hi1 = _mm_and_si128(_mm_srli_epi16(raw1, 4), mask_0f);
+            let act_lo1 = _mm512_loadu_ps(act.as_ptr().add(16));
+            let act_hi1 = _mm512_loadu_ps(act.as_ptr().add(128 + 16));
+            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo1)), act_lo1, sum_q_vec2);
+            sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo1);
+            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi1)), act_hi1, sum_q_vec3);
+            sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi1);
 
-            let f32_q0_0 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo_nibbles0));
-            let act0_0 = _mm512_loadu_ps(act.as_ptr().add(base_act0));
-            sum_q_vec0 = _mm512_fmadd_ps(f32_q0_0, act0_0, sum_q_vec0);
-            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act0_0);
+            // Block 2
+            let raw2 = _mm_loadu_si128(qs.as_ptr().add(32).cast());
+            let lo2 = _mm_and_si128(raw2, mask_0f);
+            let hi2 = _mm_and_si128(_mm_srli_epi16(raw2, 4), mask_0f);
+            let act_lo2 = _mm512_loadu_ps(act.as_ptr().add(32));
+            let act_hi2 = _mm512_loadu_ps(act.as_ptr().add(128 + 32));
+            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo2)), act_lo2, sum_q_vec0);
+            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo2);
+            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi2)), act_hi2, sum_q_vec1);
+            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi2);
 
-            let f32_q1_0 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi_nibbles0));
-            let act1_0 = _mm512_loadu_ps(act.as_ptr().add(base_act0 + 128));
-            sum_q_vec0 = _mm512_fmadd_ps(f32_q1_0, act1_0, sum_q_vec0);
-            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act1_0);
-
-            // Iteration i + 1
-            let base_byte1 = (i + 1) * 16;
-            let base_act1 = (i + 1) * 16;
-
-            let raw1 = _mm_loadu_si128(qs.as_ptr().add(base_byte1).cast());
-            let lo_nibbles1 = _mm_and_si128(raw1, mask_0f);
-            let hi_shifted1 = _mm_srli_epi16(raw1, 4);
-            let hi_nibbles1 = _mm_and_si128(hi_shifted1, mask_0f);
-
-            let f32_q0_1 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo_nibbles1));
-            let act0_1 = _mm512_loadu_ps(act.as_ptr().add(base_act1));
-            sum_q_vec1 = _mm512_fmadd_ps(f32_q0_1, act0_1, sum_q_vec1);
-            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act0_1);
-
-            let f32_q1_1 = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi_nibbles1));
-            let act1_1 = _mm512_loadu_ps(act.as_ptr().add(base_act1 + 128));
-            sum_q_vec1 = _mm512_fmadd_ps(f32_q1_1, act1_1, sum_q_vec1);
-            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act1_1);
+            // Block 3
+            let raw3 = _mm_loadu_si128(qs.as_ptr().add(48).cast());
+            let lo3 = _mm_and_si128(raw3, mask_0f);
+            let hi3 = _mm_and_si128(_mm_srli_epi16(raw3, 4), mask_0f);
+            let act_lo3 = _mm512_loadu_ps(act.as_ptr().add(48));
+            let act_hi3 = _mm512_loadu_ps(act.as_ptr().add(128 + 48));
+            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo3)), act_lo3, sum_q_vec2);
+            sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo3);
+            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi3)), act_hi3, sum_q_vec3);
+            sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi3);
         }
 
-        let sum_q_vec = _mm512_add_ps(sum_q_vec0, sum_q_vec1);
-        let sum_act_vec = _mm512_add_ps(sum_act_vec0, sum_act_vec1);
+        // Pass 2: i = 4, 5, 6, 7 (remaining 64 bytes -> 128 activations)
+        {
+            // Block 4
+            let raw4 = _mm_loadu_si128(qs.as_ptr().add(64).cast());
+            let lo4 = _mm_and_si128(raw4, mask_0f);
+            let hi4 = _mm_and_si128(_mm_srli_epi16(raw4, 4), mask_0f);
+            let act_lo4 = _mm512_loadu_ps(act.as_ptr().add(64));
+            let act_hi4 = _mm512_loadu_ps(act.as_ptr().add(128 + 64));
+            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo4)), act_lo4, sum_q_vec0);
+            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo4);
+            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi4)), act_hi4, sum_q_vec1);
+            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi4);
+
+            // Block 5
+            let raw5 = _mm_loadu_si128(qs.as_ptr().add(80).cast());
+            let lo5 = _mm_and_si128(raw5, mask_0f);
+            let hi5 = _mm_and_si128(_mm_srli_epi16(raw5, 4), mask_0f);
+            let act_lo5 = _mm512_loadu_ps(act.as_ptr().add(80));
+            let act_hi5 = _mm512_loadu_ps(act.as_ptr().add(128 + 80));
+            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo5)), act_lo5, sum_q_vec2);
+            sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo5);
+            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi5)), act_hi5, sum_q_vec3);
+            sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi5);
+
+            // Block 6
+            let raw6 = _mm_loadu_si128(qs.as_ptr().add(96).cast());
+            let lo6 = _mm_and_si128(raw6, mask_0f);
+            let hi6 = _mm_and_si128(_mm_srli_epi16(raw6, 4), mask_0f);
+            let act_lo6 = _mm512_loadu_ps(act.as_ptr().add(96));
+            let act_hi6 = _mm512_loadu_ps(act.as_ptr().add(128 + 96));
+            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo6)), act_lo6, sum_q_vec0);
+            sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo6);
+            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi6)), act_hi6, sum_q_vec1);
+            sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi6);
+
+            // Block 7
+            let raw7 = _mm_loadu_si128(qs.as_ptr().add(112).cast());
+            let lo7 = _mm_and_si128(raw7, mask_0f);
+            let hi7 = _mm_and_si128(_mm_srli_epi16(raw7, 4), mask_0f);
+            let act_lo7 = _mm512_loadu_ps(act.as_ptr().add(112));
+            let act_hi7 = _mm512_loadu_ps(act.as_ptr().add(128 + 112));
+            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo7)), act_lo7, sum_q_vec2);
+            sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo7);
+            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi7)), act_hi7, sum_q_vec3);
+            sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi7);
+        }
+
+        let sum_q_vec = _mm512_add_ps(
+            _mm512_add_ps(sum_q_vec0, sum_q_vec1),
+            _mm512_add_ps(sum_q_vec2, sum_q_vec3),
+        );
+        let sum_act_vec = _mm512_add_ps(
+            _mm512_add_ps(sum_act_vec0, sum_act_vec1),
+            _mm512_add_ps(sum_act_vec2, sum_act_vec3),
+        );
 
         let mut buf_q = [0.0f32; 16];
         let mut buf_act = [0.0f32; 16];
@@ -1255,19 +1323,96 @@ pub fn gemv_q4_k(
         acc
     };
 
-    if m <= 8 {
+    if m <= 32 {
         for row in 0..m {
             output[row] = compute_row(row);
         }
     } else {
-        let chunk_size = (m / 32).clamp(8, 32);
+        // Divide work across 8 physical Zen 4 cores with sufficiently coarse-grained chunks (>= 64 rows)
+        let num_threads = rayon::current_num_threads().max(1);
+        let chunk_size = (m / num_threads).max(64);
         output[..m]
             .par_chunks_mut(chunk_size)
             .enumerate()
             .for_each(|(chunk_idx, out_chunk)| {
                 let base_row = chunk_idx * chunk_size;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    *out_val = compute_row(base_row + i);
+                let chunk_len = out_chunk.len();
+                let mut i = 0;
+
+                // Process in 4-row tiles to reuse the activation vector in L1/L2 and issue prefetch hints
+                while i + 4 <= chunk_len {
+                    let r0 = base_row + i;
+                    let r1 = r0 + 1;
+                    let r2 = r0 + 2;
+                    let r3 = r0 + 3;
+
+                    let off0 = r0 * blocks_per_row;
+                    let off1 = r1 * blocks_per_row;
+                    let off2 = r2 * blocks_per_row;
+                    let off3 = r3 * blocks_per_row;
+
+                    let mut acc0 = 0.0f32;
+                    let mut acc1 = 0.0f32;
+                    let mut acc2 = 0.0f32;
+                    let mut acc3 = 0.0f32;
+
+                    for b in 0..blocks_per_row {
+                        // Prefetch next blocks into cache
+                        #[cfg(target_arch = "x86_64")]
+                        if b + 1 < blocks_per_row {
+                            unsafe {
+                                use core::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+                                _mm_prefetch(matrix.as_ptr().add(off0 + b + 1).cast(), _MM_HINT_T0);
+                                _mm_prefetch(matrix.as_ptr().add(off1 + b + 1).cast(), _MM_HINT_T0);
+                                _mm_prefetch(matrix.as_ptr().add(off2 + b + 1).cast(), _MM_HINT_T0);
+                                _mm_prefetch(matrix.as_ptr().add(off3 + b + 1).cast(), _MM_HINT_T0);
+                            }
+                        }
+
+                        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+                            .try_into()
+                            .expect("slice length 256");
+
+                        let blk0 = &matrix[off0 + b];
+                        let blk1 = &matrix[off1 + b];
+                        let blk2 = &matrix[off2 + b];
+                        let blk3 = &matrix[off3 + b];
+
+                        #[cfg(target_arch = "x86_64")]
+                        if use_avx512 {
+                            unsafe {
+                                acc0 += dot_q4_k_avx512(&blk0.qs, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
+                                acc1 += dot_q4_k_avx512(&blk1.qs, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
+                                acc2 += dot_q4_k_avx512(&blk2.qs, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
+                                acc3 += dot_q4_k_avx512(&blk3.qs, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
+                            }
+                            continue;
+                        } else if use_avx2 {
+                            unsafe {
+                                acc0 += dot_q4_k_avx2(&blk0.qs, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
+                                acc1 += dot_q4_k_avx2(&blk1.qs, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
+                                acc2 += dot_q4_k_avx2(&blk2.qs, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
+                                acc3 += dot_q4_k_avx2(&blk3.qs, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
+                            }
+                            continue;
+                        }
+
+                        acc0 += dot_q4_k_portable(&blk0.qs, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
+                        acc1 += dot_q4_k_portable(&blk1.qs, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
+                        acc2 += dot_q4_k_portable(&blk2.qs, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
+                        acc3 += dot_q4_k_portable(&blk3.qs, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
+                    }
+
+                    out_chunk[i] = acc0;
+                    out_chunk[i + 1] = acc1;
+                    out_chunk[i + 2] = acc2;
+                    out_chunk[i + 3] = acc3;
+                    i += 4;
+                }
+
+                while i < chunk_len {
+                    out_chunk[i] = compute_row(base_row + i);
+                    i += 1;
                 }
             });
     }

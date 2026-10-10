@@ -1180,16 +1180,10 @@ impl Llama3Model {
             eps,
         );
 
-        // Q, K, V Projections via multithreaded SIMD GEMV
-        rayon::join(
-            || layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q),
-            || {
-                rayon::join(
-                    || layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k),
-                    || layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v),
-                );
-            },
-        );
+        // Q, K, V Projections via SIMD GEMV
+        layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q);
+        layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k);
+        layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v);
 
         // RoPE Rotary Embedding
         for head_idx in 0..self.config.num_heads {
@@ -1255,18 +1249,12 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        rayon::join(
-            || {
-                layer
-                    .gate_proj
-                    .gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
-            },
-            || {
-                layer
-                    .up_proj
-                    .gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
-            },
-        );
+        layer
+            .gate_proj
+            .gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
+        layer
+            .up_proj
+            .gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
 
         // SwiGLU: down_proj(silu(gate) * up)
         for i in 0..inter_dim {
