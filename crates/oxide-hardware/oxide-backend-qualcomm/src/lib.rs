@@ -124,6 +124,10 @@ impl HardwareBackend for QualcommBackend {
     type Event = QualcommEventHandle;
 
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
+        if !driver::is_qnn_available() {
+            return Err(oxide_core::error::EngineError::DeviceNotFound);
+        }
+
         let fence_id = self.htp_stream.dispatch_htp_graph();
         let slot = cmd.slot_idx as usize;
         let mut logits = [0.0f32; 1];

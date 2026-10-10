@@ -127,6 +127,10 @@ impl HardwareBackend for MetalBackend {
     type Event = MetalEventHandle;
 
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
+        if !driver::is_metal_available() {
+            return Err(oxide_core::error::EngineError::DeviceNotFound);
+        }
+
         let cmd_id = self.command_stream.dispatch_simdgroup_encode();
         let slot = cmd.slot_idx as usize;
         let _ = MetalLlmKernels::dispatch_metal_step_decode(

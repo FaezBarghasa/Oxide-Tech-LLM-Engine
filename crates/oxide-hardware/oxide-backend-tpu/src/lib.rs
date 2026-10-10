@@ -120,6 +120,10 @@ impl HardwareBackend for TpuBackend {
             event_id: self.current_event_id,
         };
 
+        if !is_edgetpu_available() && !is_cloud_tpu_available() {
+            return Err(oxide_core::error::EngineError::DeviceNotFound);
+        }
+
         let slot = cmd.slot_idx as usize;
         TpuLlmKernels::dispatch_tpu_step_decode(
             cmd.input_token,

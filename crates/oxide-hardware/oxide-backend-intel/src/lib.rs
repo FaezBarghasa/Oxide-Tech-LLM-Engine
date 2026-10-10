@@ -119,6 +119,10 @@ impl HardwareBackend for IntelBackend {
     type Event = IntelEventHandle;
 
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
+        if !driver::is_level_zero_available() {
+            return Err(oxide_core::error::EngineError::DeviceNotFound);
+        }
+
         self.current_event_id += 1;
         let event = IntelEventHandle {
             event_id: self.current_event_id,

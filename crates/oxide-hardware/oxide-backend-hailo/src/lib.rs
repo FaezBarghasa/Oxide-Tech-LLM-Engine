@@ -127,6 +127,10 @@ impl HardwareBackend for HailoBackend {
     type Event = HailoEventHandle;
 
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
+        if !driver::is_hailo_available() {
+            return Err(oxide_core::error::EngineError::DeviceNotFound);
+        }
+
         let event_id = self.vstream.dispatch_vstream();
         let slot = cmd.slot_idx as usize;
         let _ =

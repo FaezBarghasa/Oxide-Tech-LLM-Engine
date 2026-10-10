@@ -126,6 +126,10 @@ impl HardwareBackend for RknnBackend {
     type Event = RknnEventHandle;
 
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
+        if !driver::is_rknn_available() {
+            return Err(oxide_core::error::EngineError::DeviceNotFound);
+        }
+
         let task_id = self.npu_stream.dispatch_rknn_core();
         let slot = cmd.slot_idx as usize;
         let activations = [1u8; 32];
