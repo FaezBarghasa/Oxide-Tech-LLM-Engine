@@ -139,6 +139,10 @@ impl HardwareBackend for RocmBackend {
     type Event = HipEventHandle;
 
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
+        if !driver::is_hip_available() {
+            return Err(oxide_core::error::EngineError::DeviceNotFound);
+        }
+
         self.current_event_id += 1;
         let event = HipEventHandle {
             event_id: self.current_event_id,
