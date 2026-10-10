@@ -565,11 +565,12 @@ fn dot_q4_k_portable(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
+#[allow(clippy::too_many_lines)]
 unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     use core::arch::x86_64::{
-        _mm_and_si128, _mm_loadu_si128, _mm_prefetch, _mm_set1_epi8, _mm_srli_epi16, _mm512_add_ps,
-        _mm512_cvtepi8_epi32, _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps,
-        _mm512_setzero_ps, _mm512_storeu_ps, _MM_HINT_T0,
+        _MM_HINT_T0, _mm_and_si128, _mm_loadu_si128, _mm_prefetch, _mm_set1_epi8, _mm_srli_epi16,
+        _mm512_add_ps, _mm512_cvtepi8_epi32, _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps,
+        _mm512_setzero_ps, _mm512_storeu_ps,
     };
 
     // SAFETY: Verified AVX-512F / AVX-512BW support and valid buffers.
@@ -596,9 +597,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi0 = _mm_and_si128(_mm_srli_epi16(raw0, 4), mask_0f);
             let act_lo0 = _mm512_loadu_ps(act.as_ptr());
             let act_hi0 = _mm512_loadu_ps(act.as_ptr().add(128));
-            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo0)), act_lo0, sum_q_vec0);
+            sum_q_vec0 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo0)),
+                act_lo0,
+                sum_q_vec0,
+            );
             sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo0);
-            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi0)), act_hi0, sum_q_vec1);
+            sum_q_vec1 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi0)),
+                act_hi0,
+                sum_q_vec1,
+            );
             sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi0);
 
             // Block 1
@@ -607,9 +616,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi1 = _mm_and_si128(_mm_srli_epi16(raw1, 4), mask_0f);
             let act_lo1 = _mm512_loadu_ps(act.as_ptr().add(16));
             let act_hi1 = _mm512_loadu_ps(act.as_ptr().add(128 + 16));
-            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo1)), act_lo1, sum_q_vec2);
+            sum_q_vec2 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo1)),
+                act_lo1,
+                sum_q_vec2,
+            );
             sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo1);
-            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi1)), act_hi1, sum_q_vec3);
+            sum_q_vec3 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi1)),
+                act_hi1,
+                sum_q_vec3,
+            );
             sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi1);
 
             // Block 2
@@ -618,9 +635,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi2 = _mm_and_si128(_mm_srli_epi16(raw2, 4), mask_0f);
             let act_lo2 = _mm512_loadu_ps(act.as_ptr().add(32));
             let act_hi2 = _mm512_loadu_ps(act.as_ptr().add(128 + 32));
-            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo2)), act_lo2, sum_q_vec0);
+            sum_q_vec0 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo2)),
+                act_lo2,
+                sum_q_vec0,
+            );
             sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo2);
-            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi2)), act_hi2, sum_q_vec1);
+            sum_q_vec1 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi2)),
+                act_hi2,
+                sum_q_vec1,
+            );
             sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi2);
 
             // Block 3
@@ -629,9 +654,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi3 = _mm_and_si128(_mm_srli_epi16(raw3, 4), mask_0f);
             let act_lo3 = _mm512_loadu_ps(act.as_ptr().add(48));
             let act_hi3 = _mm512_loadu_ps(act.as_ptr().add(128 + 48));
-            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo3)), act_lo3, sum_q_vec2);
+            sum_q_vec2 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo3)),
+                act_lo3,
+                sum_q_vec2,
+            );
             sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo3);
-            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi3)), act_hi3, sum_q_vec3);
+            sum_q_vec3 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi3)),
+                act_hi3,
+                sum_q_vec3,
+            );
             sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi3);
         }
 
@@ -643,9 +676,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi4 = _mm_and_si128(_mm_srli_epi16(raw4, 4), mask_0f);
             let act_lo4 = _mm512_loadu_ps(act.as_ptr().add(64));
             let act_hi4 = _mm512_loadu_ps(act.as_ptr().add(128 + 64));
-            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo4)), act_lo4, sum_q_vec0);
+            sum_q_vec0 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo4)),
+                act_lo4,
+                sum_q_vec0,
+            );
             sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo4);
-            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi4)), act_hi4, sum_q_vec1);
+            sum_q_vec1 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi4)),
+                act_hi4,
+                sum_q_vec1,
+            );
             sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi4);
 
             // Block 5
@@ -654,9 +695,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi5 = _mm_and_si128(_mm_srli_epi16(raw5, 4), mask_0f);
             let act_lo5 = _mm512_loadu_ps(act.as_ptr().add(80));
             let act_hi5 = _mm512_loadu_ps(act.as_ptr().add(128 + 80));
-            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo5)), act_lo5, sum_q_vec2);
+            sum_q_vec2 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo5)),
+                act_lo5,
+                sum_q_vec2,
+            );
             sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo5);
-            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi5)), act_hi5, sum_q_vec3);
+            sum_q_vec3 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi5)),
+                act_hi5,
+                sum_q_vec3,
+            );
             sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi5);
 
             // Block 6
@@ -665,9 +714,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi6 = _mm_and_si128(_mm_srli_epi16(raw6, 4), mask_0f);
             let act_lo6 = _mm512_loadu_ps(act.as_ptr().add(96));
             let act_hi6 = _mm512_loadu_ps(act.as_ptr().add(128 + 96));
-            sum_q_vec0 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo6)), act_lo6, sum_q_vec0);
+            sum_q_vec0 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo6)),
+                act_lo6,
+                sum_q_vec0,
+            );
             sum_act_vec0 = _mm512_add_ps(sum_act_vec0, act_lo6);
-            sum_q_vec1 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi6)), act_hi6, sum_q_vec1);
+            sum_q_vec1 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi6)),
+                act_hi6,
+                sum_q_vec1,
+            );
             sum_act_vec1 = _mm512_add_ps(sum_act_vec1, act_hi6);
 
             // Block 7
@@ -676,9 +733,17 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
             let hi7 = _mm_and_si128(_mm_srli_epi16(raw7, 4), mask_0f);
             let act_lo7 = _mm512_loadu_ps(act.as_ptr().add(112));
             let act_hi7 = _mm512_loadu_ps(act.as_ptr().add(128 + 112));
-            sum_q_vec2 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo7)), act_lo7, sum_q_vec2);
+            sum_q_vec2 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(lo7)),
+                act_lo7,
+                sum_q_vec2,
+            );
             sum_act_vec2 = _mm512_add_ps(sum_act_vec2, act_lo7);
-            sum_q_vec3 = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi7)), act_hi7, sum_q_vec3);
+            sum_q_vec3 = _mm512_fmadd_ps(
+                _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(hi7)),
+                act_hi7,
+                sum_q_vec3,
+            );
             sum_act_vec3 = _mm512_add_ps(sum_act_vec3, act_hi7);
         }
 
@@ -1273,6 +1338,7 @@ pub fn gemv_q4_0(
 }
 
 /// Multithreaded Q4_K Matrix-Vector Multiplication across all CPU cores and threads.
+#[allow(clippy::too_many_lines)]
 pub fn gemv_q4_k(
     matrix: &[crate::gguf_quants::BlockQ4_K],
     vector: &[f32],
@@ -1360,8 +1426,9 @@ pub fn gemv_q4_k(
                         // Prefetch next blocks into cache
                         #[cfg(target_arch = "x86_64")]
                         if b + 1 < blocks_per_row {
+                            // SAFETY: Address calculation within matrix slice bounds verified by b + 1 < blocks_per_row.
                             unsafe {
-                                use core::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+                                use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
                                 _mm_prefetch(matrix.as_ptr().add(off0 + b + 1).cast(), _MM_HINT_T0);
                                 _mm_prefetch(matrix.as_ptr().add(off1 + b + 1).cast(), _MM_HINT_T0);
                                 _mm_prefetch(matrix.as_ptr().add(off2 + b + 1).cast(), _MM_HINT_T0);
@@ -1380,27 +1447,89 @@ pub fn gemv_q4_k(
 
                         #[cfg(target_arch = "x86_64")]
                         if use_avx512 {
+                            // SAFETY: Target features avx512f and avx512bw checked dynamically via is_x86_feature_detected!.
                             unsafe {
-                                acc0 += dot_q4_k_avx512(&blk0.qs, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
-                                acc1 += dot_q4_k_avx512(&blk1.qs, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
-                                acc2 += dot_q4_k_avx512(&blk2.qs, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
-                                acc3 += dot_q4_k_avx512(&blk3.qs, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
+                                acc0 += dot_q4_k_avx512(
+                                    &blk0.qs,
+                                    act_chunk,
+                                    blk0.d.to_f32(),
+                                    blk0.dmin.to_f32(),
+                                );
+                                acc1 += dot_q4_k_avx512(
+                                    &blk1.qs,
+                                    act_chunk,
+                                    blk1.d.to_f32(),
+                                    blk1.dmin.to_f32(),
+                                );
+                                acc2 += dot_q4_k_avx512(
+                                    &blk2.qs,
+                                    act_chunk,
+                                    blk2.d.to_f32(),
+                                    blk2.dmin.to_f32(),
+                                );
+                                acc3 += dot_q4_k_avx512(
+                                    &blk3.qs,
+                                    act_chunk,
+                                    blk3.d.to_f32(),
+                                    blk3.dmin.to_f32(),
+                                );
                             }
                             continue;
                         } else if use_avx2 {
+                            // SAFETY: Target features avx2 and fma checked dynamically via is_x86_feature_detected!.
                             unsafe {
-                                acc0 += dot_q4_k_avx2(&blk0.qs, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
-                                acc1 += dot_q4_k_avx2(&blk1.qs, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
-                                acc2 += dot_q4_k_avx2(&blk2.qs, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
-                                acc3 += dot_q4_k_avx2(&blk3.qs, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
+                                acc0 += dot_q4_k_avx2(
+                                    &blk0.qs,
+                                    act_chunk,
+                                    blk0.d.to_f32(),
+                                    blk0.dmin.to_f32(),
+                                );
+                                acc1 += dot_q4_k_avx2(
+                                    &blk1.qs,
+                                    act_chunk,
+                                    blk1.d.to_f32(),
+                                    blk1.dmin.to_f32(),
+                                );
+                                acc2 += dot_q4_k_avx2(
+                                    &blk2.qs,
+                                    act_chunk,
+                                    blk2.d.to_f32(),
+                                    blk2.dmin.to_f32(),
+                                );
+                                acc3 += dot_q4_k_avx2(
+                                    &blk3.qs,
+                                    act_chunk,
+                                    blk3.d.to_f32(),
+                                    blk3.dmin.to_f32(),
+                                );
                             }
                             continue;
                         }
 
-                        acc0 += dot_q4_k_portable(&blk0.qs, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
-                        acc1 += dot_q4_k_portable(&blk1.qs, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
-                        acc2 += dot_q4_k_portable(&blk2.qs, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
-                        acc3 += dot_q4_k_portable(&blk3.qs, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
+                        acc0 += dot_q4_k_portable(
+                            &blk0.qs,
+                            act_chunk,
+                            blk0.d.to_f32(),
+                            blk0.dmin.to_f32(),
+                        );
+                        acc1 += dot_q4_k_portable(
+                            &blk1.qs,
+                            act_chunk,
+                            blk1.d.to_f32(),
+                            blk1.dmin.to_f32(),
+                        );
+                        acc2 += dot_q4_k_portable(
+                            &blk2.qs,
+                            act_chunk,
+                            blk2.d.to_f32(),
+                            blk2.dmin.to_f32(),
+                        );
+                        acc3 += dot_q4_k_portable(
+                            &blk3.qs,
+                            act_chunk,
+                            blk3.d.to_f32(),
+                            blk3.dmin.to_f32(),
+                        );
                     }
 
                     out_chunk[i] = acc0;

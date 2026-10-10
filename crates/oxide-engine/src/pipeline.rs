@@ -308,7 +308,7 @@ impl SpecializedPipeline {
                             model.token_embedding.len() * std::mem::size_of::<f32>(),
                         )
                     };
-                    let _ = backend.configure_model(
+                    backend.configure_model(
                         model.config.hidden_dim,
                         model.config.vocab_size,
                         model.config.num_heads,
@@ -317,9 +317,9 @@ impl SpecializedPipeline {
                         &model.output_norm,
                         model.lm_head.as_raw_bytes(),
                         token_embd_bytes,
-                    );
+                    )?;
                     for layer in &model.layers {
-                        let _ = backend.add_layer_weights(
+                        backend.add_layer_weights(
                             layer.q_proj.as_raw_bytes(),
                             layer.k_proj.as_raw_bytes(),
                             layer.v_proj.as_raw_bytes(),
@@ -336,7 +336,12 @@ impl SpecializedPipeline {
                             layer.gate_proj.rows(),
                             layer.gate_proj.cols(),
                             layer.q_proj.quant_type(),
-                        );
+                        )?;
+                    }
+                    if backend.layers.is_empty() {
+                        return Err(oxide_core::error::EngineError::BackendError(
+                            "Failed to allocate CUDA layer weights in device VRAM".to_string(),
+                        ));
                     }
                     return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
                 }

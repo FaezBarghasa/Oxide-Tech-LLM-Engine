@@ -644,12 +644,17 @@ impl HardwareBackend for CudaBackend {
                     self.host_token_buffer[slot] = best_tok;
                 }
             }
+        } else if self.hidden_dim > 0 {
+            return Err(oxide_core::error::EngineError::BackendError(
+                "Physical CUDA transformer layers not loaded into GPU VRAM for execution"
+                    .to_string(),
+            ));
         } else if let (Some(d_act), Some(d_norm), Some(d_w)) = (
             &mut self.d_activations,
             &mut self.d_norm_out,
             &self.d_weights,
         ) {
-            // Harness verification path
+            // Standalone hardware verification test harness path (hidden_dim == 0)
             let mut activations = [0.0f32; 128];
             activations[0] = (cmd.input_token as f32) * 0.01;
             activations[1] = 1.0;

@@ -111,7 +111,7 @@ fn test_tpu_backend_dispatch_and_ici_comm() {
             let token = backend.read_sampled_token_host(3);
             assert_eq!(token, 101);
         }
-        Err(oxide_core::error::EngineError::DeviceNotFound { .. }) => {
+        Err(oxide_core::error::EngineError::DeviceNotFound) => {
             // Clean typed error when physical Google Cloud TPU is not present
         }
         Err(e) => panic!("Unexpected error: {:?}", e),

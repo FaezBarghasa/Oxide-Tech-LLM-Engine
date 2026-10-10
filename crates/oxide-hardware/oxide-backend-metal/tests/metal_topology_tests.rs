@@ -57,7 +57,7 @@ fn test_metal_backend_dispatch_and_sync() {
             assert_eq!(token, 43);
             assert!(backend.synchronize().is_ok());
         }
-        Err(oxide_core::error::EngineError::DeviceNotFound { .. }) => {
+        Err(oxide_core::error::EngineError::DeviceNotFound) => {
             // Clean typed error when physical Apple Silicon Metal is not present
         }
         Err(e) => panic!("Unexpected error: {:?}", e),

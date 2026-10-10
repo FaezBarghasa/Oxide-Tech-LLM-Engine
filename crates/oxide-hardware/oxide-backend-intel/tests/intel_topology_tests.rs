@@ -102,7 +102,7 @@ fn test_intel_backend_dispatch_and_level_zero_comm() {
             let token = backend.read_sampled_token_host(4);
             assert_eq!(token, 201);
         }
-        Err(oxide_core::error::EngineError::DeviceNotFound { .. }) => {
+        Err(oxide_core::error::EngineError::DeviceNotFound) => {
             // Clean typed error when physical Intel OneAPI Level-Zero GPU is not present
         }
         Err(e) => panic!("Unexpected error: {:?}", e),

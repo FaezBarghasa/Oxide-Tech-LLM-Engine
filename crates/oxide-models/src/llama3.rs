@@ -301,6 +301,33 @@ impl QuantizedTensor {
         }
     }
 
+    /// Fused 3-way projection (e.g. Q, K, V) over the same normalized input vector.
+    pub fn fused_gemv_3way(
+        t1: &Self,
+        out1: &mut [f32],
+        t2: &Self,
+        out2: &mut [f32],
+        t3: &Self,
+        out3: &mut [f32],
+        vector: &[f32],
+    ) {
+        rayon::join(
+            || t1.gemv(vector, out1),
+            || rayon::join(|| t2.gemv(vector, out2), || t3.gemv(vector, out3)),
+        );
+    }
+
+    /// Fused 2-way projection (e.g. Gate and Up) over the same normalized input vector.
+    pub fn fused_gemv_2way(
+        t1: &Self,
+        out1: &mut [f32],
+        t2: &Self,
+        out2: &mut [f32],
+        vector: &[f32],
+    ) {
+        rayon::join(|| t1.gemv(vector, out1), || t2.gemv(vector, out2));
+    }
+
     #[must_use]
     pub fn as_raw_bytes(&self) -> &[u8] {
         match self {
@@ -1180,10 +1207,16 @@ impl Llama3Model {
             eps,
         );
 
-        // Q, K, V Projections via SIMD GEMV
-        layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q);
-        layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k);
-        layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v);
+        // Fused Q, K, V Projections via SIMD GEMV
+        QuantizedTensor::fused_gemv_3way(
+            &layer.q_proj,
+            &mut scratch.q,
+            &layer.k_proj,
+            &mut scratch.k,
+            &layer.v_proj,
+            &mut scratch.v,
+            &scratch.norm_hidden,
+        );
 
         // RoPE Rotary Embedding
         for head_idx in 0..self.config.num_heads {
@@ -1249,12 +1282,13 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        layer
-            .gate_proj
-            .gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
-        layer
-            .up_proj
-            .gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
+        QuantizedTensor::fused_gemv_2way(
+            &layer.gate_proj,
+            &mut scratch.gate,
+            &layer.up_proj,
+            &mut scratch.up,
+            &scratch.ffn_norm_hidden,
+        );
 
         // SwiGLU: down_proj(silu(gate) * up)
         for i in 0..inter_dim {
@@ -1299,10 +1333,16 @@ impl Llama3Model {
             eps,
         );
 
-        // Q, K, V Projections via SIMD GEMV
-        layer.q_proj.gemv(&scratch.norm_hidden, &mut scratch.q);
-        layer.k_proj.gemv(&scratch.norm_hidden, &mut scratch.k);
-        layer.v_proj.gemv(&scratch.norm_hidden, &mut scratch.v);
+        // Fused Q, K, V Projections via SIMD GEMV
+        QuantizedTensor::fused_gemv_3way(
+            &layer.q_proj,
+            &mut scratch.q,
+            &layer.k_proj,
+            &mut scratch.k,
+            &layer.v_proj,
+            &mut scratch.v,
+            &scratch.norm_hidden,
+        );
 
         // RoPE Rotary Embedding
         for head_idx in 0..self.config.num_heads {
@@ -1367,12 +1407,13 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        layer
-            .gate_proj
-            .gemv(&scratch.ffn_norm_hidden, &mut scratch.gate);
-        layer
-            .up_proj
-            .gemv(&scratch.ffn_norm_hidden, &mut scratch.up);
+        QuantizedTensor::fused_gemv_2way(
+            &layer.gate_proj,
+            &mut scratch.gate,
+            &layer.up_proj,
+            &mut scratch.up,
+            &scratch.ffn_norm_hidden,
+        );
 
         // SwiGLU: down_proj(silu(gate) * up)
         for i in 0..inter_dim {

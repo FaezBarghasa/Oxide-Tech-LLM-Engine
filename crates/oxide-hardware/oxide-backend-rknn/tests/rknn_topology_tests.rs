@@ -56,7 +56,7 @@ fn test_rknn_backend_dispatch_and_sync() {
             assert_eq!(token, 78);
             assert!(backend.synchronize().is_ok());
         }
-        Err(oxide_core::error::EngineError::DeviceNotFound { .. }) => {
+        Err(oxide_core::error::EngineError::DeviceNotFound) => {
             // Clean typed error when physical RKNN NPU is not present
         }
         Err(e) => panic!("Unexpected error: {:?}", e),
