@@ -78,7 +78,7 @@ pub enum SpecializedPipeline {
     Llama3Cpu(OxideEngine<CpuBackend, Llama3Config, NvFp4>),
     Llama3Dense {
         model: oxide_models::Llama3Model,
-        kv_cache: Vec<oxide_models::llama3::Llama3KvCacheLayer>,
+        kv_cache: std::collections::HashMap<u64, Vec<oxide_models::llama3::Llama3KvCacheLayer>>,
         seq_positions: std::collections::HashMap<u64, usize>,
         scratch: Box<oxide_models::llama3::Llama3ScratchBuffers>,
     },
@@ -86,7 +86,7 @@ pub enum SpecializedPipeline {
     /// Distributes transformer layers between Zen CPU AVX2 SIMD threads and RDNA integrated GPU compute units over coherent DDR5.
     Llama3AmdApuCpuIgpu {
         model: oxide_models::Llama3Model,
-        kv_cache: Vec<oxide_models::llama3::Llama3KvCacheLayer>,
+        kv_cache: std::collections::HashMap<u64, Vec<oxide_models::llama3::Llama3KvCacheLayer>>,
         seq_positions: std::collections::HashMap<u64, usize>,
         scratch: Box<oxide_models::llama3::Llama3ScratchBuffers>,
         topology: crate::hybrid::HybridDeviceTopology,
@@ -141,7 +141,12 @@ impl SpecializedPipeline {
                 scratch,
             } => {
                 let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
-                model.forward_step_with_scratch(cmd.input_token, *pos, kv_cache, scratch)?;
+                let seq_kv = kv_cache.entry(cmd.sequence_id).or_insert_with(|| {
+                    (0..model.config.num_layers)
+                        .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
+                        .collect()
+                });
+                model.forward_step_with_scratch(cmd.input_token, *pos, seq_kv, scratch)?;
                 *pos += 1;
                 let mut max_idx = 0;
                 let mut max_val = f32::NEG_INFINITY;
@@ -171,6 +176,11 @@ impl SpecializedPipeline {
                 topology,
             } => {
                 let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
+                let seq_kv = kv_cache.entry(cmd.sequence_id).or_insert_with(|| {
+                    (0..model.config.num_layers)
+                        .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
+                        .collect()
+                });
 
                 // 1. Token Embedding lookup on host DDR5
                 let h = model.config.hidden_dim;
@@ -190,7 +200,7 @@ impl SpecializedPipeline {
                         partition.start_layer,
                         partition.end_layer,
                         *pos,
-                        kv_cache,
+                        seq_kv,
                         scratch,
                     );
                 }
@@ -292,9 +302,6 @@ impl SpecializedPipeline {
         // 1. If explicit file path on disk (GGUF or SafeTensors)
         if path.exists() {
             let model = oxide_models::Llama3Model::from_file(path)?;
-            let kv_cache = (0..model.config.num_layers)
-                .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
-                .collect();
             let scratch = Box::new(model.create_scratch());
 
             let norm_backend = backend_name.to_ascii_lowercase().replace('-', "_");
@@ -394,7 +401,7 @@ impl SpecializedPipeline {
                 );
                 return Ok(Self::Llama3AmdApuCpuIgpu {
                     model,
-                    kv_cache,
+                    kv_cache: std::collections::HashMap::new(),
                     seq_positions: std::collections::HashMap::new(),
                     scratch,
                     topology,
@@ -403,7 +410,7 @@ impl SpecializedPipeline {
 
             return Ok(Self::Llama3Dense {
                 model,
-                kv_cache,
+                kv_cache: std::collections::HashMap::new(),
                 seq_positions: std::collections::HashMap::new(),
                 scratch,
             });
@@ -524,10 +531,6 @@ impl SpecializedPipeline {
             }
             _ => {}
         }
-
-        let kv_cache = (0..model.config.num_layers)
-            .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
-            .collect();
 
         let scratch = Box::new(model.create_scratch());
 
@@ -691,7 +694,7 @@ impl SpecializedPipeline {
         if let Some(topology) = maybe_topology {
             return Ok(Self::Llama3AmdApuCpuIgpu {
                 model,
-                kv_cache,
+                kv_cache: std::collections::HashMap::new(),
                 seq_positions: std::collections::HashMap::new(),
                 scratch,
                 topology,
@@ -700,7 +703,7 @@ impl SpecializedPipeline {
 
         Ok(Self::Llama3Dense {
             model,
-            kv_cache,
+            kv_cache: std::collections::HashMap::new(),
             seq_positions: std::collections::HashMap::new(),
             scratch,
         })

@@ -30,7 +30,7 @@ impl MockEngineContext {
         let scratch = model.create_scratch();
         let pipeline = SpecializedPipeline::Llama3Dense {
             model: (*model).clone(),
-            kv_cache: kv_cache_layers,
+            kv_cache: std::collections::HashMap::new(),
             seq_positions: std::collections::HashMap::new(),
             scratch: Box::new(scratch),
         };

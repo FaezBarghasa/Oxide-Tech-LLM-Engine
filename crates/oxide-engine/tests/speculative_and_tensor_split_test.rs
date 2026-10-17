@@ -357,18 +357,14 @@ fn test_continuous_batching_slot_manager() {
 fn test_specialized_pipeline_llama3_dense_execution() {
     use oxide_core::worker::StepCommand;
     use oxide_engine::SpecializedPipeline;
-    use oxide_models::llama3::{Llama3Config, Llama3KvCacheLayer, Llama3Model};
+    use oxide_models::llama3::{Llama3Config, Llama3Model};
 
     let cfg = Llama3Config::tiny_test_config();
     let model = Llama3Model::new(cfg);
-    let kv_cache = (0..cfg.num_layers)
-        .map(|_| Llama3KvCacheLayer::default())
-        .collect();
-
     let scratch = model.create_scratch();
     let mut pipeline = SpecializedPipeline::Llama3Dense {
         model,
-        kv_cache,
+        kv_cache: std::collections::HashMap::new(),
         seq_positions: std::collections::HashMap::new(),
         scratch: Box::new(scratch),
     };

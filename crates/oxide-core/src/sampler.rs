@@ -34,6 +34,7 @@ pub struct SamplingConfig {
     pub newline_penalty: f32,
     pub logit_biases: HashMap<u32, f32>,
     pub banned_tokens: HashSet<u32>,
+    pub seed: Option<u64>,
 }
 
 impl Default for SamplingConfig {
@@ -58,6 +59,7 @@ impl Default for SamplingConfig {
             newline_penalty: 0.5,
             logit_biases: HashMap::new(),
             banned_tokens: HashSet::new(),
+            seed: None,
         }
     }
 }
@@ -71,11 +73,22 @@ pub enum MirostatMode {
     V2,
 }
 
-/// State maintained across generation steps for adaptive samplers (Mirostat, DRY).
-#[derive(Debug, Clone, Default)]
+/// State maintained across generation steps for adaptive samplers (Mirostat, DRY, PRNG).
+#[derive(Debug, Clone)]
 pub struct SamplerState {
     pub mirostat_mu: f32,
     pub generated_tokens: Vec<u32>,
+    pub rng_state: u64,
+}
+
+impl Default for SamplerState {
+    fn default() -> Self {
+        Self {
+            mirostat_mu: 10.0,
+            generated_tokens: Vec::new(),
+            rng_state: 0x853c_49e6_748f_ea9b,
+        }
+    }
 }
 
 impl SamplerState {
@@ -84,7 +97,35 @@ impl SamplerState {
         Self {
             mirostat_mu: 2.0 * target_tau,
             generated_tokens: Vec::new(),
+            rng_state: 0x853c_49e6_748f_ea9b,
         }
+    }
+
+    #[must_use]
+    pub fn new_with_seed(target_tau: f32, seed: u64) -> Self {
+        let rng_state = if seed == 0 { 0x853c_49e6_748f_ea9b } else { seed };
+        Self {
+            mirostat_mu: 2.0 * target_tau,
+            generated_tokens: Vec::new(),
+            rng_state,
+        }
+    }
+
+    #[inline(always)]
+    pub fn next_u64(&mut self) -> u64 {
+        let mut x = self.rng_state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng_state = x;
+        x
+    }
+
+    /// Generates uniform float in [0.0, 1.0)
+    #[inline(always)]
+    pub fn next_f32(&mut self) -> f32 {
+        let val = (self.next_u64() >> 40) as u32;
+        (val as f32) / 16_777_216.0f32
     }
 
     pub fn record_token(&mut self, token: u32) {
@@ -226,8 +267,37 @@ impl AcademicSamplerEngine {
             candidates.truncate(cut);
         }
 
-        // Renormalize and pick top / multinomial
-        let picked = candidates.first().map_or(0, |c| c.0);
+        // Renormalize remaining probabilities
+        let total_prob: f32 = candidates.iter().map(|c| c.1).sum();
+        let inv_total = if total_prob > 0.0 { 1.0 / total_prob } else { 1.0 };
+        for c in &mut candidates {
+            c.1 *= inv_total;
+        }
+
+        // If temperature is effectively 0 (greedy), pick top-1 candidate directly
+        let picked = if self.config.temperature <= 1e-6 {
+            candidates.first().map_or(0, |c| c.0)
+        } else {
+            // If seed is explicitly provided in config, seed the state once if it matches initial default
+            if let Some(s) = self.config.seed
+                && state.rng_state == 0x853c_49e6_748f_ea9b
+            {
+                state.rng_state = if s == 0 { 0x853c_49e6_748f_ea9b } else { s };
+            }
+
+            let r = state.next_f32();
+            let mut acc = 0.0f32;
+            let mut selected = candidates.first().map_or(0, |c| c.0);
+            for c in &candidates {
+                acc += c.1;
+                if r <= acc {
+                    selected = c.0;
+                    break;
+                }
+            }
+            selected
+        };
+
         state.record_token(picked);
         Ok(picked)
     }

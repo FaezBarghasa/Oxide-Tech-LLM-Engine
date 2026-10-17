@@ -131,3 +131,64 @@ fn test_penalize_newline() {
     let picked = sampler.sample_token(&mut logits, &mut state, 1).unwrap();
     assert_ne!(picked, 1); // Token 1 (newline) was penalized
 }
+
+#[test]
+fn test_multinomial_seed_determinism_and_temperature() {
+    // 1. Temperature = 0 gives strict greedy argmax
+    let mut logits_greedy = vec![1.0, 2.0, 8.0, 3.0];
+    let config_greedy = SamplingConfig {
+        temperature: 0.0,
+        ..Default::default()
+    };
+    let sampler_greedy = AcademicSamplerEngine::new(config_greedy);
+    let mut state_greedy = SamplerState::new(5.0);
+    assert_eq!(
+        sampler_greedy
+            .sample_token(&mut logits_greedy, &mut state_greedy, 0)
+            .unwrap(),
+        2
+    );
+
+    // 2. Fixed seed gives deterministic multinomial sequence
+    let config_seeded1 = SamplingConfig {
+        temperature: 1.0,
+        seed: Some(42),
+        ..Default::default()
+    };
+    let sampler_seeded1 = AcademicSamplerEngine::new(config_seeded1);
+    let mut state_seeded1 = SamplerState::new_with_seed(5.0, 42);
+
+    let mut draws1 = Vec::new();
+    for _ in 0..50 {
+        let mut l = vec![2.0, 2.0, 2.0];
+        draws1.push(
+            sampler_seeded1
+                .sample_token(&mut l, &mut state_seeded1, 99)
+                .unwrap(),
+        );
+    }
+
+    let config_seeded2 = SamplingConfig {
+        temperature: 1.0,
+        seed: Some(42),
+        ..Default::default()
+    };
+    let sampler_seeded2 = AcademicSamplerEngine::new(config_seeded2);
+    let mut state_seeded2 = SamplerState::new_with_seed(5.0, 42);
+
+    let mut draws2 = Vec::new();
+    for _ in 0..50 {
+        let mut l = vec![2.0, 2.0, 2.0];
+        draws2.push(
+            sampler_seeded2
+                .sample_token(&mut l, &mut state_seeded2, 99)
+                .unwrap(),
+        );
+    }
+
+    assert_eq!(draws1, draws2);
+    // Ensure all 3 equal logits get drawn in 50 trials (multinomial, not stuck on 0)
+    assert!(draws1.contains(&0));
+    assert!(draws1.contains(&1));
+    assert!(draws1.contains(&2));
+}

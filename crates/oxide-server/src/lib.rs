@@ -196,7 +196,7 @@ use oxide_alloc::HierarchicalKvCache;
 use oxide_core::sampler::{AcademicSamplerEngine, SamplerState, SamplingConfig};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static REQ_COUNTER: AtomicU64 = AtomicU64::new(1);
+pub(crate) static REQ_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// RAII Guard that leases an inference slot and guarantees its release on drop or cancellation.
 #[derive(Debug)]
