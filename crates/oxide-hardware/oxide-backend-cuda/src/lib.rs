@@ -43,7 +43,10 @@ pub use gpu_unlock::{
 };
 pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
 pub use kernels::CudaLlmKernels;
-pub use megakernel::{CooperativeMegakernel, CooperativeMegakernelConfig, MegakernelStats};
+pub use megakernel::{
+    CooperativeMegakernel, CooperativeMegakernelConfig, LuceDeltaNetWeights, LuceFullAttnWeights,
+    LuceLayerWeights, LuceRecurrentBuffers, MegakernelLayerType, MegakernelStats,
+};
 pub use nccl::{CudaDeviceClusterArray, NcclCommunicator};
 
 use oxide_core::error::{EngineError, Result};
