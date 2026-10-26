@@ -55,7 +55,9 @@ pub use executor::ComputeGraphExecutor;
 pub use graph::{
     ComputeGraph, GraphNode, NodeParams, OpCode, build_graph, build_transformer_graph,
 };
-pub use hybrid::{DeviceRole, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition};
+pub use hybrid::{
+    DeviceRole, DmaBufTensorSplit, HybridDeviceTopology, HybridMultiDevicePipeline, LayerPartition,
+};
 pub use model_manager::DynamicModelManager;
 pub use moe_gemm::{CuTeLayout, FusedMoeGateEngine, MoERouteChoice};
 pub use multi_lora::{LoraAdapterWeights, MultiLoraManager};
