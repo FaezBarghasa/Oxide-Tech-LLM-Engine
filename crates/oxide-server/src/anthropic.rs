@@ -88,12 +88,15 @@ pub async fn messages_handler(
     let prompt_len = prompt_tokens.len().max(1);
     let initial_token = prompt_tokens.last().copied().unwrap_or(1);
 
+    let req_num = crate::REQ_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let msg_id = format!("msg_oxide_{req_num}");
+
     let model_name = payload.model.clone();
     let target_pipeline = state.resolve_pipeline(&model_name).await;
     let tokenizer = Arc::clone(&state.tokenizer);
 
     let slot_request = crate::SlotRequest {
-        request_id: "anthropic-msg-req".to_string(),
+        request_id: msg_id.clone(),
         prompt_tokens: if prompt_tokens.is_empty() {
             vec![1]
         } else {
@@ -119,10 +122,20 @@ pub async fn messages_handler(
             .into_response();
     };
 
+    let prefill_tokens = if prompt_tokens.len() > 1 {
+        &prompt_tokens[..prompt_tokens.len() - 1]
+    } else {
+        &[]
+    };
+    if !prefill_tokens.is_empty() {
+        let mut pipeline = target_pipeline.lock().await;
+        let _ = pipeline.prefill(req_num, prefill_tokens, slot_guard.slot_id() as u16);
+    }
+
     if stream_mode {
+        let pipeline_for_stream = Arc::clone(&target_pipeline);
         let stream = async_stream::stream! {
             let guard = slot_guard;
-            let msg_id = "msg_oxide_01".to_string();
 
             // 1. message_start event
             let start_json = serde_json::json!({
@@ -150,7 +163,7 @@ pub async fn messages_handler(
             let mut out_tokens = 0;
 
             for i in 0..max_tokens {
-                let cmd = oxide_core::StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
+                let cmd = oxide_core::StepCommand::new(req_num, cur_token, guard.slot_id() as u16, false);
                 let res = {
                     let mut pipeline = target_pipeline.lock().await;
                     pipeline.step(&cmd)
@@ -195,6 +208,11 @@ pub async fn messages_handler(
             yield Ok::<Event, std::convert::Infallible>(Event::default().event("message_stop").data(serde_json::json!({
                 "type": "message_stop"
             }).to_string()));
+
+            {
+                let mut pipeline = pipeline_for_stream.lock().await;
+                pipeline.evict_sequence(req_num);
+            }
         };
 
         return Sse::new(stream).into_response();
@@ -205,7 +223,7 @@ pub async fn messages_handler(
     let mut out_tokens = 0;
 
     for i in 0..max_tokens {
-        let cmd = oxide_core::StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
+        let cmd = oxide_core::StepCommand::new(req_num, cur_token, slot_guard.slot_id() as u16, false);
         let res = {
             let mut pipeline = target_pipeline.lock().await;
             pipeline.step(&cmd)
@@ -226,8 +244,13 @@ pub async fn messages_handler(
         }
     }
 
+    {
+        let mut pipeline = target_pipeline.lock().await;
+        pipeline.evict_sequence(req_num);
+    }
+
     let response = AnthropicMessagesResponse {
-        id: "msg_oxide_01".to_string(),
+        id: msg_id,
         object_type: "message".to_string(),
         role: "assistant".to_string(),
         content: vec![AnthropicContentBlock::Text {

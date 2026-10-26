@@ -533,13 +533,24 @@ async fn chat_completions_handler(
         }
     }
 
+    let prefill_tokens = if prompt_tokens.len() > 1 {
+        &prompt_tokens[..prompt_tokens.len() - 1]
+    } else {
+        &[]
+    };
+    if !prefill_tokens.is_empty() {
+        let mut pipeline = target_pipeline.lock().await;
+        let _ = pipeline.prefill(req_num, prefill_tokens, slot_guard.slot_id() as u16);
+    }
+
     if stream_mode {
+        let pipeline_for_stream = Arc::clone(&target_pipeline);
         let stream = async_stream::stream! {
             let guard = slot_guard;
             let mut cur_token: u32 = initial_token;
 
             for i in 0..max_tokens {
-                let cmd = StepCommand::new(1001, cur_token, guard.slot_id() as u16, false);
+                let cmd = StepCommand::new(req_num, cur_token, guard.slot_id() as u16, false);
                 let res = {
                     let mut pipeline = target_pipeline.lock().await;
                     pipeline.step(&cmd)
@@ -578,6 +589,10 @@ async fn chat_completions_handler(
                     break;
                 }
             }
+            {
+                let mut pipeline = pipeline_for_stream.lock().await;
+                pipeline.evict_sequence(req_num);
+            }
             yield Ok::<Event, Infallible>(Event::default().data("[DONE]"));
         };
 
@@ -588,7 +603,7 @@ async fn chat_completions_handler(
         let mut completion_tokens = 0;
 
         for i in 0..max_tokens {
-            let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
+            let cmd = StepCommand::new(req_num, cur_token, slot_guard.slot_id() as u16, false);
             let res = {
                 let mut pipeline = target_pipeline.lock().await;
                 pipeline.step(&cmd)
@@ -608,6 +623,11 @@ async fn chat_completions_handler(
             if completion.is_terminal || i == max_tokens - 1 {
                 break;
             }
+        }
+
+        {
+            let mut pipeline = target_pipeline.lock().await;
+            pipeline.evict_sequence(req_num);
         }
 
         drop(slot_guard);
@@ -729,34 +749,55 @@ async fn completions_handler(
     let sampler = AcademicSamplerEngine::new(sampling_config);
     let target_pipeline = state.resolve_pipeline(&payload.model).await;
 
+    let prefill_tokens = if prompt_tokens.len() > 1 {
+        &prompt_tokens[..prompt_tokens.len() - 1]
+    } else {
+        &[]
+    };
+    if !prefill_tokens.is_empty() {
+        let mut pipeline = target_pipeline.lock().await;
+        let _ = pipeline.prefill(req_num, prefill_tokens, slot_guard.slot_id() as u16);
+    }
+
     let mut generated_text = String::new();
     let mut cur_token: u32 = prompt_tokens.last().copied().unwrap_or(1);
     let mut completion_tokens = 0;
-    let mut sampler_state = SamplerState::new(5.0);
+    let mut sampler_state = SamplerState::from_config(&sampler.config);
 
     for i in 0..max_tokens {
-        let cmd = StepCommand::new(1001, cur_token, slot_guard.slot_id() as u16, false);
-        let completion = {
+        let cmd = StepCommand::new(req_num, cur_token, slot_guard.slot_id() as u16, false);
+        let (completion, logits) = {
             let mut pipeline = target_pipeline.lock().await;
-            pipeline.step(&cmd).unwrap()
+            let completion = match pipeline.step(&cmd) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Inference pipeline step failed: {e}");
+                    break;
+                }
+            };
+            let logits = pipeline.logits().map(|l| l.to_vec());
+            (completion, logits)
         };
 
-        let mut logits = vec![0.0f32; 1024];
-        for (idx, logit) in logits.iter_mut().enumerate() {
-            let hash = (cur_token.wrapping_mul(2_654_435_761)).wrapping_add(idx as u32);
-            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
-            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
-            *logit = sign * mag * 2.0;
+        if let Some(mut l) = logits {
+            cur_token = sampler
+                .sample_token(&mut l, &mut sampler_state, 10)
+                .unwrap_or(completion.sampled_token);
+        } else {
+            cur_token = completion.sampled_token;
         }
-        cur_token = sampler
-            .sample_token(&mut logits, &mut sampler_state, 10)
-            .unwrap_or(completion.sampled_token);
+
         generated_text.push_str(&tokenizer.decode_token(cur_token));
         completion_tokens += 1;
 
         if completion.is_terminal || i == max_tokens - 1 {
             break;
         }
+    }
+
+    {
+        let mut pipeline = target_pipeline.lock().await;
+        pipeline.evict_sequence(req_num);
     }
 
     drop(slot_guard);

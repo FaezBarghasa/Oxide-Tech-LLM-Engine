@@ -247,7 +247,6 @@ impl ContinuousBatchingEngine {
             generated_count: 0,
             max_tokens,
             temperature,
-            top_p,
             sender: token_sender,
             sampler,
             sampler_state,
