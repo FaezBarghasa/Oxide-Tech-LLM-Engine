@@ -157,6 +157,45 @@ impl Default for BlockQ5_K {
     }
 }
 
+impl BlockQ5_K {
+    pub fn dequantize(&self, output: &mut [f32; 256]) {
+        let d = self.d.to_f32();
+        let dmin = self.dmin.to_f32();
+        let mut is = 0;
+        let mut u1 = 1u8;
+        let mut u2 = 2u8;
+
+        for chunk in 0..4 {
+            let (sc1, m1) = get_scale_min_k4(is + 0, &self.scales);
+            let d1 = d * sc1;
+            let min1 = dmin * m1;
+
+            let (sc2, m2) = get_scale_min_k4(is + 1, &self.scales);
+            let d2 = d * sc2;
+            let min2 = dmin * m2;
+
+            let q_base = chunk * 32;
+            let y_base = chunk * 64;
+
+            for l in 0..32 {
+                let byte = self.qs[q_base + l];
+                let qh_byte = self.qh[l];
+                let to_add1 = if (qh_byte & u1) != 0 { 16.0 } else { 0.0 };
+                let to_add2 = if (qh_byte & u2) != 0 { 16.0 } else { 0.0 };
+
+                let q0 = ((byte & 0x0F) as f32) + to_add1;
+                let q1 = ((byte >> 4) as f32) + to_add2;
+
+                output[y_base + l] = d1 * q0 - min1;
+                output[y_base + l + 32] = d2 * q1 - min2;
+            }
+            is += 2;
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    }
+}
+
 impl QuantScheme for BlockQ5_K {
     #[inline(always)]
     fn bits_per_weight() -> f32 {

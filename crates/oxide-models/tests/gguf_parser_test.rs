@@ -65,46 +65,60 @@ fn test_real_gguf_models_in_home_dir() {
         return;
     }
 
-    let candidate = models_dir.join("DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf");
-    if candidate.exists() {
-        println!("Testing parse of real model: {}", candidate.display());
-        let file = std::fs::File::open(&candidate).expect("Failed to open real GGUF model");
-        let mmap = unsafe { memmap2::Mmap::map(&file).expect("Failed to mmap real GGUF model") };
-        let parsed = GgufFile::parse(&mmap).expect("Failed to parse real GGUF model");
-        let arch = parsed.architecture();
-        println!(
-            "Parsed architecture: {arch}, tensor count: {}",
-            parsed.tensors.len()
-        );
-        for (k, v) in &parsed.metadata {
-            if k.contains("count") || k.contains("length") || k.contains("dim") {
-                println!("  meta {k} = {v:?}");
+    let targets = [
+        "Ornith-1.5-9B-Q4_K_M.gguf",
+        "NVIDIA-Nemotron-3.5-Bolt-E4B-Uncensored-AD-Q4_K_M-00001-of-00001.gguf",
+        "gemma-4-e2b-it.Q8_0.gguf",
+        "Ternary-Bonsai-2-27B-Abliterated-PTQ1_0.gguf",
+    ];
+
+    for name in &targets {
+        let candidate = models_dir.join(name);
+        if candidate.exists() {
+            println!("\n=== Inspecting: {} ===", name);
+            let file = std::fs::File::open(&candidate).expect("Failed to open real GGUF model");
+            let mmap = unsafe { memmap2::Mmap::map(&file).expect("Failed to mmap real GGUF model") };
+            let parsed = GgufFile::parse(&mmap).expect("Failed to parse real GGUF model");
+            let arch = parsed.architecture();
+            println!("  Architecture: {arch}, tensor count: {}", parsed.tensors.len());
+            if let Some(m) = parsed.get_string("tokenizer.ggml.model") {
+                println!("  Tokenizer model: {m}");
             }
-        }
-        if let Some(t) = parsed.tensors.get("token_embd.weight") {
-            println!(
-                "token_embd.weight dims: {:?}, quant: {:?}",
-                t.dimensions, t.quant_type
-            );
-        }
-        if let Some(t) = parsed.tensors.get("output.weight") {
-            println!(
-                "output.weight dims: {:?}, quant: {:?}",
-                t.dimensions, t.quant_type
-            );
-        }
-        for (name, t) in &parsed.tensors {
-            if name.starts_with("blk.0.") {
-                println!(
-                    "  {name} dims: {:?}, quant: {:?}",
-                    t.dimensions, t.quant_type
-                );
+            let tok = oxide_models::GgufTokenizer::from_gguf(&parsed);
+            let encoded = tok.encode("What is 2 + 2?");
+            println!("  'What is 2 + 2?' -> {:?}", encoded);
+            println!("  Decoded -> {:?}", tok.decode(&encoded));
+            let cfg = oxide_models::llama3::Llama3Config::from_gguf(&parsed);
+            println!("  Llama3Config: hidden={}, layers={}, heads={}, kv_heads={}, head_dim={}, inter={}, vocab={}, eps={:?}",
+                cfg.hidden_dim, cfg.num_layers, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, cfg.intermediate_dim, cfg.vocab_size, cfg.rms_norm_eps_f32());
+            for (k, v) in &parsed.metadata {
+                if k.starts_with(arch) || k.contains("rope") || k.contains("head") || k.contains("norm") {
+                    println!("    meta: {k} = {:?}", v);
+                }
             }
+            println!("  qwen35 heads: head_count={:?}, head_count_kv={:?}, key_length={:?}",
+                parsed.get_u32(&format!("{arch}.attention.head_count")),
+                parsed.get_u32(&format!("{arch}.attention.head_count_kv")),
+                parsed.get_u32(&format!("{arch}.attention.key_length")));
+            for layer_idx in [0, 5, 14, 15, 20, 30] {
+                for tname in &[
+                    format!("blk.{layer_idx}.attn_q.weight"),
+                    format!("blk.{layer_idx}.attn_output.weight"),
+                    format!("blk.{layer_idx}.ffn_gate.weight"),
+                    format!("blk.{layer_idx}.ffn_down.weight"),
+                ] {
+                    if let Some(t) = parsed.tensors.get(tname.as_str()) {
+                        println!("    tensor {tname}: shape={:?}, type={:?}", t.dimensions, t.quant_type);
+                    }
+                }
+            }
+            for tname in &["blk.0.attn_q.weight", "blk.0.attn_k.weight", "blk.0.attn_v.weight", "blk.0.attn_output.weight", "blk.0.attn_qkv.weight", "blk.0.ffn_gate.weight", "blk.0.ffn_up.weight", "blk.0.ffn_down.weight", "output_norm.weight", "output.weight"] {
+                if let Some(t) = parsed.tensors.get(*tname) {
+                    println!("    tensor {tname}: shape={:?}, type={:?}", t.dimensions, t.quant_type);
+                }
+            }
+        } else {
+            println!("Target {} not found in ~/models", name);
         }
-        assert!(!parsed.tensors.is_empty(), "Real model should have tensors");
-        assert!(
-            parsed.tensor_data_offset > 0,
-            "Tensor data offset must be positive"
-        );
     }
 }

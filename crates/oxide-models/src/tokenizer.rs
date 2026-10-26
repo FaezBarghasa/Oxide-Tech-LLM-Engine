@@ -118,8 +118,13 @@ impl GgufTokenizer {
         for &tok in tokens {
             let tok_idx = tok as usize;
             if let Some(tok_str) = self.id_to_token.get(tok_idx) {
-                // Handle SentencePiece / Llama space underscore replacement ' ' (U+2581)
-                let cleaned = tok_str.replace('\u{2581}', " ");
+                // Handle SentencePiece (' ', U+2581) and GPT-2 / Qwen byte BPE ('Ġ' -> ' ', 'Ċ' -> '\n')
+                let cleaned = tok_str
+                    .replace('\u{2581}', " ")
+                    .replace('\u{0120}', " ")
+                    .replace('\u{010A}', "\n")
+                    .replace('\u{0109}', "\t")
+                    .replace('\u{010D}', "\r");
 
                 // Handle hex byte tokens <0xHH>
                 if cleaned.starts_with("<0x")
@@ -142,7 +147,12 @@ impl GgufTokenizer {
     #[must_use]
     pub fn decode_token(&self, token_id: u32) -> String {
         if let Some(tok_str) = self.id_to_token.get(token_id as usize) {
-            let cleaned = tok_str.replace('\u{2581}', " ");
+            let cleaned = tok_str
+                .replace('\u{2581}', " ")
+                .replace('\u{0120}', " ")
+                .replace('\u{010A}', "\n")
+                .replace('\u{0109}', "\t")
+                .replace('\u{010D}', "\r");
             if cleaned.starts_with("<0x")
                 && cleaned.ends_with('>')
                 && cleaned.len() == 6
@@ -182,7 +192,19 @@ impl GgufTokenizer {
                         matched = true;
                         break;
                     }
-                    // 2. SentencePiece underscore prefix
+                    // 2. GPT-2 / Qwen byte BPE mapping
+                    let gpt2_sub = sub
+                        .replace(' ', "\u{0120}")
+                        .replace('\n', "\u{010A}")
+                        .replace('\t', "\u{0109}")
+                        .replace('\r', "\u{010D}");
+                    if let Some(&id) = self.token_to_id.get(&gpt2_sub) {
+                        tokens.push(id);
+                        i += len;
+                        matched = true;
+                        break;
+                    }
+                    // 3. SentencePiece underscore prefix
                     let sp_sub = format!("\u{2581}{sub}");
                     if let Some(&id) = self.token_to_id.get(&sp_sub) {
                         tokens.push(id);
@@ -194,10 +216,14 @@ impl GgufTokenizer {
             }
 
             if !matched {
-                // 3. Fallback to single byte
+                // 4. Fallback to single byte
                 let b = bytes[i];
                 let hex_tok = format!("<0x{b:02X}>");
                 if let Some(&id) = self.token_to_id.get(&hex_tok) {
+                    tokens.push(id);
+                } else if b == b' ' && let Some(&id) = self.token_to_id.get("\u{0120}") {
+                    tokens.push(id);
+                } else if b == b'\n' && let Some(&id) = self.token_to_id.get("\u{010A}") {
                     tokens.push(id);
                 } else if let Some(&id) = self.token_to_id.get(&(b as char).to_string()) {
                     tokens.push(id);
