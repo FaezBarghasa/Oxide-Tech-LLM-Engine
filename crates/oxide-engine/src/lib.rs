@@ -38,6 +38,7 @@ pub mod moe_gemm;
 pub mod multi_lora;
 pub mod pipeline;
 pub mod slot_manager;
+pub mod sparse_context;
 pub mod speculative;
 pub mod tensor_split;
 pub mod typestate_fsm;
@@ -63,7 +64,12 @@ pub use slot_manager::{
     ChunkedBatchItem, ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState,
 };
 pub use speculative::{
-    SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeStrategy, SpeculativeVerificationResult,
+    NativeMtpModule, SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeStrategy,
+    SpeculativeVerificationResult,
+};
+pub use sparse_context::{
+    BlockSparseConfig, SequenceSparseBlockIndex, SparseBlockCentroid, SparseContextManager,
+    SparsePrefillPolicy, TOKENS_PER_SPARSE_BLOCK,
 };
 pub use tensor_split::{
     AcceleratorKind, TensorSliceDescriptor, TensorSplitDistributionEngine, TensorSplitMode,

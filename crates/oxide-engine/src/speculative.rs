@@ -16,6 +16,7 @@ pub enum SpeculativeStrategy {
     SuffixMatching,
     EagleTreeDraft,
     DFlashDiffusion,
+    NativeMtp,
 }
 
 /// Configuration for Speculative Decoding.
@@ -266,5 +267,86 @@ impl SpeculativeEngineContext {
             .get(&sequence_id)
             .copied()
             .ok_or(EngineError::SequenceNotFound { sequence_id })
+    }
+}
+
+/// Ninfer-inspired Native Multi-Token Prediction (MTP) Speculative Module.
+///
+/// DeepSeek / Qwen style integrated future token predictor operating directly
+/// on final layer hidden states without requiring an auxiliary draft model.
+#[derive(Debug, Clone)]
+pub struct NativeMtpModule {
+    pub hidden_dim: usize,
+    pub vocab_size: usize,
+    pub num_mtp_heads: usize,
+    /// Projection weights per MTP head: `[num_mtp_heads, vocab_size, hidden_dim]`
+    pub mtp_head_weights: Vec<f32>,
+}
+
+impl NativeMtpModule {
+    #[must_use]
+    pub fn new(hidden_dim: usize, vocab_size: usize, num_mtp_heads: usize) -> Self {
+        let total_weights = num_mtp_heads * vocab_size * hidden_dim;
+        Self {
+            hidden_dim,
+            vocab_size,
+            num_mtp_heads,
+            mtp_head_weights: vec![0.001; total_weights],
+        }
+    }
+
+    /// Predicts future tokens (t+1, t+2, ...) directly from the base model's final hidden state.
+    #[must_use]
+    pub fn predict_future_tokens(&self, last_hidden: &[f32], max_future: usize) -> Vec<u32> {
+        let h = self.hidden_dim;
+        let v = self.vocab_size;
+        let heads = self.num_mtp_heads.min(max_future);
+        let mut predicted = Vec::with_capacity(heads);
+
+        if last_hidden.len() != h {
+            return predicted;
+        }
+
+        for head in 0..heads {
+            let base_offset = head * v * h;
+            let mut best_logit = -f32::INFINITY;
+            let mut best_token = 0u32;
+
+            for tok in 0..v {
+                let row_start = base_offset + tok * h;
+                let mut dot = 0.0f32;
+                for j in 0..h {
+                    dot += self.mtp_head_weights[row_start + j] * last_hidden[j];
+                }
+                if dot > best_logit {
+                    best_logit = dot;
+                    best_token = tok as u32;
+                }
+            }
+            predicted.push(best_token);
+        }
+
+        predicted
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_native_mtp_prediction_lifecycle() {
+        let mut mtp = NativeMtpModule::new(4, 8, 2);
+        // Head 0: token 3 has highest weight
+        mtp.mtp_head_weights[3 * 4] = 10.0;
+        // Head 1: token 6 has highest weight
+        mtp.mtp_head_weights[8 * 4 + 6 * 4] = 10.0;
+
+        let hidden = vec![1.0f32, 0.0, 0.0, 0.0];
+        let predicted = mtp.predict_future_tokens(&hidden, 2);
+
+        assert_eq!(predicted.len(), 2);
+        assert_eq!(predicted[0], 3);
+        assert_eq!(predicted[1], 6);
     }
 }
