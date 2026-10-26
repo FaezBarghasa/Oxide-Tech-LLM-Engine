@@ -6,6 +6,7 @@
 //! - Lock-free multi-client streaming: transmits sampled tokens directly into client channels.
 
 use oxide_alloc::{PagedKvArena, RadixPrefixCache, SequenceBlockTable};
+use oxide_core::sampler::{AcademicSamplerEngine, SamplerState, SamplingConfig};
 use oxide_models::{Llama3Model, Llama3ScratchBuffers};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,11 +50,10 @@ struct ActiveSequence {
     current_position: usize,
     generated_count: usize,
     max_tokens: usize,
-    #[allow(dead_code)]
     temperature: f32,
-    #[allow(dead_code)]
-    top_p: f32,
     sender: mpsc::UnboundedSender<TokenEvent>,
+    sampler: AcademicSamplerEngine,
+    sampler_state: SamplerState,
 }
 
 /// Background Continuous Batching & Radix Cache Actor.
@@ -230,6 +230,14 @@ impl ContinuousBatchingEngine {
         let initial_token = *prompt_tokens.last().unwrap_or(&1);
         let initial_pos = prompt_tokens.len().saturating_sub(1);
 
+        let sampling_config = SamplingConfig {
+            temperature,
+            top_p,
+            ..Default::default()
+        };
+        let sampler = AcademicSamplerEngine::new(sampling_config);
+        let sampler_state = SamplerState::new(5.0);
+
         let seq = ActiveSequence {
             request_id,
             block_table,
@@ -241,6 +249,8 @@ impl ContinuousBatchingEngine {
             temperature,
             top_p,
             sender: token_sender,
+            sampler,
+            sampler_state,
         };
 
         self.active_sequences.insert(slot_id, seq);
@@ -281,17 +291,22 @@ impl ContinuousBatchingEngine {
 
             match step_res {
                 Ok(()) => {
-                    // Greedy or temperature sampling
-                    let mut max_idx = 0;
-                    let mut max_val = f32::NEG_INFINITY;
-                    for (i, &logit) in self.scratch.logits.iter().enumerate() {
-                        if logit > max_val {
-                            max_val = logit;
-                            max_idx = i;
+                    // Greedy or academic sampling depending on temperature
+                    let next_token = if seq.temperature <= 1e-6 {
+                        let mut max_idx = 0;
+                        let mut max_val = f32::NEG_INFINITY;
+                        for (i, &logit) in self.scratch.logits.iter().enumerate() {
+                            if logit > max_val {
+                                max_val = logit;
+                                max_idx = i;
+                            }
                         }
-                    }
-
-                    let next_token = max_idx as u32;
+                        max_idx as u32
+                    } else {
+                        seq.sampler
+                            .sample_token(&mut self.scratch.logits, &mut seq.sampler_state, 10)
+                            .unwrap_or(0)
+                    };
                     seq.current_token = next_token;
                     seq.current_position += 1;
                     seq.generated_count += 1;
