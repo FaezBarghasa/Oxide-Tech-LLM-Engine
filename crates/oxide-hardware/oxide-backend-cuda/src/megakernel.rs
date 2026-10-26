@@ -141,14 +141,14 @@ impl CooperativeMegakernel {
                 sum_sq += x * x;
             }
             let inv_rms = 1.0 / ((sum_sq / (h as f32)) + 1e-6).sqrt();
-            for i in 0..h {
-                hidden[i] *= inv_rms;
+            for val in &mut hidden {
+                *val *= inv_rms;
             }
 
             // Attention + FFN residual integration
             let layer_factor = 1.0 / ((layer_idx + 1) as f32).sqrt();
-            for i in 0..h {
-                hidden[i] += (layer.q_m as f32 * 0.001) * layer_factor;
+            for val in &mut hidden {
+                *val += (layer.q_m as f32 * 0.001) * layer_factor;
             }
         }
 

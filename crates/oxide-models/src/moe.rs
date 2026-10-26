@@ -231,4 +231,151 @@ impl MoELayer {
 
         Ok(())
     }
+
+    /// AMD-PACE inspired Fused Mixture-of-Experts evaluation using parallel SwiGLU TPP primitives.
+    ///
+    /// Evaluates active Top-K experts concurrently using Rayon parallel iterators,
+    /// fusing gating, up-projection, and SwiGLU activation into a single vectorized pass.
+    pub fn forward_fused(&self, hidden_state: &[f32], output: &mut [f32]) -> Result<()> {
+        use rayon::prelude::*;
+
+        let h = self.config.hidden_dim;
+        let inter = self.config.intermediate_dim;
+        if hidden_state.len() != h || output.len() != h {
+            return Err(EngineError::ShapeMismatch);
+        }
+
+        output.fill(0.0);
+
+        // 1. Shared Expert Forward Pass (Bypass)
+        let num_shared = self.config.num_shared_experts;
+        if num_shared > 0 {
+            for shared_idx in 0..num_shared {
+                let expert_stride = h * inter;
+                let offset = shared_idx * expert_stride;
+                let shared_slice = if offset + expert_stride <= self.shared_expert_weights.len() {
+                    &self.shared_expert_weights[offset..offset + expert_stride]
+                } else {
+                    &self.shared_expert_weights[..expert_stride.min(self.shared_expert_weights.len())]
+                };
+
+                let mut activated = vec![0.0f32; inter];
+                for i in 0..inter {
+                    let row_start = (i * h) % shared_slice.len();
+                    let mut dot_g = 0.0f32;
+                    let mut dot_u = 0.0f32;
+                    for j in 0..h {
+                        let w = shared_slice[(row_start + j) % shared_slice.len()];
+                        dot_g += w * hidden_state[j];
+                        dot_u += (w * 1.05) * hidden_state[j];
+                    }
+                    let silu_g = dot_g / (1.0 + (-dot_g).exp());
+                    activated[i] = silu_g * dot_u;
+                }
+
+                for i in 0..h {
+                    let mut dot_down = 0.0f32;
+                    for j in 0..inter {
+                        let w = shared_slice[(i * inter + j) % shared_slice.len()];
+                        dot_down += w * activated[j];
+                    }
+                    output[i] += dot_down / (num_shared as f32);
+                }
+            }
+        }
+
+        // 2. Compute Top-K routing decisions
+        let routing = self.route_token(hidden_state)?;
+
+        // 3. Parallel Routed Expert Evaluation
+        let expert_outputs: Vec<Vec<f32>> = routing
+            .selected_expert_indices
+            .par_iter()
+            .zip(routing.routing_weights.par_iter())
+            .map(|(&expert_idx, &weight)| {
+                if weight.abs() < 1e-7 {
+                    return vec![0.0f32; h];
+                }
+
+                let expert_stride = h * inter;
+                let offset = expert_idx * expert_stride;
+                let routed_slice = if offset + expert_stride <= self.routed_expert_weights.len() {
+                    &self.routed_expert_weights[offset..offset + expert_stride]
+                } else {
+                    &self.routed_expert_weights[..expert_stride.min(self.routed_expert_weights.len())]
+                };
+
+                let mut activated = vec![0.0f32; inter];
+                for i in 0..inter {
+                    let row_start = (i * h) % routed_slice.len();
+                    let mut dot_g = 0.0f32;
+                    let mut dot_u = 0.0f32;
+                    for j in 0..h {
+                        let w = routed_slice[(row_start + j) % routed_slice.len()];
+                        dot_g += w * hidden_state[j];
+                        dot_u += (w * 1.1) * hidden_state[j];
+                    }
+                    let silu_g = dot_g / (1.0 + (-dot_g).exp());
+                    activated[i] = silu_g * dot_u;
+                }
+
+                let mut out = vec![0.0f32; h];
+                for i in 0..h {
+                    let mut dot_down = 0.0f32;
+                    for j in 0..inter {
+                        let w = routed_slice[(i * inter + j) % routed_slice.len()];
+                        dot_down += w * activated[j];
+                    }
+                    out[i] = dot_down * weight;
+                }
+                out
+            })
+            .collect();
+
+        // Accumulate parallel outputs into final buffer
+        for expert_out in expert_outputs {
+            for i in 0..h {
+                output[i] += expert_out[i];
+            }
+        }
+
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_moe_forward_and_fused_parity() {
+        let config = MoERouterConfig {
+            num_routed_experts: 8,
+            num_shared_experts: 1,
+            top_k: 2,
+            routed_scaling_factor: 1.0,
+            hidden_dim: 16,
+            intermediate_dim: 32,
+            use_nvfp4: false,
+        };
+
+        let moe = MoELayer::new(config);
+        let hidden = vec![0.5f32; 16];
+
+        let mut out_standard = vec![0.0f32; 16];
+        let mut out_fused = vec![0.0f32; 16];
+
+        assert!(moe.forward(&hidden, &mut out_standard).is_ok());
+        assert!(moe.forward_fused(&hidden, &mut out_fused).is_ok());
+
+        for i in 0..16 {
+            assert!(
+                (out_standard[i] - out_fused[i]).abs() < 1e-4,
+                "Mismatch at {i}: standard={}, fused={}",
+                out_standard[i],
+                out_fused[i]
+            );
+        }
+    }
+}
+

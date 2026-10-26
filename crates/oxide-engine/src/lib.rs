@@ -40,6 +40,7 @@ pub mod pipeline;
 pub mod slot_manager;
 pub mod speculative;
 pub mod tensor_split;
+pub mod typestate_fsm;
 
 pub use arena::GraphArena;
 pub use continuous_batching::{ContinuousBatchingEngine, EngineCommand, EngineHandle, TokenEvent};
@@ -67,3 +68,8 @@ pub use speculative::{
 pub use tensor_split::{
     AcceleratorKind, TensorSliceDescriptor, TensorSplitDistributionEngine, TensorSplitMode,
 };
+pub use typestate_fsm::{
+    Allocated, Cancelled, Completed, DecodeStepResult, Decoding, FinishReason, Pending, Prefilling,
+    Request, TypestateScheduler,
+};
+
