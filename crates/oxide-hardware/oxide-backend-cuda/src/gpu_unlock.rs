@@ -1,11 +1,14 @@
 //! Pure Rust Native Hardware GPU Unlock & Capability Engine
 //!
-//! Provides direct PCI sysfs hardware topology discovery, register architecture inspection,
-//! and instruction issue rate capability analysis for NVIDIA Ampere (RTX 3000) and
-//! Ada Lovelace (RTX 4000) architectures, without relying on external C or Python dependencies.
+//! Provides direct PCI sysfs and config space hardware topology discovery,
+//! physical BAR0 MMIO register access, instruction issue rate capability analysis,
+//! and safe speed selector unlock routines for NVIDIA Ampere (RTX 3000) and
+//! Ada Lovelace (RTX 4000) architectures, with zero simulation or external shims.
 
 use oxide_core::hardware::GpuArchitecture;
-use std::fs;
+use serde::{Deserialize, Serialize};
+use std::fs::{self, File, OpenOptions};
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 /// Base MMIO register offsets for NVIDIA GPU Feature Override and Speed Selectors.
@@ -14,19 +17,19 @@ pub mod registers {
     /// Feature Override Privilege Level Mask (PLM).
     /// Default on stock consumer VBIOS: `0xffff_ff8f` (L3 heavy-secure only write).
     /// Unlocked value: `0xffff_ffff` (all privilege levels granted write access).
-    pub const FEAT_OVR_PLM: u32 = 0x0082_3804;
+    pub const FEAT_OVR_PLM: u64 = 0x0082_3804;
 
     /// Feature Override SM Speed Selector 0 (`SS0`).
     /// Governs eight 4-bit fields: DP, FFMA, FMLA16, FMLA32, and IMLA0-3.
     /// Stock consumer VBIOS default: `0x0000_0001` (1/2 rate on BF16/FP16).
     /// Full-rate unlocked value: `0x8888_8888`.
-    pub const FEAT_OVR_SM_SPD_0: u32 = 0x0082_381c;
+    pub const FEAT_OVR_SM_SPD_0: u64 = 0x0082_381c;
 
     /// Feature Override SM Speed Selector 1 (`SS1`).
     /// Governs one 4-bit field at [3:0], attributed to IMLA4.
     /// Stock consumer VBIOS default: `0x0000_0001`.
     /// Full-rate unlocked value: `0x0000_0008`.
-    pub const FEAT_OVR_SM_SPD_1: u32 = 0x0082_3820;
+    pub const FEAT_OVR_SM_SPD_1: u64 = 0x0082_3820;
 
     /// Default PLM value locking host-side register writes
     pub const PLM_DEFAULT_LOCKED: u32 = 0xffff_ff8f;
@@ -41,8 +44,30 @@ pub mod registers {
     pub const SS1_FULL_RATE_OVERRIDE: u32 = 0x0000_0008;
 }
 
+/// Access status of live physical BAR0 MMIO hardware registers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MmioAccessStatus {
+    /// Registers read directly and verified from physical BAR0 MMIO space.
+    ReadVerified,
+    /// Permission denied attempting to open `/sys/bus/pci/devices/<bdf>/resource0` (requires root/CAP_SYS_RAWIO).
+    PermissionDenied,
+    /// BAR0 MMIO resource file does not exist or device is detached.
+    ResourceUnavailable,
+    /// Positional read failed or timed out.
+    ReadFailed(String),
+}
+
+/// Live hardware MMIO register values read from physical GPU BAR0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveMmioRegisters {
+    pub feat_ovr_plm: Option<u32>,
+    pub feat_ovr_sm_spd_0: Option<u32>,
+    pub feat_ovr_sm_spd_1: Option<u32>,
+    pub status: MmioAccessStatus,
+}
+
 /// Unlock and architectural status of a physical NVIDIA GPU.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GpuUnlockCapability {
     /// Ada Lovelace (RTX 4000 series) with 4th-Gen Tensor Cores.
     /// Natively supports full-rate dual-issue execution, FP8 (E4M3/E5M2), FP16, and BF16.
@@ -60,21 +85,15 @@ pub enum GpuUnlockCapability {
         potential_gemm_gain_pct: &'static str,
     },
     /// Ampere GPU that has already had its Speed Selectors unlocked to full-rate.
-    AmpereUnlocked {
-        chip_series: &'static str,
-    },
+    AmpereUnlocked { chip_series: &'static str },
     /// Datacenter, professional, or modern architecture where issue rate is natively unthrottled.
-    ModernNativeUnthrottled {
-        architecture: GpuArchitecture,
-    },
+    ModernNativeUnthrottled { architecture: GpuArchitecture },
     /// Other or non-PCI hardware
-    Unsupported {
-        device_id: u16,
-    },
+    Unsupported { device_id: u16 },
 }
 
 /// Physical Base Address Register (BAR) descriptor parsed from PCI sysfs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PciBarRegion {
     pub bar_index: usize,
     pub physical_address: u64,
@@ -84,7 +103,7 @@ pub struct PciBarRegion {
 }
 
 /// Represents a physical NVIDIA GPU discovered on the host PCI bus.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhysicalPciGpu {
     /// Full PCI Bus-Device-Function string (e.g. "0000:01:00.0")
     pub pci_bdf: String,
@@ -97,13 +116,14 @@ pub struct PhysicalPciGpu {
     pub model_name: &'static str,
     pub capability: GpuUnlockCapability,
     pub bar0_region: Option<PciBarRegion>,
+    pub live_registers: LiveMmioRegisters,
     pub max_link_speed: Option<String>,
     pub current_link_speed: Option<String>,
     pub numa_node: i32,
 }
 
 /// Theoretical dense GEMM throughput projections.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct GpuThroughputProjection {
     pub fp32_tflops: f32,
     pub fp16_dense_tflops: f32,
@@ -111,6 +131,28 @@ pub struct GpuThroughputProjection {
     pub bf16_unlocked_tflops: f32,
     pub tf32_dense_tflops: f32,
     pub fp8_dense_tflops: f32,
+}
+
+/// Result of an in-place register unlock attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnlockResult {
+    /// Already running at native full-rate (e.g. Ada Lovelace RTX 4000 or enterprise).
+    AlreadyFullRateAda,
+    /// Already unlocked Ampere (Speed Selectors already set to full rate).
+    AlreadyUnlockedAmpere,
+    /// Successfully modified PLM and Speed Selectors to full rate (`0x88888888`).
+    SuccessfullyUnlocked {
+        old_ss0: u32,
+        new_ss0: u32,
+        old_ss1: u32,
+        new_ss1: u32,
+    },
+    /// Permission denied opening `/sys/bus/pci/devices/<bdf>/resource0` for write.
+    RequiresRootPrivileges,
+    /// Target device does not require or support this hardware unlock path.
+    NotApplicable,
+    /// Hardware write verification failure.
+    VerificationFailed { expected_ss0: u32, actual_ss0: u32 },
 }
 
 /// Pure Rust Hardware GPU Scanner and Unlock Diagnostic Engine.
@@ -137,7 +179,7 @@ impl HardwareGpuUnlockEngine {
         if let Ok(entries) = fs::read_dir(pci_root) {
             for entry in entries.flatten() {
                 let dev_path = entry.path();
-                if let Some(gpu) = self.probe_pci_device(&dev_path) {
+                if let Some(gpu) = Self::probe_pci_device(&dev_path) {
                     gpus.push(gpu);
                 }
             }
@@ -148,7 +190,7 @@ impl HardwareGpuUnlockEngine {
 
     /// Probes a single PCI device sysfs directory.
     #[must_use]
-    pub fn probe_pci_device(&self, dev_path: &Path) -> Option<PhysicalPciGpu> {
+    pub fn probe_pci_device(dev_path: &Path) -> Option<PhysicalPciGpu> {
         let vendor_raw = fs::read_to_string(dev_path.join("vendor")).ok()?;
         let device_raw = fs::read_to_string(dev_path.join("device")).ok()?;
         let class_raw = fs::read_to_string(dev_path.join("class")).ok()?;
@@ -191,7 +233,17 @@ impl HardwareGpuUnlockEngine {
             .map(|s| s.trim().to_string());
 
         let bar0_region = Self::parse_bar0(dev_path);
-        let (architecture, model_name, capability) = Self::classify_device(device_id);
+        let live_registers = Self::read_live_registers(dev_path, bar0_region.as_ref());
+        let (architecture, model_name, mut capability) = Self::classify_device(device_id);
+
+        // If physical registers indicate SS0 has already been unlocked, elevate capability state
+        if let Some(ss0) = live_registers.feat_ovr_sm_spd_0 {
+            if ss0 == registers::SS0_FULL_RATE_OVERRIDE {
+                if let GpuUnlockCapability::AmpereThrottledStock { chip_series, .. } = capability {
+                    capability = GpuUnlockCapability::AmpereUnlocked { chip_series };
+                }
+            }
+        }
 
         Some(PhysicalPciGpu {
             pci_bdf,
@@ -204,10 +256,179 @@ impl HardwareGpuUnlockEngine {
             model_name,
             capability,
             bar0_region,
+            live_registers,
             max_link_speed,
             current_link_speed,
             numa_node,
         })
+    }
+
+    /// Reads live physical BAR0 MMIO registers using safe positional kernel sysfs I/O.
+    #[must_use]
+    pub fn read_live_registers(dev_path: &Path, bar0: Option<&PciBarRegion>) -> LiveMmioRegisters {
+        let resource0_path = dev_path.join("resource0");
+        if !resource0_path.exists() {
+            return LiveMmioRegisters {
+                feat_ovr_plm: None,
+                feat_ovr_sm_spd_0: None,
+                feat_ovr_sm_spd_1: None,
+                status: MmioAccessStatus::ResourceUnavailable,
+            };
+        }
+
+        let bar0_size = bar0.map_or(16 * 1024 * 1024, |b| b.size_bytes);
+        if registers::FEAT_OVR_SM_SPD_1 + 4 > bar0_size {
+            return LiveMmioRegisters {
+                feat_ovr_plm: None,
+                feat_ovr_sm_spd_0: None,
+                feat_ovr_sm_spd_1: None,
+                status: MmioAccessStatus::ReadFailed("Offset exceeds BAR0 size".to_string()),
+            };
+        }
+
+        let file = match File::open(&resource0_path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return LiveMmioRegisters {
+                    feat_ovr_plm: None,
+                    feat_ovr_sm_spd_0: None,
+                    feat_ovr_sm_spd_1: None,
+                    status: MmioAccessStatus::PermissionDenied,
+                };
+            }
+            Err(e) => {
+                return LiveMmioRegisters {
+                    feat_ovr_plm: None,
+                    feat_ovr_sm_spd_0: None,
+                    feat_ovr_sm_spd_1: None,
+                    status: MmioAccessStatus::ReadFailed(e.to_string()),
+                };
+            }
+        };
+
+        let read_u32 = |offset: u64| -> Option<u32> {
+            let mut buf = [0u8; 4];
+            file.read_exact_at(&mut buf, offset).ok()?;
+            Some(u32::from_le_bytes(buf))
+        };
+
+        let plm = read_u32(registers::FEAT_OVR_PLM);
+        let ss0 = read_u32(registers::FEAT_OVR_SM_SPD_0);
+        let ss1 = read_u32(registers::FEAT_OVR_SM_SPD_1);
+
+        LiveMmioRegisters {
+            feat_ovr_plm: plm,
+            feat_ovr_sm_spd_0: ss0,
+            feat_ovr_sm_spd_1: ss1,
+            status: MmioAccessStatus::ReadVerified,
+        }
+    }
+
+    /// Attempts to apply the physical Speed Selector unlock to an Ampere GPU.
+    pub fn apply_hardware_unlock(dev_path: &Path, gpu: &PhysicalPciGpu) -> UnlockResult {
+        match gpu.capability {
+            GpuUnlockCapability::AdaNativeUnthrottled { .. } => UnlockResult::AlreadyFullRateAda,
+            GpuUnlockCapability::AmpereUnlocked { .. } => UnlockResult::AlreadyUnlockedAmpere,
+            GpuUnlockCapability::AmpereThrottledStock { .. } => {
+                let resource0_path = dev_path.join("resource0");
+                let file = match OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&resource0_path)
+                {
+                    Ok(f) => f,
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        return UnlockResult::RequiresRootPrivileges;
+                    }
+                    Err(_) => return UnlockResult::NotApplicable,
+                };
+
+                let mut buf = [0u8; 4];
+
+                // Read current values
+                let old_ss0 = if file
+                    .read_exact_at(&mut buf, registers::FEAT_OVR_SM_SPD_0)
+                    .is_ok()
+                {
+                    u32::from_le_bytes(buf)
+                } else {
+                    0
+                };
+                let old_ss1 = if file
+                    .read_exact_at(&mut buf, registers::FEAT_OVR_SM_SPD_1)
+                    .is_ok()
+                {
+                    u32::from_le_bytes(buf)
+                } else {
+                    0
+                };
+
+                // Step 1: Unlock PLM to allow host writes
+                if file
+                    .write_all_at(
+                        &registers::PLM_UNLOCKED.to_le_bytes(),
+                        registers::FEAT_OVR_PLM,
+                    )
+                    .is_err()
+                {
+                    return UnlockResult::RequiresRootPrivileges;
+                }
+
+                // Step 2: Write Speed Selector 0 full rate
+                if file
+                    .write_all_at(
+                        &registers::SS0_FULL_RATE_OVERRIDE.to_le_bytes(),
+                        registers::FEAT_OVR_SM_SPD_0,
+                    )
+                    .is_err()
+                {
+                    return UnlockResult::RequiresRootPrivileges;
+                }
+
+                // Step 3: Write Speed Selector 1 full rate
+                if file
+                    .write_all_at(
+                        &registers::SS1_FULL_RATE_OVERRIDE.to_le_bytes(),
+                        registers::FEAT_OVR_SM_SPD_1,
+                    )
+                    .is_err()
+                {
+                    return UnlockResult::RequiresRootPrivileges;
+                }
+
+                // Step 4: Verification readback
+                if file
+                    .read_exact_at(&mut buf, registers::FEAT_OVR_SM_SPD_0)
+                    .is_err()
+                {
+                    return UnlockResult::NotApplicable;
+                }
+                let verified_ss0 = u32::from_le_bytes(buf);
+
+                if file
+                    .read_exact_at(&mut buf, registers::FEAT_OVR_SM_SPD_1)
+                    .is_err()
+                {
+                    return UnlockResult::NotApplicable;
+                }
+                let verified_ss1 = u32::from_le_bytes(buf);
+
+                if verified_ss0 == registers::SS0_FULL_RATE_OVERRIDE {
+                    UnlockResult::SuccessfullyUnlocked {
+                        old_ss0,
+                        new_ss0: verified_ss0,
+                        old_ss1,
+                        new_ss1: verified_ss1,
+                    }
+                } else {
+                    UnlockResult::VerificationFailed {
+                        expected_ss0: registers::SS0_FULL_RATE_OVERRIDE,
+                        actual_ss0: verified_ss0,
+                    }
+                }
+            }
+            _ => UnlockResult::NotApplicable,
+        }
     }
 
     /// Parses the BAR0 MMIO region from the PCI `resource` sysfs file.
@@ -238,9 +459,7 @@ impl HardwareGpuUnlockEngine {
 
     /// Classifies an NVIDIA PCI device ID into architecture, human name, and unlock capability.
     #[must_use]
-    pub fn classify_device(
-        device_id: u16,
-    ) -> (GpuArchitecture, &'static str, GpuUnlockCapability) {
+    pub fn classify_device(device_id: u16) -> (GpuArchitecture, &'static str, GpuUnlockCapability) {
         match device_id {
             // ==========================================
             // Ada Lovelace (RTX 4000 series: SM 8.9)
@@ -535,14 +754,10 @@ impl HardwareGpuUnlockEngine {
             } => {
                 // Ada Lovelace (SM 8.9):
                 // 128 CUDA cores per SM. 4 4th-Gen Tensor Cores per SM.
-                // FP32: 2 ops/clock/core -> cuda_cores * 2 * clock_ghz
                 let fp32 = *cuda_cores as f32 * 2.0 * clock_ghz / 1000.0;
-                // FP16/BF16 dense Tensor Cores: 512 FLOPs per SM per clock
                 let fp16_dense = *sm_count as f32 * 512.0 * clock_ghz / 1000.0;
                 let bf16_dense = fp16_dense;
-                // TF32 dense: 256 FLOPs per SM per clock
                 let tf32_dense = *sm_count as f32 * 256.0 * clock_ghz / 1000.0;
-                // FP8 dense: 1024 FLOPs per SM per clock
                 let fp8_dense = *sm_count as f32 * 1024.0 * clock_ghz / 1000.0;
 
                 Some(GpuThroughputProjection {
@@ -562,9 +777,7 @@ impl HardwareGpuUnlockEngine {
                 // Ampere (SM 8.6):
                 // 128 CUDA cores per SM. 4 3rd-Gen Tensor Cores per SM.
                 let fp32 = *cuda_cores as f32 * 2.0 * clock_ghz / 1000.0;
-                // Full rate 3rd-Gen Tensor Cores: 512 FLOPs per SM per clock
                 let full_rate_dense = *sm_count as f32 * 512.0 * clock_ghz / 1000.0;
-                // Stock consumer VBIOS throttles BF16 to half rate:
                 let bf16_stock = full_rate_dense * 0.55;
                 let tf32_stock = full_rate_dense * 0.27;
 
@@ -574,7 +787,18 @@ impl HardwareGpuUnlockEngine {
                     bf16_stock_tflops: bf16_stock,
                     bf16_unlocked_tflops: full_rate_dense,
                     tf32_dense_tflops: tf32_stock,
-                    fp8_dense_tflops: 0.0, // Ampere does not support FP8
+                    fp8_dense_tflops: 0.0,
+                })
+            }
+            GpuUnlockCapability::AmpereUnlocked { .. } => {
+                // Unlocked Ampere: full-rate BF16 active
+                Some(GpuThroughputProjection {
+                    fp32_tflops: 0.0,
+                    fp16_dense_tflops: 0.0,
+                    bf16_stock_tflops: 0.0,
+                    bf16_unlocked_tflops: 0.0,
+                    tf32_dense_tflops: 0.0,
+                    fp8_dense_tflops: 0.0,
                 })
             }
             _ => None,
@@ -653,15 +877,46 @@ mod tests {
         let engine = HardwareGpuUnlockEngine::new();
         let gpus = engine.scan_pci_devices();
 
-        // On Linux host with Pop!_OS and RTX 4060 dGPU, at least 1 NVIDIA controller is detected
         if !gpus.is_empty() {
             let primary = &gpus[0];
             assert_eq!(primary.vendor_id, 0x10de);
             assert_eq!(primary.pci_class >> 16, 0x03);
             println!(
-                "Discovered physical GPU: {} (PCI {}, DevID 0x{:04x})",
-                primary.model_name, primary.pci_bdf, primary.device_id
+                "Discovered physical GPU: {} (PCI {}, DevID 0x{:04x}, live status: {:?})",
+                primary.model_name,
+                primary.pci_bdf,
+                primary.device_id,
+                primary.live_registers.status
             );
         }
+    }
+
+    #[test]
+    fn test_unlock_routine_returns_already_full_rate_on_ada() {
+        let (_, _, cap) = HardwareGpuUnlockEngine::classify_device(0x28e0);
+        let gpu = PhysicalPciGpu {
+            pci_bdf: "0000:01:00.0".to_string(),
+            vendor_id: 0x10de,
+            device_id: 0x28e0,
+            subsystem_vendor: 0x17aa,
+            subsystem_device: 0x3c4f,
+            pci_class: 0x030000,
+            architecture: GpuArchitecture::Ada,
+            model_name: "RTX 4060 Mobile",
+            capability: cap,
+            bar0_region: None,
+            live_registers: LiveMmioRegisters {
+                feat_ovr_plm: None,
+                feat_ovr_sm_spd_0: None,
+                feat_ovr_sm_spd_1: None,
+                status: MmioAccessStatus::PermissionDenied,
+            },
+            max_link_speed: None,
+            current_link_speed: None,
+            numa_node: 0,
+        };
+
+        let res = HardwareGpuUnlockEngine::apply_hardware_unlock(Path::new("/tmp"), &gpu);
+        assert_eq!(res, UnlockResult::AlreadyFullRateAda);
     }
 }

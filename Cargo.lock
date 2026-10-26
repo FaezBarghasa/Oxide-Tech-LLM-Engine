@@ -1277,6 +1277,7 @@ dependencies = [
  "oxide-alloc",
  "oxide-core",
  "oxide-quant",
+ "serde",
  "thiserror",
  "tracing",
 ]
@@ -1387,6 +1388,7 @@ dependencies = [
  "oxide-models",
  "oxide-quant",
  "oxide-server",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

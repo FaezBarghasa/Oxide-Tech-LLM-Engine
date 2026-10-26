@@ -224,6 +224,14 @@ pub struct GpuUnlockArgs {
     /// Boost SM clock in MHz for theoretical throughput calculation (defaults to 2500 MHz)
     #[arg(long, default_value_t = 2500.0)]
     pub clock_mhz: f32,
+
+    /// Output hardware discovery and register telemetry as structured JSON
+    #[arg(long)]
+    pub json: bool,
+
+    /// Attempt live physical MMIO register modification (requires root/CAP_SYS_RAWIO)
+    #[arg(long)]
+    pub apply: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -1688,6 +1696,11 @@ pub fn run_gpu_unlock_probe(
     let engine = oxide_backend_cuda::HardwareGpuUnlockEngine::new();
     let gpus = engine.scan_pci_devices();
 
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&gpus)?);
+        return Ok(());
+    }
+
     println!("============================================================================");
     println!(" Oxide Engine: Pure Rust Hardware GPU Capability & Unlock Engine");
     println!(" Architecture Support: Ampere (RTX 3000) & Ada Lovelace (RTX 4000)");
@@ -1717,6 +1730,10 @@ pub fn run_gpu_unlock_probe(
                     bar0.is_prefetchable
                 );
             }
+            println!(
+                "    Live MMIO Register Access: {:?}",
+                gpu.live_registers.status
+            );
             if let Some(ref speed) = gpu.current_link_speed {
                 println!(
                     "    PCIe Link Speed: {} (Max: {})",
@@ -1733,10 +1750,11 @@ pub fn run_gpu_unlock_probe(
                     sm_count,
                 } => {
                     println!("    Architecture: Ada Lovelace (RTX 4000 Series, SM 8.9)");
-                    println!("    Status: \x1b[92mNATIVE 4TH-GEN TENSOR CORES (UNTHROTTLED)\x1b[0m");
                     println!(
-                        "    Hardware Specs: Chip {}, {} CUDA cores, {} Streaming Multiprocessors (SM)",
-                        chip_series, cuda_cores, sm_count
+                        "    Status: \x1b[92mNATIVE 4TH-GEN TENSOR CORES (UNTHROTTLED)\x1b[0m"
+                    );
+                    println!(
+                        "    Hardware Specs: Chip {chip_series}, {cuda_cores} CUDA cores, {sm_count} Streaming Multiprocessors (SM)"
                     );
                     println!(
                         "    Precision Capabilities: FP8 (E4M3/E5M2), FP16, BF16, TF32, INT8, INT4 Marlin"
@@ -1762,7 +1780,10 @@ pub fn run_gpu_unlock_probe(
                             "      - TF32 Dense TC:      {:.2} TFLOPS",
                             proj.tf32_dense_tflops
                         );
-                        println!("      - FP8 Dense TC:       {:.2} TFLOPS", proj.fp8_dense_tflops);
+                        println!(
+                            "      - FP8 Dense TC:       {:.2} TFLOPS",
+                            proj.fp8_dense_tflops
+                        );
                     }
                 }
                 oxide_backend_cuda::GpuUnlockCapability::AmpereThrottledStock {
@@ -1776,12 +1797,10 @@ pub fn run_gpu_unlock_probe(
                         "    Status: \x1b[93mTHROTTLED IN STOCK VBIOS (COMPATIBLE WITH UNLOCK)\x1b[0m"
                     );
                     println!(
-                        "    Hardware Specs: Chip {}, {} CUDA cores, {} SMs",
-                        chip_series, cuda_cores, sm_count
+                        "    Hardware Specs: Chip {chip_series}, {cuda_cores} CUDA cores, {sm_count} SMs"
                     );
                     println!(
-                        "    Potential Speedup: {} dense BF16 GEMM throughput",
-                        potential_gemm_gain_pct
+                        "    Potential Speedup: {potential_gemm_gain_pct} dense BF16 GEMM throughput"
                     );
                     println!(
                         "    Register Offsets: PLM=0x{:08x}, SS0=0x{:08x}, SS1=0x{:08x}",
@@ -1795,10 +1814,7 @@ pub fn run_gpu_unlock_probe(
                             args.clock_mhz,
                         )
                     {
-                        println!(
-                            "    Throughput Comparison (@ {:.0} MHz):",
-                            args.clock_mhz
-                        );
+                        println!("    Throughput Comparison (@ {:.0} MHz):", args.clock_mhz);
                         println!(
                             "      - BF16 Stock (Half-Rate):      {:.2} TFLOPS",
                             proj.bf16_stock_tflops
@@ -1811,7 +1827,7 @@ pub fn run_gpu_unlock_probe(
                     }
                 }
                 oxide_backend_cuda::GpuUnlockCapability::AmpereUnlocked { chip_series } => {
-                    println!("    Architecture: Ampere ({})", chip_series);
+                    println!("    Architecture: Ampere ({chip_series})");
                     println!(
                         "    Status: \x1b[92mALREADY UNLOCKED (FULL BF16 ISSUE RATE ACTIVE)\x1b[0m"
                     );
@@ -1819,14 +1835,28 @@ pub fn run_gpu_unlock_probe(
                 oxide_backend_cuda::GpuUnlockCapability::ModernNativeUnthrottled {
                     architecture,
                 } => {
-                    println!("    Architecture: {:?}", architecture);
+                    println!("    Architecture: {architecture:?}");
                     println!(
                         "    Status: \x1b[92mNATIVE FULL-RATE UNTHROTTLED (ENTERPRISE/DATACENTER)\x1b[0m"
                     );
                 }
                 oxide_backend_cuda::GpuUnlockCapability::Unsupported { device_id } => {
-                    println!("    Status: Unsupported PCI device 0x{:04x}", device_id);
+                    println!("    Status: Unsupported PCI device 0x{device_id:04x}");
                 }
+            }
+        }
+
+        if args.apply {
+            println!("\n[*] Executing Live MMIO Speed Selector Register Unlock Sequence...");
+            for gpu in &gpus {
+                if args.target != "all" && gpu.pci_bdf != args.target {
+                    continue;
+                }
+                let dev_path = std::path::Path::new("/sys/bus/pci/devices").join(&gpu.pci_bdf);
+                let res = oxide_backend_cuda::HardwareGpuUnlockEngine::apply_hardware_unlock(
+                    &dev_path, gpu,
+                );
+                println!("  - [{}] Unlock Sequence Result: {:?}", gpu.pci_bdf, res);
             }
         }
     }

@@ -37,8 +37,9 @@ pub mod nccl;
 pub use arch::KernelExecutionPlan;
 pub use driver::{CudaDeviceBuffer, CudaStream};
 pub use gpu_unlock::{
-    GpuThroughputProjection, GpuUnlockCapability, HardwareGpuUnlockEngine, PciBarRegion,
-    PhysicalPciGpu, registers as gpu_unlock_registers,
+    GpuThroughputProjection, GpuUnlockCapability, HardwareGpuUnlockEngine, LiveMmioRegisters,
+    MmioAccessStatus, PciBarRegion, PhysicalPciGpu, UnlockResult,
+    registers as gpu_unlock_registers,
 };
 pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
 pub use kernels::CudaLlmKernels;
