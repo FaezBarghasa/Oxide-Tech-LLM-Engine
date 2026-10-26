@@ -111,6 +111,14 @@ impl SamplerState {
         }
     }
 
+    #[must_use]
+    pub fn from_config(config: &SamplingConfig) -> Self {
+        match config.seed {
+            Some(seed) => Self::new_with_seed(config.mirostat_tau, seed),
+            None => Self::new(config.mirostat_tau),
+        }
+    }
+
     #[inline(always)]
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.rng_state;
@@ -278,13 +286,6 @@ impl AcademicSamplerEngine {
         let picked = if self.config.temperature <= 1e-6 {
             candidates.first().map_or(0, |c| c.0)
         } else {
-            // If seed is explicitly provided in config, seed the state once if it matches initial default
-            if let Some(s) = self.config.seed
-                && state.rng_state == 0x853c_49e6_748f_ea9b
-            {
-                state.rng_state = if s == 0 { 0x853c_49e6_748f_ea9b } else { s };
-            }
-
             let r = state.next_f32();
             let mut acc = 0.0f32;
             let mut selected = candidates.first().map_or(0, |c| c.0);

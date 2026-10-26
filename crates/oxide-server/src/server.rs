@@ -24,9 +24,6 @@ impl MockEngineContext {
     pub fn new() -> Self {
         let cfg = oxide_models::llama3::Llama3Config::tiny_test_config();
         let model = Arc::new(oxide_models::Llama3Model::new(cfg));
-        let kv_cache_layers = (0..model.config.num_layers)
-            .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
-            .collect();
         let scratch = model.create_scratch();
         let pipeline = SpecializedPipeline::Llama3Dense {
             model: (*model).clone(),
