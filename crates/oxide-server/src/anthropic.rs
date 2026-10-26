@@ -223,7 +223,8 @@ pub async fn messages_handler(
     let mut out_tokens = 0;
 
     for i in 0..max_tokens {
-        let cmd = oxide_core::StepCommand::new(req_num, cur_token, slot_guard.slot_id() as u16, false);
+        let cmd =
+            oxide_core::StepCommand::new(req_num, cur_token, slot_guard.slot_id() as u16, false);
         let res = {
             let mut pipeline = target_pipeline.lock().await;
             pipeline.step(&cmd)

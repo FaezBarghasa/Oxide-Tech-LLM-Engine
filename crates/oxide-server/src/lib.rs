@@ -775,7 +775,7 @@ async fn completions_handler(
                     break;
                 }
             };
-            let logits = pipeline.logits().map(|l| l.to_vec());
+            let logits = pipeline.logits().map(<[f32]>::to_vec);
             (completion, logits)
         };
 

@@ -103,7 +103,11 @@ impl SamplerState {
 
     #[must_use]
     pub fn new_with_seed(target_tau: f32, seed: u64) -> Self {
-        let rng_state = if seed == 0 { 0x853c_49e6_748f_ea9b } else { seed };
+        let rng_state = if seed == 0 {
+            0x853c_49e6_748f_ea9b
+        } else {
+            seed
+        };
         Self {
             mirostat_mu: 2.0 * target_tau,
             generated_tokens: Vec::new(),
@@ -277,7 +281,11 @@ impl AcademicSamplerEngine {
 
         // Renormalize remaining probabilities
         let total_prob: f32 = candidates.iter().map(|c| c.1).sum();
-        let inv_total = if total_prob > 0.0 { 1.0 / total_prob } else { 1.0 };
+        let inv_total = if total_prob > 0.0 {
+            1.0 / total_prob
+        } else {
+            1.0
+        };
         for c in &mut candidates {
             c.1 *= inv_total;
         }

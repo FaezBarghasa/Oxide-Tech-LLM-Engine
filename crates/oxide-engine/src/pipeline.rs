@@ -290,8 +290,9 @@ impl SpecializedPipeline {
     /// Returns a borrowed slice of the latest model logits if supported by the pipeline variant.
     pub fn logits(&self) -> Option<&[f32]> {
         match self {
-            Self::Llama3Dense { scratch, .. }
-            | Self::Llama3AmdApuCpuIgpu { scratch, .. } => Some(&scratch.logits),
+            Self::Llama3Dense { scratch, .. } | Self::Llama3AmdApuCpuIgpu { scratch, .. } => {
+                Some(&scratch.logits)
+            }
             _ => None,
         }
     }
