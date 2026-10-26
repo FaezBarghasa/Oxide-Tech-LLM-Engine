@@ -1734,6 +1734,32 @@ pub fn run_gpu_unlock_probe(
                 "    Live MMIO Register Access: {:?}",
                 gpu.live_registers.status
             );
+            if let Some(ref readout) = gpu.live_registers.decoded_readout {
+                println!(
+                    "    Effective Speed Readout (0x{:08x}): 0x{:08x} (All Zero Full-Rate: {})",
+                    oxide_backend_cuda::gpu_unlock_registers::FEAT_OVR_SPEED_READOUT,
+                    readout.raw,
+                    readout.is_all_zero()
+                );
+            }
+            if let Some(ref rm) = gpu.live_rm_rates {
+                println!("    Live NVIDIA RM Driver Issue Rates (via /dev/nvidiactl):");
+                println!(
+                    "      - FMLA32 (FP16/BF16/TF32 w/ FP32 Acc): {:?} ({})",
+                    rm.fmla32,
+                    if rm.is_fmla32_throttled() {
+                        "\x1b[93mTHROTTLED TO HALF-RATE IN STOCK DRIVER\x1b[0m"
+                    } else {
+                        "\x1b[92mFULL RATE ACTIVE\x1b[0m"
+                    }
+                );
+                println!(
+                    "      - FMLA16 (FP16 w/ FP16 Acc):          {:?}",
+                    rm.fmla16
+                );
+                println!("      - FFMA (Scalar FP32 FMA):             {:?}", rm.ffma);
+                println!("      - DP (DP4A Vector Dot):               {:?}", rm.dp);
+            }
             if let Some(ref speed) = gpu.current_link_speed {
                 println!(
                     "    PCIe Link Speed: {} (Max: {})",
@@ -1744,23 +1770,66 @@ pub fn run_gpu_unlock_probe(
             println!("    NUMA Node: {}", gpu.numa_node);
 
             match &gpu.capability {
-                oxide_backend_cuda::GpuUnlockCapability::AdaNativeUnthrottled {
+                oxide_backend_cuda::GpuUnlockCapability::AdaThrottledStock {
+                    chip_series,
+                    cuda_cores,
+                    sm_count,
+                    potential_gemm_gain_pct,
+                } => {
+                    println!("    Architecture: Ada Lovelace (RTX 4000 Series, SM 8.9)");
+                    println!(
+                        "    Status: \x1b[93mTHROTTLED IN STOCK VBIOS (FMLA32 HALF-RATE, UNLOCKABLE)\x1b[0m"
+                    );
+                    println!(
+                        "    Hardware Specs: Chip {chip_series}, {cuda_cores} CUDA cores, {sm_count} Streaming Multiprocessors (SM)"
+                    );
+                    println!(
+                        "    Potential Speedup: {potential_gemm_gain_pct} dense FMLA32 Tensor Core throughput"
+                    );
+                    println!(
+                        "    Precision Capabilities: FP8 (E4M3/E5M2), FP16, BF16, TF32, INT8, INT4 Marlin"
+                    );
+                    if let Some(proj) =
+                        oxide_backend_cuda::HardwareGpuUnlockEngine::compute_gemm_projections(
+                            &gpu.capability,
+                            args.clock_mhz,
+                        )
+                    {
+                        println!("    Throughput Comparison (@ {:.0} MHz):", args.clock_mhz);
+                        println!(
+                            "      - FP32 Vector Rate:              {:.2} TFLOPS",
+                            proj.fp32_tflops
+                        );
+                        println!(
+                            "      - FMLA32 Dense (Stock Half):      {:.2} TFLOPS",
+                            proj.fmla32_stock_tflops
+                        );
+                        println!(
+                            "      - FMLA32 Dense (Unlocked Full):   {:.2} TFLOPS (+100.0%)",
+                            proj.fmla32_unlocked_tflops
+                        );
+                        println!(
+                            "      - TF32 Dense (Stock vs Unlocked): {:.2} -> {:.2} TFLOPS",
+                            proj.tf32_stock_tflops, proj.tf32_unlocked_tflops
+                        );
+                        println!(
+                            "      - FP8 Dense TC (4th Gen):         {:.2} TFLOPS",
+                            proj.fp8_dense_tflops
+                        );
+                    }
+                }
+                oxide_backend_cuda::GpuUnlockCapability::AdaUnlocked {
                     chip_series,
                     cuda_cores,
                     sm_count,
                 } => {
                     println!("    Architecture: Ada Lovelace (RTX 4000 Series, SM 8.9)");
                     println!(
-                        "    Status: \x1b[92mNATIVE 4TH-GEN TENSOR CORES (UNTHROTTLED)\x1b[0m"
+                        "    Status: \x1b[92mALREADY UNLOCKED (FULL-RATE FMLA32 TENSOR ISSUE ACTIVE)\x1b[0m"
                     );
                     println!(
-                        "    Hardware Specs: Chip {chip_series}, {cuda_cores} CUDA cores, {sm_count} Streaming Multiprocessors (SM)"
+                        "    Hardware Specs: Chip {chip_series}, {cuda_cores} CUDA cores, {sm_count} SMs"
                     );
-                    println!(
-                        "    Precision Capabilities: FP8 (E4M3/E5M2), FP16, BF16, TF32, INT8, INT4 Marlin"
-                    );
-                    println!("    Issue Rate: Native Dual-Issue (Unthrottled Full-Rate by Design)");
-
                     if let Some(proj) =
                         oxide_backend_cuda::HardwareGpuUnlockEngine::compute_gemm_projections(
                             &gpu.capability,
@@ -1773,18 +1842,29 @@ pub fn run_gpu_unlock_probe(
                         );
                         println!("      - FP32 Vector Rate:   {:.2} TFLOPS", proj.fp32_tflops);
                         println!(
-                            "      - FP16/BF16 Dense TC: {:.2} TFLOPS",
-                            proj.fp16_dense_tflops
+                            "      - FMLA32 Dense TC:    {:.2} TFLOPS",
+                            proj.fmla32_unlocked_tflops
                         );
                         println!(
                             "      - TF32 Dense TC:      {:.2} TFLOPS",
-                            proj.tf32_dense_tflops
+                            proj.tf32_unlocked_tflops
                         );
                         println!(
                             "      - FP8 Dense TC:       {:.2} TFLOPS",
                             proj.fp8_dense_tflops
                         );
                     }
+                }
+                oxide_backend_cuda::GpuUnlockCapability::AdaEnterpriseUnthrottled {
+                    chip_series,
+                    cuda_cores,
+                    sm_count,
+                } => {
+                    println!("    Architecture: Ada Lovelace Enterprise ({chip_series}, SM 8.9)");
+                    println!(
+                        "    Status: \x1b[92mNATIVE FULL-RATE UNTHROTTLED (ENTERPRISE VBIOS)\x1b[0m"
+                    );
+                    println!("    Hardware Specs: {cuda_cores} CUDA cores, {sm_count} SMs");
                 }
                 oxide_backend_cuda::GpuUnlockCapability::AmpereThrottledStock {
                     chip_series,
@@ -1817,20 +1897,36 @@ pub fn run_gpu_unlock_probe(
                         println!("    Throughput Comparison (@ {:.0} MHz):", args.clock_mhz);
                         println!(
                             "      - BF16 Stock (Half-Rate):      {:.2} TFLOPS",
-                            proj.bf16_stock_tflops
+                            proj.fmla32_stock_tflops
                         );
                         println!(
-                            "      - BF16 Unlocked (Full-Rate):   {:.2} TFLOPS (+{:.1}%)",
-                            proj.bf16_unlocked_tflops,
-                            (proj.bf16_unlocked_tflops / proj.bf16_stock_tflops - 1.0) * 100.0
+                            "      - BF16 Unlocked (Full-Rate):   {:.2} TFLOPS (+100.0%)",
+                            proj.fmla32_unlocked_tflops
                         );
                     }
                 }
-                oxide_backend_cuda::GpuUnlockCapability::AmpereUnlocked { chip_series } => {
-                    println!("    Architecture: Ampere ({chip_series})");
+                oxide_backend_cuda::GpuUnlockCapability::AmpereUnlocked {
+                    chip_series,
+                    cuda_cores,
+                    sm_count,
+                } => {
+                    println!(
+                        "    Architecture: Ampere ({chip_series}, {cuda_cores} CUDA cores, {sm_count} SMs)"
+                    );
                     println!(
                         "    Status: \x1b[92mALREADY UNLOCKED (FULL BF16 ISSUE RATE ACTIVE)\x1b[0m"
                     );
+                }
+                oxide_backend_cuda::GpuUnlockCapability::AmpereEnterpriseUnthrottled {
+                    chip_series,
+                    cuda_cores,
+                    sm_count,
+                } => {
+                    println!("    Architecture: Ampere Enterprise ({chip_series})");
+                    println!(
+                        "    Status: \x1b[92mNATIVE FULL-RATE UNTHROTTLED (ENTERPRISE/DATACENTER)\x1b[0m"
+                    );
+                    println!("    Hardware Specs: {cuda_cores} CUDA cores, {sm_count} SMs");
                 }
                 oxide_backend_cuda::GpuUnlockCapability::ModernNativeUnthrottled {
                     architecture,

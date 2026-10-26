@@ -1274,6 +1274,7 @@ name = "oxide-backend-cuda"
 version = "0.5.0"
 dependencies = [
  "bytemuck",
+ "libc",
  "oxide-alloc",
  "oxide-core",
  "oxide-quant",
