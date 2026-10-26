@@ -74,11 +74,14 @@ impl TpuLlmKernels {
         let mut activations_bf16 = [0u16; HIDDEN_DIM];
         let weights_bf16 = [half::bf16::from_f32(0.05).to_bits(); HIDDEN_DIM];
 
+        let token_base = (input_token % 32000) as f32;
         for (i, act) in activations_bf16.iter_mut().enumerate() {
-            let hash = (input_token.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
-            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
-            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
-            let val = sign * mag * 0.1;
+            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / HIDDEN_DIM as f32));
+            let val = if i % 2 == 0 {
+                (token_base * freq).sin() * 0.1
+            } else {
+                (token_base * freq).cos() * 0.1
+            };
             *act = half::bf16::from_f32(val).to_bits();
         }
 

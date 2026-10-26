@@ -30,11 +30,11 @@ impl QualcommLlmKernels {
         output_logits: &mut [f32],
     ) -> Result<()> {
         let tok = input_tokens.first().copied().unwrap_or(0);
+        let len = output_logits.len().max(1);
+        let token_base = (tok % 32000) as f32;
         for (i, logit) in output_logits.iter_mut().enumerate() {
-            let hash = (tok.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
-            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
-            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
-            *logit = sign * mag * 0.1;
+            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / len as f32));
+            *logit = ((token_base * freq) + (i as f32 * 0.01)).sin() * 0.1;
         }
         Ok(())
     }

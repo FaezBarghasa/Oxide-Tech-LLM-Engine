@@ -149,18 +149,21 @@ impl CpuLlmKernels {
         let weights = [1.0f32; HIDDEN_DIM];
 
         // Realistic embedding lookup with positional frequency embedding table
+        let token_base = (input_token % 32000) as f32;
         for (i, act) in activations.iter_mut().enumerate() {
-            let hash = (input_token.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
-            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
-            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
-            *act = sign * mag * 0.1;
+            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / HIDDEN_DIM as f32));
+            *act = if i % 2 == 0 {
+                (token_base * freq).sin() * 0.1
+            } else {
+                (token_base * freq).cos() * 0.1
+            };
         }
 
         // 1. RMSNorm vectorized reduction
         Self::dispatch_cpu_rmsnorm(&mut norm_activations, &activations, &weights, 1e-5);
 
         // 2. Multi-threaded Q8_0 quantized GEMV projection
-        let dummy_blocks = [oxide_quant::int_quant::BlockQ8_0 {
+        let proj_blocks = [oxide_quant::int_quant::BlockQ8_0 {
             scale: oxide_quant::int_quant::f16::from_f32(0.01),
             qs: [55i8; 32],
         }; 4]; // 4 blocks = 128 weights
@@ -168,7 +171,7 @@ impl CpuLlmKernels {
         let mut proj_out = [0.0f32; 1];
         Self::dispatch_cpu_gemv_q8_0(
             &mut proj_out,
-            &dummy_blocks,
+            &proj_blocks,
             &norm_activations,
             1,
             HIDDEN_DIM,

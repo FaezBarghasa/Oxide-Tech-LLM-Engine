@@ -16,6 +16,7 @@ pub struct Llama3Config {
     pub vocab_size: usize,
     pub max_seq_len: usize,
     pub rms_norm_eps: u32, // Store scaled integer eps (e.g. 1e-5 represented as bits or f32)
+    pub eos_token_id: Option<u32>,
 }
 
 impl Default for Llama3Config {
@@ -30,6 +31,7 @@ impl Default for Llama3Config {
             vocab_size: 128_256,
             max_seq_len: 131_072,
             rms_norm_eps: 1e-5f32.to_bits(),
+            eos_token_id: Some(128_001),
         }
     }
 }
@@ -48,6 +50,7 @@ impl Llama3Config {
             vocab_size: 1024,
             max_seq_len: 2048,
             rms_norm_eps: 1e-5f32.to_bits(),
+            eos_token_id: Some(2),
         }
     }
 
@@ -69,6 +72,7 @@ impl Llama3Config {
             vocab_size: spec.vocab_size as usize,
             max_seq_len: spec.max_context_tokens as usize,
             rms_norm_eps: 1e-5f32.to_bits(),
+            eos_token_id: None,
         }
     }
 
@@ -101,6 +105,7 @@ impl Llama3Config {
             .get("token_embd.weight")
             .and_then(|t| t.dimensions.iter().max().copied())
             .unwrap_or(128_256) as usize;
+        let eos_token_id = gguf.get_u32("tokenizer.ggml.eos_token_id");
 
         Self {
             hidden_dim,
@@ -112,6 +117,7 @@ impl Llama3Config {
             vocab_size,
             max_seq_len,
             rms_norm_eps: eps.to_bits(),
+            eos_token_id,
         }
     }
 }
@@ -279,6 +285,53 @@ impl QuantizedTensor {
             | Self::Q4_K { n, .. }
             | Self::Q6_K { n, .. }
             | Self::Q8_0 { n, .. } => *n,
+        }
+    }
+
+    /// Extracts a single dequantized embedding row on-the-fly with zero intermediate heap allocations.
+    pub fn extract_row(&self, row_idx: usize, out: &mut [f32]) {
+        match self {
+            Self::F32 { data, n, .. } => {
+                let start = row_idx * (*n);
+                if start + (*n) <= data.len() && out.len() >= *n {
+                    out[..*n].copy_from_slice(&data[start..start + *n]);
+                }
+            }
+            Self::Q8_0 { blocks, n, .. } => {
+                let blocks_per_row = *n / 32;
+                let start_block = row_idx * blocks_per_row;
+                if start_block + blocks_per_row <= blocks.len() && out.len() >= *n {
+                    for b in 0..blocks_per_row {
+                        let blk = &blocks[start_block + b];
+                        let d = blk.scale.to_f32();
+                        for i in 0..32 {
+                            out[b * 32 + i] = f32::from(blk.qs[i]) * d;
+                        }
+                    }
+                }
+            }
+            Self::Q4_K { blocks, n, .. } => {
+                let blocks_per_row = *n / 256;
+                let start_block = row_idx * blocks_per_row;
+                if start_block + blocks_per_row <= blocks.len() && out.len() >= *n {
+                    let mut chunk = [0.0f32; 256];
+                    for b in 0..blocks_per_row {
+                        blocks[start_block + b].dequantize(&mut chunk);
+                        out[b * 256..(b + 1) * 256].copy_from_slice(&chunk);
+                    }
+                }
+            }
+            Self::Q6_K { blocks, n, .. } => {
+                let blocks_per_row = *n / 256;
+                let start_block = row_idx * blocks_per_row;
+                if start_block + blocks_per_row <= blocks.len() && out.len() >= *n {
+                    let mut chunk = [0.0f32; 256];
+                    for b in 0..blocks_per_row {
+                        blocks[start_block + b].dequantize(&mut chunk);
+                        out[b * 256..(b + 1) * 256].copy_from_slice(&chunk);
+                    }
+                }
+            }
         }
     }
 
