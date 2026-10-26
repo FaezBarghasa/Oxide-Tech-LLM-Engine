@@ -26,6 +26,7 @@
 pub mod bitsandbytes;
 pub mod compressed_tensors;
 pub mod cq2;
+pub mod dms;
 pub mod exl2;
 pub mod fp8;
 pub mod fwht;
@@ -42,6 +43,7 @@ pub mod pq2_0;
 pub mod ptq1_0;
 pub mod qr;
 pub mod simd;
+pub mod sparse_kv;
 pub mod torchao;
 
 // High-level re-exports
@@ -51,6 +53,11 @@ pub use compressed_tensors::{
     dequantize_compressed_slice,
 };
 pub use cq2::NeedleCQ2;
+pub use dms::{
+    CompactKVCache, CompactSlot, DEFAULT_DMS_ALPHA_OFFSET, DEFAULT_DMS_ALPHA_SCALE,
+    DEFAULT_DMS_WINDOW_SIZE, DMSConfig, DMSEvictionExtractor, HeadCompactKVSlotManager,
+    is_dms_token_live,
+};
 pub use exl2::{Exl2BitsPerWeight, Exl2Quant, Exl2WeightMatrix};
 pub use fp8::{BlockFp8E4M3, Fp8E4M3, Fp8E5M2};
 pub use fwht::{
@@ -79,4 +86,8 @@ pub use nvfp4::{BlockNvFp4_16, NvFp4};
 pub use pq2_0::{BlockPQ2_0, PackedQuant2_0};
 pub use ptq1_0::{BlockPTQ1_0, Ternary1_58Bit, TernaryBlock128};
 pub use qr::{QrQuantKind, QuantizedResidentTensor};
+pub use sparse_kv::{
+    H2OTracker, QuestKeyBoundingBox, QuestPageManager, SparseKvPolicy,
+    compute_attention_sink_retained_positions,
+};
 pub use torchao::{TorchAoLinearDescriptor, TorchAoQuantType, dequantize_fp6_e3m2};

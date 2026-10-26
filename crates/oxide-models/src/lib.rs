@@ -36,6 +36,7 @@ pub mod attention_kernels;
 pub mod audio;
 pub mod bonsai2;
 pub mod chat_template;
+pub mod compact_attention;
 pub mod decision;
 pub mod dflash;
 pub mod diffusion;
@@ -59,8 +60,10 @@ pub mod rope;
 pub mod specialized;
 pub mod speculative;
 pub mod tokenizer;
+pub mod tokenspeed_mla;
 pub mod vision;
 
+pub use compact_attention::CompactAttentionEngine;
 pub use decision::{
     DecisionScorer, LabelLogits, LabelPrompt, LabelPromptResult, MAX_LABEL_PROMPTS,
     MAX_LABELS_PER_PROMPT, TokenizedLabelPrompt, shared_prefix_len, softmax,
@@ -70,6 +73,10 @@ pub use dspark::{DSparkConfig, DSparkModel};
 pub use gdn::{GatedDeltaNet, GdnReplayState, GdnStepInputs, GdnUpdateRecord};
 pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};
 pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
+pub use tokenspeed_mla::{
+    MLA_MAX_TILE_HEADS, MlaTileOptimizer, TokenSpeedMlaConfig, TokenSpeedMlaEngine,
+    TokenSpeedMlaInputs,
+};
 
 pub use attention_kernels::{
     AttentionKernelBackend, FlashInferConfig, FlashInferEngine, FlashMlaEngine,
