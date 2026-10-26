@@ -527,6 +527,7 @@ pub struct Llama3Model {
     pub rope: RopeScalingEngine,
     pub flash_attn: FlashAttentionEngine,
     pub token_embedding: Vec<f32>, // [vocab_size, hidden_dim]
+    pub token_embd_tensor: Option<QuantizedTensor>,
     pub layers: Vec<Llama3LayerWeights>,
     pub output_norm: Vec<f32>,    // [hidden_dim]
     pub lm_head: QuantizedTensor, // [vocab_size, hidden_dim]
@@ -573,6 +574,7 @@ impl Llama3Model {
             rope,
             flash_attn,
             token_embedding,
+            token_embd_tensor: None,
             layers,
             output_norm,
             lm_head,
@@ -608,6 +610,7 @@ impl Llama3Model {
             rope,
             flash_attn,
             token_embedding: Vec::new(),
+            token_embd_tensor: None,
             layers,
             output_norm: Vec::new(),
             lm_head: QuantizedTensor::empty(),
@@ -1003,7 +1006,7 @@ impl Llama3Model {
             &mut self.output_norm,
         );
 
-        // 1b. Embeddings: Only inflate if total weights < 32M floats (~128MB), otherwise keep lean
+        // 1b. Embeddings: Zero-copy slicing if large, or inflate if small
         let h = self.config.hidden_dim;
         let v = self.config.vocab_size;
         if v * h <= 32_000_000 {
@@ -1014,10 +1017,11 @@ impl Llama3Model {
                 data_slice,
                 &mut self.token_embedding,
             );
+            self.token_embd_tensor = None;
         } else {
-            // For massive vocab models (e.g. Qwen 152k vocab * 4096 = 2.48GB),
-            // cache a zero-stub or direct lookup to avoid 2.5GB RAM bloat.
             self.token_embedding.clear();
+            self.token_embd_tensor =
+                Self::extract_gguf_tensor(gguf, "token_embd.weight", data_slice, v, h);
         }
 
         let h = self.config.hidden_dim;
@@ -1204,13 +1208,17 @@ impl Llama3Model {
         let tok_idx = (token_id as usize) % self.config.vocab_size;
 
         // 1. Embedding lookup
-        let emb_offset = tok_idx * h;
-        if emb_offset + h <= self.token_embedding.len() {
-            scratch
-                .hidden
-                .copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
+        if let Some(ref emb_tensor) = self.token_embd_tensor {
+            emb_tensor.extract_row(tok_idx, &mut scratch.hidden[..h]);
         } else {
-            scratch.hidden.fill(0.0);
+            let emb_offset = tok_idx * h;
+            if emb_offset + h <= self.token_embedding.len() {
+                scratch
+                    .hidden
+                    .copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
+            } else {
+                scratch.hidden.fill(0.0);
+            }
         }
 
         let q_dim = self.config.num_heads * self.config.head_dim;

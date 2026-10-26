@@ -157,10 +157,16 @@ impl SpecializedPipeline {
                     }
                 }
                 let next_token = max_idx as u32;
-                let is_terminal = next_token == 0
-                    || next_token == 2
-                    || next_token == 128_001
-                    || next_token == 128_009;
+                let is_terminal = if let Some(eos) = model.config.eos_token_id {
+                    next_token == eos
+                } else {
+                    next_token == 2
+                        || next_token == 128_001
+                        || next_token == 128_008
+                        || next_token == 128_009
+                        || next_token == 151_643
+                        || next_token == 151_645
+                };
                 Ok(StepCompletion::new(
                     cmd.sequence_id,
                     next_token,
@@ -185,13 +191,17 @@ impl SpecializedPipeline {
                 // 1. Token Embedding lookup on host DDR5
                 let h = model.config.hidden_dim;
                 let tok_idx = (cmd.input_token as usize) % model.config.vocab_size;
-                let emb_offset = tok_idx * h;
-                if emb_offset + h <= model.token_embedding.len() {
-                    scratch
-                        .hidden
-                        .copy_from_slice(&model.token_embedding[emb_offset..emb_offset + h]);
+                if let Some(ref emb_tensor) = model.token_embd_tensor {
+                    emb_tensor.extract_row(tok_idx, &mut scratch.hidden[..h]);
                 } else {
-                    scratch.hidden.fill(0.0);
+                    let emb_offset = tok_idx * h;
+                    if emb_offset + h <= model.token_embedding.len() {
+                        scratch
+                            .hidden
+                            .copy_from_slice(&model.token_embedding[emb_offset..emb_offset + h]);
+                    } else {
+                        scratch.hidden.fill(0.0);
+                    }
                 }
 
                 // 2. Collaborative execution across topology partitions (CPU AVX2 threads + iGPU CUs)
@@ -232,10 +242,16 @@ impl SpecializedPipeline {
                     }
                 }
                 let next_token = max_idx as u32;
-                let is_terminal = next_token == 0
-                    || next_token == 2
-                    || next_token == 128_001
-                    || next_token == 128_009;
+                let is_terminal = if let Some(eos) = model.config.eos_token_id {
+                    next_token == eos
+                } else {
+                    next_token == 2
+                        || next_token == 128_001
+                        || next_token == 128_008
+                        || next_token == 128_009
+                        || next_token == 151_643
+                        || next_token == 151_645
+                };
                 Ok(StepCompletion::new(
                     cmd.sequence_id,
                     next_token,
