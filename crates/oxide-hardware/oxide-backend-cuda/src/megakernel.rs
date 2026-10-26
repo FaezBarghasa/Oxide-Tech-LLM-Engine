@@ -272,6 +272,102 @@ pub struct MegakernelStats {
     pub tokens_per_joule: f32,
 }
 
+/// Compact 64-byte Megakernel Task Descriptor matching GPU L2 cache-line alignment.
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MegakernelTask {
+    pub op_type: MegakernelOpType,
+    pub layer_idx: u16,
+    pub batch_size: u16,
+    pub seq_pos: u32,
+    pub in_ptr: u64,
+    pub out_ptr: u64,
+    pub weight_ptr: u64,
+    pub bias_ptr: u64,
+    pub kv_table_ptr: u64,
+    pub aux_param: u32,
+    pub flags: u32,
+}
+
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MegakernelOpType {
+    RMSNorm = 0,
+    RMSNormFwht = 1,
+    QkvProj = 2,
+    RopeKvAppend = 3,
+    FlashDecodeGqa = 4,
+    OProj = 5,
+    FusedMoeUpGate = 6,
+    SwiGLU = 7,
+    MoeDown = 8,
+    AllReduceBarrier = 9,
+}
+
+/// Lock-free pinned ring buffer for low-latency host-to-device task dispatch.
+#[derive(Debug)]
+pub struct MegakernelTaskRingBuffer {
+    pub capacity: usize,
+    pub tasks: Vec<MegakernelTask>,
+    pub head: AtomicU32,
+    pub tail: AtomicU32,
+}
+
+impl MegakernelTaskRingBuffer {
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        assert!(capacity.is_power_of_two(), "Capacity must be power of two");
+        let default_task = MegakernelTask {
+            op_type: MegakernelOpType::RMSNorm,
+            layer_idx: 0,
+            batch_size: 0,
+            seq_pos: 0,
+            in_ptr: 0,
+            out_ptr: 0,
+            weight_ptr: 0,
+            bias_ptr: 0,
+            kv_table_ptr: 0,
+            aux_param: 0,
+            flags: 0,
+        };
+        Self {
+            capacity,
+            tasks: vec![default_task; capacity],
+            head: AtomicU32::new(0),
+            tail: AtomicU32::new(0),
+        }
+    }
+
+    pub fn push(&mut self, task: MegakernelTask) -> Result<()> {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        if head.wrapping_sub(tail) >= self.capacity as u32 {
+            return Err(EngineError::QueueOverflow);
+        }
+        let idx = (head as usize) & (self.capacity - 1);
+        self.tasks[idx] = task;
+        self.head.store(head.wrapping_add(1), Ordering::Release);
+        Ok(())
+    }
+
+    pub fn pop(&mut self) -> Option<MegakernelTask> {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        if head == tail {
+            return None;
+        }
+        let idx = (tail as usize) & (self.capacity - 1);
+        let task = self.tasks[idx];
+        self.tail.store(tail.wrapping_add(1), Ordering::Release);
+        Some(task)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.head.load(Ordering::Relaxed) == self.tail.load(Ordering::Relaxed)
+    }
+}
+
 // =============================================================================
 // Math Helpers matching CUDA Intrinsics in `kernel.cu`
 // =============================================================================
@@ -1093,5 +1189,36 @@ mod tests {
         assert_eq!(stats.total_layers_executed, 4);
         assert!(stats.tokens_per_second > 0.0);
         assert!(stats.tokens_per_joule > 0.0);
+    }
+
+    #[test]
+    fn test_megakernel_task_ring_buffer() {
+        assert_eq!(std::mem::size_of::<MegakernelTask>(), 64);
+        assert_eq!(std::mem::align_of::<MegakernelTask>(), 64);
+
+        let mut ring = MegakernelTaskRingBuffer::new(4);
+        assert!(ring.is_empty());
+
+        let t0 = MegakernelTask {
+            op_type: MegakernelOpType::RMSNormFwht,
+            layer_idx: 1,
+            batch_size: 1,
+            seq_pos: 10,
+            in_ptr: 0x1000,
+            out_ptr: 0x2000,
+            weight_ptr: 0x3000,
+            bias_ptr: 0,
+            kv_table_ptr: 0,
+            aux_param: 128,
+            flags: 1,
+        };
+
+        assert!(ring.push(t0).is_ok());
+        assert!(!ring.is_empty());
+
+        let popped = ring.pop().expect("popped task");
+        assert_eq!(popped.op_type, MegakernelOpType::RMSNormFwht);
+        assert_eq!(popped.layer_idx, 1);
+        assert!(ring.is_empty());
     }
 }

@@ -80,10 +80,7 @@ impl RocmBackend {
         custom_gpu_name: Option<&str>,
     ) -> Self {
         let name = custom_gpu_name.unwrap_or("AMD Instinct MI300X");
-        let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_else(|| {
-            // Default baseline: AMD Instinct MI300X
-            GpuDeviceProfile::from_known_device_name("mi300x").unwrap()
-        });
+        let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_default();
         let execution_plan = RocmExecutionPlan::for_profile(&profile);
 
         let hip_stream = HipStream::new().ok();

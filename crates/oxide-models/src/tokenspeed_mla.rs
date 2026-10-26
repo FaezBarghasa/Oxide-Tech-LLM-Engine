@@ -351,6 +351,25 @@ impl TokenSpeedMlaEngine {
 
         Ok(())
     }
+
+    /// Projects uncompressed query Nope vector into absorbed latent space:
+    /// `q_absorbed[r] = sum_d (q_nope[d] * W_UK[r, d])`.
+    pub fn compute_absorbed_query(
+        &self,
+        q_nope_head: &[f32],
+        w_uk_head: &[f32],
+        q_absorbed: &mut [f32],
+    ) {
+        let qk_nope_dim = self.config.qk_nope_head_dim;
+        let kv_lora_rank = self.config.kv_lora_rank;
+        for r in 0..kv_lora_rank {
+            let mut acc = 0.0f32;
+            for d in 0..qk_nope_dim {
+                acc += q_nope_head[d] * w_uk_head[r * qk_nope_dim + d];
+            }
+            q_absorbed[r] = acc;
+        }
+    }
 }
 
 impl fmt::Display for TokenSpeedMlaEngine {

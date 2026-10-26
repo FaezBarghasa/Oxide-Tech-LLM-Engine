@@ -29,7 +29,7 @@ pub mod mlx;
 pub use arch::MetalExecutionPlan;
 pub use driver::is_metal_available;
 pub use kernels::MetalLlmKernels;
-pub use mlx::{MetalCommandStream, MetalUnifiedBuffer};
+pub use mlx::{MetalCommandStream, MetalIndirectCommandBuffer, MetalUnifiedBuffer};
 use oxide_core::error::Result;
 use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,

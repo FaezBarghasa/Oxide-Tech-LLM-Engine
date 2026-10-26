@@ -44,18 +44,18 @@ impl MockEngineContext {
         if tokio::runtime::Handle::try_current().is_ok() {
             batch_engine.spawn();
         } else {
-            std::thread::Builder::new()
+            let _ = std::thread::Builder::new()
                 .name("batch-engine".to_string())
                 .spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
+                    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .unwrap();
-                    rt.block_on(async move {
-                        batch_engine.run_loop().await;
-                    });
-                })
-                .expect("Failed to spawn batch engine thread");
+                    {
+                        rt.block_on(async move {
+                            batch_engine.run_loop().await;
+                        });
+                    }
+                });
         }
 
         let state = ServerState {

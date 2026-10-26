@@ -155,10 +155,7 @@ impl CudaBackend {
         custom_gpu_name: Option<&str>,
     ) -> Self {
         let name = custom_gpu_name.unwrap_or("NVIDIA GeForce RTX 4060 Laptop GPU");
-        let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_else(|| {
-            // Default baseline: Ada Lovelace RTX 4060
-            GpuDeviceProfile::from_known_device_name("rtx 4090").unwrap()
-        });
+        let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_default();
         let execution_plan = KernelExecutionPlan::for_profile(&profile);
 
         // Attempt real physical device initialization

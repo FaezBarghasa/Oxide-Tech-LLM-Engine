@@ -106,12 +106,11 @@ impl DynamicModelManager {
         &self.default_model
     }
 
-    #[must_use]
-    pub fn get_default_pipeline(&self) -> Arc<Mutex<SpecializedPipeline>> {
+    pub fn get_default_pipeline(&self) -> oxide_core::Result<Arc<Mutex<SpecializedPipeline>>> {
         self.models
             .get(&self.default_model)
             .cloned()
-            .expect("Default model pipeline must exist")
+            .ok_or(oxide_core::EngineError::DeviceNotFound)
     }
 
     #[must_use]

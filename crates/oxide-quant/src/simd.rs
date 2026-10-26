@@ -1648,6 +1648,127 @@ pub fn flash_attention_cpu(
         });
 }
 
+/// Computes the dot product between a PQ2_0 block's 32 packed bytes (128 quaternary weights) and f32 activations.
+#[inline(always)]
+#[must_use]
+pub fn dot_pq2_0(qs: &[u8; 32], act: &[f32; 128], scale: f32) -> f32 {
+    let mut acc0 = 0.0f32;
+    let mut acc1 = 0.0f32;
+    let mut acc2 = 0.0f32;
+    let mut acc3 = 0.0f32;
+
+    for (byte_idx, &b) in qs.iter().enumerate() {
+        let base = byte_idx * 4;
+        let c0 = ((b & 0x03) as i32) - 1;
+        let c1 = (((b >> 2) & 0x03) as i32) - 1;
+        let c2 = (((b >> 4) & 0x03) as i32) - 1;
+        let c3 = (((b >> 6) & 0x03) as i32) - 1;
+
+        acc0 += (c0 as f32) * act[base];
+        acc1 += (c1 as f32) * act[base + 1];
+        acc2 += (c2 as f32) * act[base + 2];
+        acc3 += (c3 as f32) * act[base + 3];
+    }
+
+    (acc0 + acc1 + acc2 + acc3) * scale
+}
+
+/// Multithreaded PTQ1_0 (Ternary 1.58-bit) Matrix-Vector Multiplication across CPU cores.
+pub fn gemv_ptq1_0(
+    matrix: &[crate::ptq1_0::BlockPTQ1_0],
+    vector: &[f32],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    assert!(n.is_multiple_of(128), "n must be a multiple of 128 for PTQ1_0");
+    let blocks_per_row = n / 128;
+    assert!(
+        matrix.len() >= m * blocks_per_row,
+        "Insufficient PTQ1_0 blocks"
+    );
+    assert!(vector.len() >= n, "Insufficient vector length");
+    assert!(output.len() >= m, "Insufficient output length");
+
+    let compute_row = |row: usize| -> f32 {
+        let row_offset = row * blocks_per_row;
+        let mut acc = 0.0f32;
+        for b in 0..blocks_per_row {
+            let blk = &matrix[row_offset + b];
+            let act_chunk: &[f32; 128] = vector[b * 128..(b + 1) * 128]
+                .try_into()
+                .expect("slice length 128");
+            acc += blk.dot_product_128(act_chunk);
+        }
+        acc
+    };
+
+    if m <= 8 {
+        for row in 0..m {
+            output[row] = compute_row(row);
+        }
+    } else {
+        let chunk_size = (m / 32).clamp(8, 32);
+        output[..m]
+            .par_chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * chunk_size;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    *out_val = compute_row(base_row + i);
+                }
+            });
+    }
+}
+
+/// Multithreaded PQ2_0 (Quaternary 2-bit) Matrix-Vector Multiplication across CPU cores.
+pub fn gemv_pq2_0(
+    matrix: &[crate::pq2_0::BlockPQ2_0],
+    vector: &[f32],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    assert!(n.is_multiple_of(128), "n must be a multiple of 128 for PQ2_0");
+    let blocks_per_row = n / 128;
+    assert!(
+        matrix.len() >= m * blocks_per_row,
+        "Insufficient PQ2_0 blocks"
+    );
+    assert!(vector.len() >= n, "Insufficient vector length");
+    assert!(output.len() >= m, "Insufficient output length");
+
+    let compute_row = |row: usize| -> f32 {
+        let row_offset = row * blocks_per_row;
+        let mut acc = 0.0f32;
+        for b in 0..blocks_per_row {
+            let blk = &matrix[row_offset + b];
+            let act_chunk: &[f32; 128] = vector[b * 128..(b + 1) * 128]
+                .try_into()
+                .expect("slice length 128");
+            acc += dot_pq2_0(&blk.qs, act_chunk, blk.scale());
+        }
+        acc
+    };
+
+    if m <= 8 {
+        for row in 0..m {
+            output[row] = compute_row(row);
+        }
+    } else {
+        let chunk_size = (m / 32).clamp(8, 32);
+        output[..m]
+            .par_chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * chunk_size;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    *out_val = compute_row(base_row + i);
+                }
+            });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1902,6 +2023,47 @@ mod tests {
         flash_attention_cpu(&q, &k, &v, 1, 64, 1, 1, &mut out);
         for &val in &out {
             assert!((val - 2.0).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn test_gemv_ptq1_0_multithreaded() {
+        let m = 16;
+        let n = 128;
+        let mut input = [0.0f32; 128];
+        for (i, v) in input.iter_mut().enumerate() {
+            *v = ((i % 3) as f32 - 1.0) * 0.5;
+        }
+        let block = crate::ptq1_0::BlockPTQ1_0::quantize(&input);
+        let matrix = vec![block; m];
+        let vector = vec![1.0f32; n];
+        let mut output = vec![0.0f32; m];
+
+        gemv_ptq1_0(&matrix, &vector, m, n, &mut output);
+        assert_eq!(output.len(), m);
+        let _expected = block.dot_product_128(input.as_slice().try_into().unwrap());
+        for &val in &output {
+            assert!(val.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_gemv_pq2_0_multithreaded() {
+        let m = 16;
+        let n = 128;
+        let mut input = [0.0f32; 128];
+        for (i, v) in input.iter_mut().enumerate() {
+            *v = ((i % 3) as f32 - 1.0) * 0.5;
+        }
+        let block = crate::pq2_0::BlockPQ2_0::quantize(&input);
+        let matrix = vec![block; m];
+        let vector = vec![1.0f32; n];
+        let mut output = vec![0.0f32; m];
+
+        gemv_pq2_0(&matrix, &vector, m, n, &mut output);
+        assert_eq!(output.len(), m);
+        for &val in &output {
+            assert!(val.is_finite());
         }
     }
 }

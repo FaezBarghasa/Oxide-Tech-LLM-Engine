@@ -39,7 +39,7 @@ pub mod slab_pool;
 pub mod transactional;
 
 pub use compact_kv::{CompactSlotMetadata, DmsCompactKvArena, DmsPolicy, SequenceCompactTable};
-pub use device_arena::DeviceMemoryArena;
+pub use device_arena::{DeviceMemoryArena, MemoryBudgetProfile};
 pub use hierarchical_kv::{
     CacheTierLocation, DistributedKvBlockPayload, HierarchicalKvCache, KvBlockDescriptor,
     TOKENS_PER_KV_BLOCK,
@@ -53,4 +53,4 @@ pub use kv_advanced::{
 pub use paged_kv::{PagedKvArena, PhysicalPageBlock, SequenceBlockTable, TOKENS_PER_PAGE};
 pub use radix_cache::{RadixNode, RadixPrefixCache};
 pub use slab_pool::{PhysicalSlabBlock, SequenceSlabTable, SlabPoolArena, TOKENS_PER_SLAB};
-pub use transactional::TransactionalBlockTable;
+pub use transactional::{KvTransaction, TransactionalBlockTable, TransactionalKvGuard};

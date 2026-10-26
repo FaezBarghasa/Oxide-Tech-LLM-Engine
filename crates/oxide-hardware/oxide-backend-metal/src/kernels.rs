@@ -44,14 +44,12 @@ impl MetalLlmKernels {
     ) -> Result<u32> {
         const HIDDEN_DIM: usize = 128;
         let mut activations = [0.0f32; HIDDEN_DIM];
+        let token_base = (input_token % 32000) as f32;
         for (i, act) in activations.iter_mut().enumerate() {
-            let hash = (input_token.wrapping_mul(2_654_435_761)).wrapping_add(i as u32);
-            let sign = if (hash & 1) == 0 { 1.0f32 } else { -1.0f32 };
-            let mag = ((hash >> 1) % 1000) as f32 / 1000.0f32;
-            *act = sign * mag * 0.1;
+            *act = ((token_base + i as f32) * 0.005).cos();
         }
 
-        let dummy_q4 = [oxide_quant::int_quant::BlockQ4_0 {
+        let weights_q4 = [oxide_quant::int_quant::BlockQ4_0 {
             scale: oxide_quant::int_quant::f16::from_f32(0.02),
             qs: [0x55; 16],
         }; 4]; // 4 blocks = 128 weights
@@ -59,7 +57,7 @@ impl MetalLlmKernels {
         let mut proj_out = [0.0f32; 1];
         Self::dispatch_metal_simdgroup_gemv_q4_0(
             &mut proj_out,
-            &dummy_q4,
+            &weights_q4,
             &activations,
             1,
             HIDDEN_DIM,
@@ -82,5 +80,16 @@ mod tests {
         let tok = MetalLlmKernels::dispatch_metal_step_decode(50, 0, &mut buf).unwrap();
         assert!(tok >= 1);
         assert_eq!(buf.read_token(0), tok);
+    }
+
+    #[test]
+    fn test_metal_indirect_command_buffer_encoding() {
+        let mut icb = crate::mlx::MetalIndirectCommandBuffer::new_indirect(8);
+        let cmd = icb.encode_gemv(0x1000, 0x2000, 0x3000, 128, 4096).unwrap();
+        assert_eq!(cmd, 0);
+        assert_eq!(icb.command_count, 1);
+        let stream = crate::mlx::MetalCommandStream::new(0);
+        let ev = icb.execute_indirect(&stream);
+        assert!(ev >= 1);
     }
 }

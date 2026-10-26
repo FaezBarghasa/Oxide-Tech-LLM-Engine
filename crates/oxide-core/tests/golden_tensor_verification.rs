@@ -61,3 +61,47 @@ fn test_golden_tensor_similarity_metrics() {
         "Cosine similarity below threshold: {cos_sim}"
     );
 }
+
+#[test]
+fn test_try_ffi_macro_and_hardware_fault() {
+    use oxide_core::error::EngineError;
+    use oxide_core::try_ffi;
+
+    fn simulated_ffi_success() -> Result<i32, EngineError> {
+        let ret = try_ffi!("test_backend", 0);
+        Ok(ret)
+    }
+
+    fn simulated_ffi_fail() -> Result<i32, EngineError> {
+        let ret = try_ffi!("cuda", 42);
+        Ok(ret)
+    }
+
+    assert_eq!(simulated_ffi_success(), Ok(0));
+    assert_eq!(
+        simulated_ffi_fail(),
+        Err(EngineError::HardwareFault {
+            backend: "cuda",
+            code: 42,
+            recoverable: false,
+        })
+    );
+}
+
+#[test]
+fn test_numerical_drift_and_transaction_aborted_errors() {
+    use oxide_core::error::EngineError;
+
+    let err_drift = EngineError::NumericalDrift {
+        layer: 4,
+        diff: 0.0025,
+        tolerance: 0.001,
+    };
+    assert!(err_drift.to_string().contains("layer 4"));
+
+    let err_txn = EngineError::TransactionAborted {
+        slot_id: 2,
+        uncommitted_pages: 5,
+    };
+    assert!(err_txn.to_string().contains("slot 2"));
+}

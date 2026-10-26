@@ -95,4 +95,56 @@ impl DeviceMemoryArena<'_> {
     pub const fn num_slots(&self) -> usize {
         self.num_slots
     }
+
+    /// Calibrates the startup memory budget given total available device VRAM,
+    /// model architecture parameters, and target batch token capacity.
+    #[must_use]
+    pub fn calibrate_startup_budget(
+        total_vram_bytes: usize,
+        max_num_batched_tokens: usize,
+        hidden_dim: usize,
+        num_layers: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        bytes_per_elem: usize,
+    ) -> MemoryBudgetProfile {
+        let activation_scratchpad_bytes = max_num_batched_tokens
+            * (hidden_dim * 4 + num_kv_heads * head_dim * 2 + (hidden_dim * 8) / 3)
+            * bytes_per_elem;
+
+        // Reserve 128MB safety margin for driver and runtime context
+        let driver_headroom_bytes = 128 * 1024 * 1024;
+        let reserved_bytes = activation_scratchpad_bytes + driver_headroom_bytes;
+
+        let available_kv_bytes = total_vram_bytes.saturating_sub(reserved_bytes);
+        let bytes_per_block = crate::paged_kv::TOKENS_PER_PAGE
+            * (num_kv_heads * head_dim)
+            * bytes_per_elem
+            * 2
+            * num_layers;
+        let max_kv_blocks = if bytes_per_block > 0 {
+            available_kv_bytes / bytes_per_block
+        } else {
+            0
+        };
+
+        MemoryBudgetProfile {
+            max_num_batched_tokens,
+            peak_activation_bytes: activation_scratchpad_bytes,
+            available_kv_cache_bytes: available_kv_bytes,
+            max_kv_blocks,
+            total_allocated_bytes: reserved_bytes + (max_kv_blocks * bytes_per_block),
+        }
+    }
+}
+
+/// Startup memory profile calculating activation and KV-cache footprints
+/// for deterministic memory ceiling and zero-OOM operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryBudgetProfile {
+    pub max_num_batched_tokens: usize,
+    pub peak_activation_bytes: usize,
+    pub available_kv_cache_bytes: usize,
+    pub max_kv_blocks: usize,
+    pub total_allocated_bytes: usize,
 }

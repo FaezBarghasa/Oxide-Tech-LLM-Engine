@@ -56,6 +56,38 @@ struct ActiveSequence {
     sampler_state: SamplerState,
 }
 
+/// SLA-aware dynamic chunked prefill scheduler configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChunkedPrefillConfig {
+    pub min_chunk_tokens: usize,
+    pub max_chunk_tokens: usize,
+    pub sla_itl_micros: u64,
+    pub base_step_micros: u64,
+    pub prefill_alpha_micros_per_tok: f32,
+}
+
+impl Default for ChunkedPrefillConfig {
+    fn default() -> Self {
+        Self {
+            min_chunk_tokens: 32,
+            max_chunk_tokens: 512,
+            sla_itl_micros: 25_000,
+            base_step_micros: 2_000,
+            prefill_alpha_micros_per_tok: 25.0,
+        }
+    }
+}
+
+impl ChunkedPrefillConfig {
+    #[must_use]
+    pub fn compute_prefill_budget(&self, active_decode_batch: usize) -> usize {
+        let decode_est_micros = self.base_step_micros + (active_decode_batch as u64 * 350);
+        let headroom = self.sla_itl_micros.saturating_sub(decode_est_micros);
+        let budget = (headroom as f32 / self.prefill_alpha_micros_per_tok.max(1.0)) as usize;
+        budget.clamp(self.min_chunk_tokens, self.max_chunk_tokens)
+    }
+}
+
 /// Background Continuous Batching & Radix Cache Actor.
 #[derive(Debug)]
 pub struct ContinuousBatchingEngine {
@@ -66,6 +98,7 @@ pub struct ContinuousBatchingEngine {
     active_sequences: HashMap<usize, ActiveSequence>,
     max_slots: usize,
     cmd_receiver: mpsc::UnboundedReceiver<EngineCommand>,
+    pub prefill_config: ChunkedPrefillConfig,
 }
 
 impl ContinuousBatchingEngine {
@@ -93,6 +126,7 @@ impl ContinuousBatchingEngine {
             active_sequences: HashMap::with_capacity(max_slots),
             max_slots,
             cmd_receiver,
+            prefill_config: ChunkedPrefillConfig::default(),
         }
     }
 
@@ -277,7 +311,9 @@ impl ContinuousBatchingEngine {
         let slot_keys: Vec<usize> = self.active_sequences.keys().copied().collect();
 
         for slot_id in slot_keys {
-            let seq = self.active_sequences.get_mut(&slot_id).unwrap();
+            let Some(seq) = self.active_sequences.get_mut(&slot_id) else {
+                continue;
+            };
 
             // Run zero-allocation forward decode step
             let step_res = self.model.forward_step_paged(
@@ -400,5 +436,24 @@ impl EngineHandle {
         let _ = self
             .sender
             .send(EngineCommand::CancelRequest { request_id });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunked_prefill_budget_computation() {
+        let cfg = ChunkedPrefillConfig::default();
+        // At batch 0, maximum headroom
+        let b0 = cfg.compute_prefill_budget(0);
+        assert!(b0 >= cfg.min_chunk_tokens);
+        assert!(b0 <= cfg.max_chunk_tokens);
+
+        // At high batch size (e.g. 64), decode est is high, budget clamps to min_chunk_tokens
+        let b64 = cfg.compute_prefill_budget(64);
+        assert_eq!(b64, cfg.min_chunk_tokens);
+        assert!(b0 > b64);
     }
 }

@@ -103,4 +103,42 @@ impl DfaSchemaGrammar {
             }
         }
     }
+
+    /// Identifies if a state has a unique, deterministic transition byte.
+    #[must_use]
+    pub fn deterministic_transition(&self, current_state: u32) -> Option<u8> {
+        if current_state as usize >= self.num_states {
+            return None;
+        }
+        let base = current_state as usize * 256;
+        let mut single_byte = None;
+        for b in 0..256 {
+            if self.transitions[base + b] != DFA_ERROR_STATE {
+                if single_byte.is_some() {
+                    return None; // Multiple branches exist
+                }
+                single_byte = Some(b as u8);
+            }
+        }
+        single_byte
+    }
+
+    /// Evaluates deterministic jump-forward token sequence from current state.
+    /// Traverses unambiguous deterministic arcs up to `max_lookahead` bytes without model forward pass.
+    #[must_use]
+    pub fn find_jump_forward_bytes(&self, mut current_state: u32, max_lookahead: usize) -> (Vec<u8>, u32) {
+        let mut bytes = Vec::new();
+        while bytes.len() < max_lookahead {
+            if let Some(b) = self.deterministic_transition(current_state) {
+                bytes.push(b);
+                current_state = self.transitions[current_state as usize * 256 + usize::from(b)];
+                if current_state as usize >= self.num_states || current_state == DFA_ERROR_STATE {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        (bytes, current_state)
+    }
 }

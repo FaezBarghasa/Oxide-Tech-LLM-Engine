@@ -945,7 +945,7 @@ async fn run_server_with_options(
         max_slots,
         models_dir_buf,
     );
-    let default_pipeline = model_manager_inst.get_default_pipeline();
+    let default_pipeline = model_manager_inst.get_default_pipeline()?;
     let model_manager = Arc::new(Mutex::new(model_manager_inst));
 
     let dfa_grammar = Arc::new(DfaSchemaGrammar::new_simple_json_validator());

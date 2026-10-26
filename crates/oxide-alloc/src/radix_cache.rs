@@ -70,11 +70,9 @@ impl RadixPrefixCache {
 
         while !remaining.is_empty() {
             let first = remaining[0];
-            if !curr.children.contains_key(&first) {
+            let Some(child) = curr.children.get_mut(&first) else {
                 break;
-            }
-
-            let child = curr.children.get_mut(&first).unwrap();
+            };
             child.last_accessed = now;
             child.access_count += 1;
 
@@ -125,19 +123,18 @@ impl RadixPrefixCache {
         while !remaining_tokens.is_empty() {
             let first = remaining_tokens[0];
 
-            if let std::collections::hash_map::Entry::Vacant(e) = curr.children.entry(first) {
-                // No branch exists: insert remaining tokens as new leaf
-                self.total_tokens += remaining_tokens.len();
-                e.insert(RadixNode::new(
-                    remaining_tokens.to_vec(),
-                    remaining_blocks.to_vec(),
-                    now,
-                ));
-                return;
-            }
-
-            // Existing branch: calculate common prefix
-            let child = curr.children.get_mut(&first).unwrap();
+            let child = match curr.children.entry(first) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    self.total_tokens += remaining_tokens.len();
+                    e.insert(RadixNode::new(
+                        remaining_tokens.to_vec(),
+                        remaining_blocks.to_vec(),
+                        now,
+                    ));
+                    return;
+                }
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            };
             let common = child
                 .tokens
                 .iter()

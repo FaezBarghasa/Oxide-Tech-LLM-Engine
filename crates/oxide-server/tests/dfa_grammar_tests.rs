@@ -34,3 +34,18 @@ fn test_dfa_logit_masking() {
     assert_eq!(logits[1], f32::NEG_INFINITY);
     assert_eq!(logits[2], f32::NEG_INFINITY);
 }
+
+#[test]
+fn test_dfa_jump_forward_fast_path() {
+    let dfa = DfaSchemaGrammar::new_simple_json_validator();
+
+    // From state 0 (initial), only '{' is valid
+    let (bytes, next_state) = dfa.find_jump_forward_bytes(0, 4);
+    assert_eq!(bytes, vec![b'{']);
+    assert_eq!(next_state, 1);
+
+    // From state 3 (after closing key quote), only ':' is valid
+    let (bytes, next_state) = dfa.find_jump_forward_bytes(3, 4);
+    assert_eq!(bytes, vec![b':']);
+    assert_eq!(next_state, 4);
+}

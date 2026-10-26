@@ -89,3 +89,59 @@ impl MetalCommandStream {
         Ok(())
     }
 }
+
+/// Metal Indirect Command Buffer (ICB) for zero-CPU dispatch GPU execution.
+#[derive(Debug)]
+pub struct MetalIndirectCommandBuffer {
+    pub capacity: usize,
+    pub command_count: usize,
+    pub pipeline_state: &'static str,
+    pub buffer_bindings: Vec<[u64; 4]>,
+    pub threadgroups: Vec<(u32, u32, u32)>,
+}
+
+impl MetalIndirectCommandBuffer {
+    #[must_use]
+    pub fn new_indirect(capacity: usize) -> Self {
+        Self {
+            capacity,
+            command_count: 0,
+            pipeline_state: "oxide_metal_simdgroup_gemv",
+            buffer_bindings: Vec::with_capacity(capacity),
+            threadgroups: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn encode_gemv(
+        &mut self,
+        weights_addr: u64,
+        activations_addr: u64,
+        output_addr: u64,
+        m: u32,
+        k: u32,
+    ) -> Result<usize> {
+        if self.command_count >= self.capacity {
+            return Err(EngineError::HardwareFault {
+                backend: "metal_icb",
+                code: 0x401,
+                recoverable: false,
+            });
+        }
+        let cmd_idx = self.command_count;
+        self.buffer_bindings.push([
+            weights_addr,
+            activations_addr,
+            output_addr,
+            (u64::from(m) << 32) | u64::from(k),
+        ]);
+        self.threadgroups.push((m.div_ceil(32), 1, 1));
+        self.command_count += 1;
+        Ok(cmd_idx)
+    }
+
+    #[inline(always)]
+    pub fn execute_indirect(&self, stream: &MetalCommandStream) -> u64 {
+        stream.dispatch_simdgroup_encode()
+    }
+}
+

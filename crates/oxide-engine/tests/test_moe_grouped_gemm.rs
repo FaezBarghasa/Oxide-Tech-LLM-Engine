@@ -61,3 +61,26 @@ fn test_grouped_moe_single_kernel_vs_serial_equivalence() {
         );
     }
 }
+
+#[test]
+fn test_fused_gate_and_permute_token_conservation() {
+    const NUM_EXPERTS: usize = 8;
+    const TOP_K: usize = 2;
+    const BATCH_TOKENS: usize = 16;
+    const HIDDEN_DIM: usize = 2048;
+
+    let routing_gate = ExpertRoutingGate::new(HIDDEN_DIM, NUM_EXPERTS, TOP_K)
+        .expect("Failed to create ExpertRoutingGate");
+
+    let input_tokens = vec![0.02f32; BATCH_TOKENS * HIDDEN_DIM];
+    let plan = routing_gate
+        .fuse_gate_and_permute(&input_tokens, BATCH_TOKENS)
+        .expect("Fused gating and permutation plan failed");
+
+    // Token conservation invariant: total assigned slots must equal BATCH_TOKENS * TOP_K
+    assert_eq!(plan.total_assigned_tokens, BATCH_TOKENS * TOP_K);
+    assert_eq!(plan.expert_offsets.len(), NUM_EXPERTS + 1);
+    assert_eq!(plan.expert_offsets[NUM_EXPERTS], BATCH_TOKENS * TOP_K);
+    assert_eq!(plan.token_permute_indices.len(), BATCH_TOKENS * TOP_K);
+    assert_eq!(plan.expert_weights.len(), BATCH_TOKENS * TOP_K);
+}

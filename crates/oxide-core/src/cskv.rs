@@ -170,10 +170,26 @@ impl CskvHeader {
             if bytes.len() < min_header_len {
                 return Err(EngineError::InvalidArtifactHeader);
             }
-            let num_layers = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-            let seq_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-            let num_kv_heads = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
-            let head_dim = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
+            let num_layers = u32::from_le_bytes(
+                bytes[8..12]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let seq_len = u32::from_le_bytes(
+                bytes[12..16]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let num_kv_heads = u32::from_le_bytes(
+                bytes[16..20]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let head_dim = u32::from_le_bytes(
+                bytes[20..24]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
             let space_prefix_next = if version >= VERSION_DENSE_V4 {
                 bytes[24] != 0
             } else {
@@ -204,12 +220,36 @@ impl CskvHeader {
             if bytes.len() < 32 {
                 return Err(EngineError::InvalidArtifactHeader);
             }
-            let num_layers = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-            let seq_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-            let attn_num_kv_heads = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
-            let attn_head_dim = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
-            let gdn_conv_state_len = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
-            let gdn_recurrent_len = u32::from_le_bytes(bytes[28..32].try_into().unwrap()) as usize;
+            let num_layers = u32::from_le_bytes(
+                bytes[8..12]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let seq_len = u32::from_le_bytes(
+                bytes[12..16]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let attn_num_kv_heads = u32::from_le_bytes(
+                bytes[16..20]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let attn_head_dim = u32::from_le_bytes(
+                bytes[20..24]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let gdn_conv_state_len = u32::from_le_bytes(
+                bytes[24..28]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let gdn_recurrent_len = u32::from_le_bytes(
+                bytes[28..32]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
 
             if num_layers == 0 || num_layers > MAX_LAYERS {
                 return Err(EngineError::BackendError(format!(
@@ -247,9 +287,21 @@ impl CskvHeader {
             if bytes.len() < 20 {
                 return Err(EngineError::InvalidArtifactHeader);
             }
-            let num_layers = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-            let seq_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-            let qk_dim = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
+            let num_layers = u32::from_le_bytes(
+                bytes[8..12]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let seq_len = u32::from_le_bytes(
+                bytes[12..16]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
+            let qk_dim = u32::from_le_bytes(
+                bytes[16..20]
+                    .try_into()
+                    .map_err(|_| EngineError::InvalidArtifactHeader)?,
+            ) as usize;
 
             if num_layers == 0 || num_layers > MAX_LAYERS {
                 return Err(EngineError::BackendError(format!(

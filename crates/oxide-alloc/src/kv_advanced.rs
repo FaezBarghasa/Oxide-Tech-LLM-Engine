@@ -180,12 +180,12 @@ impl QuantizedKvBlock {
             KvQuantizationPrecision::Float32 => {
                 for (i, chunk) in self.quantized_k_data.chunks_exact(4).enumerate() {
                     if i < k_out.len() {
-                        k_out[i] = f32::from_le_bytes(chunk.try_into().unwrap());
+                        k_out[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                     }
                 }
                 for (i, chunk) in self.quantized_v_data.chunks_exact(4).enumerate() {
                     if i < v_out.len() {
-                        v_out[i] = f32::from_le_bytes(chunk.try_into().unwrap());
+                        v_out[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                     }
                 }
             }
@@ -226,13 +226,13 @@ impl QuantizedKvBlock {
             KvQuantizationPrecision::Float16 => {
                 for (i, chunk) in self.quantized_k_data.chunks_exact(2).enumerate() {
                     if i < k_out.len() {
-                        let bits = u16::from_le_bytes(chunk.try_into().unwrap());
+                        let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
                         k_out[i] = f16_bits_to_f32(bits);
                     }
                 }
                 for (i, chunk) in self.quantized_v_data.chunks_exact(2).enumerate() {
                     if i < v_out.len() {
-                        let bits = u16::from_le_bytes(chunk.try_into().unwrap());
+                        let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
                         v_out[i] = f16_bits_to_f32(bits);
                     }
                 }

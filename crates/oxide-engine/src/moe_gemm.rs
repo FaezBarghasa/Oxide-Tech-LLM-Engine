@@ -137,6 +137,70 @@ impl ExpertRoutingGate {
 
         Ok(decisions)
     }
+
+    /// Fuses top-K gate routing and contiguous token permutation planning in a single pass.
+    /// Eliminates host-device synchronization stalls by building contiguous tile schedules.
+    pub fn fuse_gate_and_permute(
+        &self,
+        input_tokens: &[f32],
+        batch_tokens: usize,
+    ) -> Result<GroupedMoeDispatchPlan> {
+        let decisions = self.route_tokens(input_tokens, batch_tokens)?;
+        let mut expert_counts = vec![0usize; self.num_experts];
+
+        // 1. Histogram of tokens per expert
+        for dec in &decisions {
+            for &exp_idx in &dec.expert_indices {
+                if exp_idx < self.num_experts {
+                    expert_counts[exp_idx] += 1;
+                }
+            }
+        }
+
+        // 2. Prefix sum offsets
+        let mut expert_offsets = vec![0usize; self.num_experts + 1];
+        let mut current_offset = 0;
+        for (e, &count) in expert_counts.iter().enumerate() {
+            expert_offsets[e] = current_offset;
+            current_offset += count;
+        }
+        expert_offsets[self.num_experts] = current_offset;
+
+        let total_assigned = current_offset;
+        let mut token_permute_indices = vec![0usize; total_assigned];
+        let mut expert_weights = vec![0.0f32; total_assigned];
+        let mut write_cursor = expert_offsets.clone();
+
+        // 3. Scatter tokens and weights into contiguous expert segments
+        for dec in &decisions {
+            for (k, &exp_idx) in dec.expert_indices.iter().enumerate() {
+                if exp_idx < self.num_experts {
+                    let pos = write_cursor[exp_idx];
+                    token_permute_indices[pos] = dec.token_idx;
+                    expert_weights[pos] = dec.expert_weights[k];
+                    write_cursor[exp_idx] += 1;
+                }
+            }
+        }
+
+        Ok(GroupedMoeDispatchPlan {
+            num_experts: self.num_experts,
+            total_assigned_tokens: total_assigned,
+            expert_offsets,
+            token_permute_indices,
+            expert_weights,
+        })
+    }
+}
+
+/// Fused Zero-Host-Sync MoE Routing & Permutation Dispatch Plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupedMoeDispatchPlan {
+    pub num_experts: usize,
+    pub total_assigned_tokens: usize,
+    pub expert_offsets: Vec<usize>,
+    pub token_permute_indices: Vec<usize>,
+    pub expert_weights: Vec<f32>,
 }
 
 /// Unified Grouped Expert GEMM Engine (CUTLASS / Batched Dispatch).

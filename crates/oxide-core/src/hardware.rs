@@ -484,6 +484,33 @@ pub struct GpuDeviceProfile {
     pub nvlink_bandwidth_gbps: f32,
 }
 
+impl Default for GpuDeviceProfile {
+    fn default() -> Self {
+        Self {
+            name: "Generic Accelerated Device".to_string(),
+            compute_capability: ComputeCapability::SM_89_ADA,
+            architecture: GpuArchitecture::Ada,
+            form_factor: HardwareFormFactor::DesktopWorkstation,
+            memory_tech: MemoryTechnology::Gddr6X,
+            tensor_core_gen: TensorCoreGeneration::Gen4HopperAda,
+            sm_count: 128,
+            vram_capacity_bytes: 24 * 1024 * 1024 * 1024,
+            memory_bus_width_bits: 384,
+            memory_bandwidth_gbps: 1008.0,
+            l2_cache_bytes: 72 * 1024 * 1024,
+            smem_per_sm_bytes: 100 * 1024,
+            smem_per_block_bytes: 48 * 1024,
+            max_threads_per_sm: 1536,
+            supports_tma: false,
+            supports_fp8: true,
+            supports_nvfp4: false,
+            supports_async_copy: true,
+            supports_nvlink: false,
+            nvlink_bandwidth_gbps: 0.0,
+        }
+    }
+}
+
 impl GpuDeviceProfile {
     /// Discovers and constructs the profile for a well-known NVIDIA or AMD GPU / APU.
     #[must_use]

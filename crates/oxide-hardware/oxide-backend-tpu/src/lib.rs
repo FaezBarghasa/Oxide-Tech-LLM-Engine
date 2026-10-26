@@ -77,8 +77,7 @@ impl TpuBackend {
         custom_tpu_name: Option<&str>,
     ) -> Self {
         let name = custom_tpu_name.unwrap_or("Google TPU v6e Trillium");
-        let profile = GpuDeviceProfile::from_known_device_name(name)
-            .unwrap_or_else(|| GpuDeviceProfile::from_known_device_name("v6e").unwrap());
+        let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_default();
         let execution_plan = TpuExecutionPlan::for_profile(&profile);
 
         Self {

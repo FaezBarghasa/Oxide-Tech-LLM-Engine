@@ -50,4 +50,26 @@ pub enum EngineError {
 
     #[error("Target hardware device or accelerator not found")]
     DeviceNotFound,
+
+    #[error("Hardware fault on backend '{backend}' with code {code} (recoverable: {recoverable})")]
+    HardwareFault {
+        backend: &'static str,
+        code: i32,
+        recoverable: bool,
+    },
+
+    #[error("Transaction aborted for slot {slot_id}: {uncommitted_pages} uncommitted pages rolled back")]
+    TransactionAborted {
+        slot_id: usize,
+        uncommitted_pages: usize,
+    },
+
+    #[error("Numerical drift detected at layer {layer}: diff {diff} exceeds tolerance {tolerance}")]
+    NumericalDrift {
+        layer: usize,
+        diff: f32,
+        tolerance: f32,
+    },
 }
+
+pub type OxideError = EngineError;

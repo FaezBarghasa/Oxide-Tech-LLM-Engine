@@ -78,8 +78,8 @@ impl ToolCallParser {
             let args = val.get("arguments").map_or_else(
                 || "{}".to_string(),
                 |v| {
-                    if v.is_string() {
-                        v.as_str().unwrap().to_string()
+                    if let Some(s) = v.as_str() {
+                        s.to_string()
                     } else {
                         v.to_string()
                     }

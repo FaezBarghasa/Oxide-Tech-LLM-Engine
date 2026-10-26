@@ -25,3 +25,31 @@ macro_rules! assert_stack_safe {
 pub const fn size_of_val<T>() -> usize {
     std::mem::size_of::<T>()
 }
+
+/// Macro wrapping foreign function interface (FFI) calls, validating the return status code
+/// and converting non-zero status codes into `EngineError::HardwareFault`.
+#[macro_export]
+macro_rules! try_ffi {
+    ($backend:expr, $call:expr) => {{
+        let status = unsafe { $call };
+        if status != 0 {
+            return Err($crate::error::EngineError::HardwareFault {
+                backend: $backend,
+                code: status as i32,
+                recoverable: false,
+            });
+        }
+        status
+    }};
+    ($backend:expr, $call:expr, $recoverable:expr) => {{
+        let status = unsafe { $call };
+        if status != 0 {
+            return Err($crate::error::EngineError::HardwareFault {
+                backend: $backend,
+                code: status as i32,
+                recoverable: $recoverable,
+            });
+        }
+        status
+    }};
+}
