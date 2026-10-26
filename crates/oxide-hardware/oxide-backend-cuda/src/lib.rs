@@ -28,6 +28,7 @@
 
 pub mod arch;
 pub mod driver;
+pub mod energy;
 pub mod gpu_unlock;
 pub mod graph;
 pub mod kernels;
@@ -36,6 +37,7 @@ pub mod nccl;
 
 pub use arch::KernelExecutionPlan;
 pub use driver::{CudaDeviceBuffer, CudaStream};
+pub use energy::{DynamicNvml, EnergyMeasurement, EnergyMethod, EnergySampler};
 pub use gpu_unlock::{
     EffectiveSpeedReadout, GpuThroughputProjection, GpuUnlockCapability, HardwareGpuUnlockEngine,
     LiveMmioRegisters, MmioAccessStatus, PciBarRegion, PhysicalPciGpu, UnlockResult, nv_rm,

@@ -22,6 +22,7 @@
     clippy::too_many_lines
 )]
 
+pub mod cskv;
 pub mod dag;
 pub mod error;
 pub mod hardware;
@@ -32,6 +33,11 @@ pub mod traits;
 pub mod typestate;
 pub mod worker;
 
+pub use cskv::{
+    CSKV_MAGIC, CskvBufferKind, CskvFileRange, CskvHeader, CskvLayout, CskvVariant, KvDtype,
+    LayerKind, VERSION_DENSE_F16, VERSION_DENSE_V1, VERSION_DENSE_V4, VERSION_HYBRID,
+    VERSION_HYBRID_F16, VERSION_MLA, VERSION_MLA_F16,
+};
 pub use dag::{PhysicalBlockId, SharedPhysicalBlock, TreeNode};
 pub use error::{EngineError, Result};
 pub use hardware::{
