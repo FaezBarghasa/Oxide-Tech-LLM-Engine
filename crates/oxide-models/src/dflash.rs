@@ -134,6 +134,38 @@ impl DFlashModel {
 
         (draft_tokens, confidences)
     }
+
+    /// Generates multi-branch candidate trees for speculative tree verification.
+    pub fn draft_tree_candidates(
+        &self,
+        target_hidden: &[f32],
+        branches: usize,
+    ) -> (Vec<Vec<u32>>, Vec<Vec<f32>>) {
+        let (base_tokens, base_confidences) = self.draft_block(target_hidden);
+        let b_count = branches.max(1);
+        let mut tree_paths = Vec::with_capacity(b_count);
+        let mut tree_probs = Vec::with_capacity(b_count);
+
+        tree_paths.push(base_tokens.clone());
+        tree_probs.push(base_confidences.clone());
+
+        for b in 1..b_count {
+            let mut variant_tokens = base_tokens.clone();
+            let mut variant_confidences = base_confidences.clone();
+            for (idx, tok) in variant_tokens.iter_mut().enumerate() {
+                if idx >= 1 {
+                    *tok = tok.wrapping_add(b as u32);
+                    if let Some(conf) = variant_confidences.get_mut(idx) {
+                        *conf *= 0.95f32;
+                    }
+                }
+            }
+            tree_paths.push(variant_tokens);
+            tree_probs.push(variant_confidences);
+        }
+
+        (tree_paths, tree_probs)
+    }
 }
 
 #[cfg(test)]
@@ -156,5 +188,24 @@ mod tests {
 
         assert_eq!(tokens.len(), 4);
         assert_eq!(confidences.len(), 4);
+    }
+
+    #[test]
+    fn test_dflash_tree_candidates() {
+        let config = DFlashConfig {
+            target_hidden_dim: 32,
+            draft_hidden_dim: 16,
+            block_size: 4,
+            conv_kernel_size: 3,
+            conv_group_size: 16,
+            vocab_size: 64,
+        };
+        let model = DFlashModel::new(config);
+        let target_hidden = vec![0.5f32; 32];
+        let (tree_paths, tree_probs) = model.draft_tree_candidates(&target_hidden, 3);
+
+        assert_eq!(tree_paths.len(), 3);
+        assert_eq!(tree_probs.len(), 3);
+        assert_eq!(tree_paths[0].len(), 4);
     }
 }

@@ -1,9 +1,7 @@
-//! End-to-end continuous batching serving benchmark simulating multi-tenant workloads.
-//! Measures TTFT, Inter-Token Latency (ITL), and Tokens/s under variable concurrency.
-
+use oxide_quant::int_quant::{BlockQ8_0, f16};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tokio::time::sleep;
 
 #[derive(Debug, Clone)]
 pub struct BenchMetrics {
@@ -15,19 +13,28 @@ pub struct BenchMetrics {
     pub tokens_per_second: f64,
 }
 
-async fn simulate_client_request(
+async fn execute_client_request(
     _client_id: usize,
-    _prompt_len: usize,
+    matrix: Arc<Vec<BlockQ8_0>>,
+    dim_m: usize,
+    dim_n: usize,
     gen_len: usize,
     metric_tx: mpsc::Sender<Duration>,
 ) {
-    // 1. Simulate TTFT (Pre-fill chunking delay)
-    sleep(Duration::from_millis(15)).await;
+    let mut activation_vector = vec![0.1f32; dim_n];
+    let mut output = vec![0.0f32; dim_m];
 
-    // 2. Stream generation steps (Simulate ITL)
-    for _ in 0..gen_len {
+    // 1. Real Prefill GEMV calculation
+    oxide_quant::simd::gemv_q8_0(&matrix, &activation_vector, dim_m, dim_n, &mut output);
+
+    // 2. Real Decode GEMV steps
+    for step in 0..gen_len {
         let step_start = Instant::now();
-        sleep(Duration::from_micros(6_200)).await; // RTX 5090 target ITL = 6.2ms
+        // Feedback output into activation vector to simulate real autoregressive decode state
+        for (i, val) in output.iter().take(dim_n).enumerate() {
+            activation_vector[i] = *val * 0.01 + (step as f32 * 0.001);
+        }
+        oxide_quant::simd::gemv_q8_0(&matrix, &activation_vector, dim_m, dim_n, &mut output);
         let step_latency = step_start.elapsed();
         let _ = metric_tx.send(step_latency).await;
     }
@@ -40,12 +47,34 @@ pub async fn run_continuous_serving_suite(
     let (tx, mut rx) = mpsc::channel(100_000);
     let start_all = Instant::now();
 
+    let dim_m = 256;
+    let dim_n = 256; // 8 blocks of 32 per row
+    let blocks_per_row = dim_n / 32;
+    let total_blocks = dim_m * blocks_per_row;
+    let mut raw_blocks = vec![BlockQ8_0::default(); total_blocks];
+    for (i, blk) in raw_blocks.iter_mut().enumerate() {
+        blk.scale = f16::from_f32(0.02);
+        for b in 0..32 {
+            blk.qs[b] = (((i * 3 + b) % 255) as i32 - 128) as i8;
+        }
+    }
+    let matrix = Arc::new(raw_blocks);
+
     let mut handles = Vec::new();
     for c in 0..concurrency {
         let tx_clone = tx.clone();
+        let mat_clone = Arc::clone(&matrix);
         handles.push(tokio::spawn(async move {
             for _ in 0..requests_per_client {
-                simulate_client_request(c, 128, 64, tx_clone.clone()).await;
+                execute_client_request(
+                    c,
+                    Arc::clone(&mat_clone),
+                    dim_m,
+                    dim_n,
+                    32,
+                    tx_clone.clone(),
+                )
+                .await;
             }
         }));
     }

@@ -1035,7 +1035,9 @@ impl HybridMultiDevicePipeline {
             return Err(EngineError::DeviceNotFound);
         }
 
-        let hidden = self.active_hidden_dim.min(self.intermediate_activation_buffer.len());
+        let hidden = self
+            .active_hidden_dim
+            .min(self.intermediate_activation_buffer.len());
         let token_base = (cmd.input_token % 32000) as f32;
         for i in 0..hidden {
             self.intermediate_activation_buffer[i] = ((token_base + i as f32) * 0.005).sin();
@@ -1057,9 +1059,10 @@ impl HybridMultiDevicePipeline {
             let inv_rms = 1.0 / ((sum_sq / (hidden as f32) + 1e-5).sqrt());
 
             let device_scale = match partition.device {
-                DeviceRole::Gpu(id) | DeviceRole::NvidiaGpu(id) | DeviceRole::AmdGpu(id) | DeviceRole::IntelGpu(id) => {
-                    0.01 + (id as f32) * 0.001
-                }
+                DeviceRole::Gpu(id)
+                | DeviceRole::NvidiaGpu(id)
+                | DeviceRole::AmdGpu(id)
+                | DeviceRole::IntelGpu(id) => 0.01 + (id as f32) * 0.001,
                 DeviceRole::Igpu => 0.012,
                 DeviceRole::Cpu => 0.005,
                 DeviceRole::EpycServer(socket) => 0.009 + (socket as f32) * 0.001,

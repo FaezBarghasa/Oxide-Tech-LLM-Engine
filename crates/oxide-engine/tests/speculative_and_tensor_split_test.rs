@@ -392,3 +392,14 @@ fn test_specialized_pipeline_llama3_cpu_monomorphized() {
     assert_eq!(completion.sequence_id, 102);
     assert!(completion.sampled_token > 0);
 }
+
+#[test]
+fn test_dma_buf_tensor_split_validation() {
+    use oxide_engine::hybrid::{DeviceRole, DmaBufTensorSplit};
+
+    let split = DmaBufTensorSplit::new(DeviceRole::ExternalNpuHat, 42, 64 * 1024 * 1024, 0, 0, 16);
+    assert!(split.validate().is_ok());
+
+    let invalid_split = DmaBufTensorSplit::new(DeviceRole::ArmIntegratedNpu, 43, 0, 0, 16, 16);
+    assert!(invalid_split.validate().is_err());
+}

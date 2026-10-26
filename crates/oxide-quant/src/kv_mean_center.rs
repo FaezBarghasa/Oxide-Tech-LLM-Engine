@@ -139,8 +139,7 @@ mod tests {
         let diff = (dot_raw - (dot_centered + dot_bias)).abs();
         assert!(
             diff < 1e-5,
-            "Softmax invariance identity violated: diff = {}",
-            diff
+            "Softmax invariance identity violated: diff = {diff}"
         );
     }
 }

@@ -136,10 +136,10 @@ mod tests {
 
         // Token 0 and 1 marked evict; with window_size = 4, tokens 0 and 1 are outside window when seq_len = 6
         let mut evict_mask = vec![false; num_tokens * 2];
-        evict_mask[0 * 2 + 0] = true;
-        evict_mask[0 * 2 + 1] = true;
-        evict_mask[1 * 2 + 0] = true;
-        evict_mask[1 * 2 + 1] = true;
+        evict_mask[0] = true;
+        evict_mask[1] = true;
+        evict_mask[2] = true;
+        evict_mask[3] = true;
 
         cache
             .append(&k_tokens, &v_tokens, &evict_mask, num_tokens)

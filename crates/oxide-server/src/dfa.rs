@@ -126,7 +126,11 @@ impl DfaSchemaGrammar {
     /// Evaluates deterministic jump-forward token sequence from current state.
     /// Traverses unambiguous deterministic arcs up to `max_lookahead` bytes without model forward pass.
     #[must_use]
-    pub fn find_jump_forward_bytes(&self, mut current_state: u32, max_lookahead: usize) -> (Vec<u8>, u32) {
+    pub fn find_jump_forward_bytes(
+        &self,
+        mut current_state: u32,
+        max_lookahead: usize,
+    ) -> (Vec<u8>, u32) {
         let mut bytes = Vec::new();
         while bytes.len() < max_lookahead {
             if let Some(b) = self.deterministic_transition(current_state) {

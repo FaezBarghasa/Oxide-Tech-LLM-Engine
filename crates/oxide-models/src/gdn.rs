@@ -228,10 +228,7 @@ mod tests {
         {
             assert!(
                 (actual - expected).abs() < 1e-6,
-                "State mismatch at {}: actual={}, expected={}",
-                i,
-                actual,
-                expected
+                "State mismatch at {i}: actual={actual}, expected={expected}"
             );
         }
     }

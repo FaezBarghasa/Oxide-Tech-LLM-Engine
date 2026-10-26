@@ -108,7 +108,9 @@ impl<'a> TransactionalKvGuard<'a> {
     pub fn rollback_explicit(&mut self) {
         self.table
             .rollback(self.committed_tokens, self.table.active_tokens());
-        self.table.physical_blocks_mut().truncate(self.committed_blocks);
+        self.table
+            .physical_blocks_mut()
+            .truncate(self.committed_blocks);
         self.is_committed = true;
     }
 }
@@ -118,7 +120,9 @@ impl Drop for TransactionalKvGuard<'_> {
         if !self.is_committed {
             self.table
                 .rollback(self.committed_tokens, self.table.active_tokens());
-            self.table.physical_blocks_mut().truncate(self.committed_blocks);
+            self.table
+                .physical_blocks_mut()
+                .truncate(self.committed_blocks);
         }
     }
 }

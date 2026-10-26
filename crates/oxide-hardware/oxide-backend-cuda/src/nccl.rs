@@ -41,6 +41,19 @@ impl NcclCommunicator {
         }
     }
 
+    /// Reduces multiple rank slices into a destination slice using peer-to-peer addition.
+    pub fn all_reduce_slices(&self, rank_buffers: &[&[f32]], output: &mut [f32]) {
+        assert!(!rank_buffers.is_empty(), "rank_buffers cannot be empty");
+        let len = output.len();
+        output.fill(0.0f32);
+        for buf in rank_buffers {
+            let slice_len = buf.len().min(len);
+            for i in 0..slice_len {
+                output[i] += buf[i];
+            }
+        }
+    }
+
     /// Non-blocking All-Gather of activation partitions across GPU ranks.
     pub fn all_gather_f32(
         &self,

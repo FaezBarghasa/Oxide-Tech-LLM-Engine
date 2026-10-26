@@ -1681,7 +1681,10 @@ pub fn gemv_ptq1_0(
     n: usize,
     output: &mut [f32],
 ) {
-    assert!(n.is_multiple_of(128), "n must be a multiple of 128 for PTQ1_0");
+    assert!(
+        n.is_multiple_of(128),
+        "n must be a multiple of 128 for PTQ1_0"
+    );
     let blocks_per_row = n / 128;
     assert!(
         matrix.len() >= m * blocks_per_row,
@@ -1729,7 +1732,10 @@ pub fn gemv_pq2_0(
     n: usize,
     output: &mut [f32],
 ) {
-    assert!(n.is_multiple_of(128), "n must be a multiple of 128 for PQ2_0");
+    assert!(
+        n.is_multiple_of(128),
+        "n must be a multiple of 128 for PQ2_0"
+    );
     let blocks_per_row = n / 128;
     assert!(
         matrix.len() >= m * blocks_per_row,

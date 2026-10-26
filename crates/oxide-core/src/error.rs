@@ -58,7 +58,9 @@ pub enum EngineError {
         recoverable: bool,
     },
 
-    #[error("Transaction aborted for slot {slot_id}: {uncommitted_pages} uncommitted pages rolled back")]
+    #[error(
+        "Transaction aborted for slot {slot_id}: {uncommitted_pages} uncommitted pages rolled back"
+    )]
     TransactionAborted {
         slot_id: usize,
         uncommitted_pages: usize,

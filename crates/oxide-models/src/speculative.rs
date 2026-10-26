@@ -186,7 +186,7 @@ mod tests {
         };
         let tokens = engine.speculative_step(1, 0, &mut pair).unwrap();
 
-        assert!(!tokens.is_empty());
+        assert_ne!(tokens.len(), 0);
         assert!(engine.stats.total_drafted_tokens > 0);
         assert!(engine.stats.speedup_ratio() >= 1.0);
     }

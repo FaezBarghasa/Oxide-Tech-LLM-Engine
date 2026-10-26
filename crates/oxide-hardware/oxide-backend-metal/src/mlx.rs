@@ -144,4 +144,3 @@ impl MetalIndirectCommandBuffer {
         stream.dispatch_simdgroup_encode()
     }
 }
-

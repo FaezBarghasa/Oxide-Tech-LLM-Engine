@@ -140,3 +140,52 @@ impl RingAttentionStep {
         (self.cp_rank + 1) % self.cp_size
     }
 }
+
+/// Executes low-latency elementwise AllReduce summation across Tensor Parallel ranks.
+pub fn all_reduce_tp(partials: &[&[f32]], output: &mut [f32]) {
+    assert!(!partials.is_empty(), "partials cannot be empty");
+    let len = output.len();
+    output.fill(0.0f32);
+    for part in partials {
+        let chunk_len = part.len().min(len);
+        for i in 0..chunk_len {
+            output[i] += part[i];
+        }
+    }
+}
+
+/// Executes AllGather concatenation across Tensor Parallel ranks.
+pub fn all_gather_tp(rank_chunks: &[&[f32]], output: &mut [f32]) {
+    let mut offset = 0;
+    for chunk in rank_chunks {
+        let end = (offset + chunk.len()).min(output.len());
+        output[offset..end].copy_from_slice(&chunk[..end - offset]);
+        offset = end;
+        if offset >= output.len() {
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_all_reduce_tp_sum() {
+        let p0 = [1.0f32, 2.0, 3.0, 4.0];
+        let p1 = [0.5f32, 1.5, 2.5, 3.5];
+        let mut out = [0.0f32; 4];
+        all_reduce_tp(&[&p0, &p1], &mut out);
+        assert_eq!(out, [1.5, 3.5, 5.5, 7.5]);
+    }
+
+    #[test]
+    fn test_all_gather_tp_concat() {
+        let c0 = [1.0f32, 2.0];
+        let c1 = [3.0f32, 4.0];
+        let mut out = [0.0f32; 4];
+        all_gather_tp(&[&c0, &c1], &mut out);
+        assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
+    }
+}

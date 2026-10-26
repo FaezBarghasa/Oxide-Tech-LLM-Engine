@@ -144,10 +144,7 @@ mod tests {
         for (i, (&orig, &rec)) in original.iter().zip(reconstructed.iter()).enumerate() {
             assert!(
                 (orig - rec).abs() < 1e-5,
-                "Inversion failed at {}: orig={}, rec={}",
-                i,
-                orig,
-                rec
+                "Inversion failed at {i}: orig={orig}, rec={rec}"
             );
         }
     }
@@ -166,9 +163,7 @@ mod tests {
 
         assert!(
             (energy_before - energy_after).abs() < 1e-4,
-            "Energy changed: before={}, after={}",
-            energy_before,
-            energy_after
+            "Energy changed: before={energy_before}, after={energy_after}"
         );
     }
 }

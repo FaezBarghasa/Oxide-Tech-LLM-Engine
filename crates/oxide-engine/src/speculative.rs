@@ -186,6 +186,44 @@ impl SpeculativeDecoderEngine {
         }
         tokens
     }
+
+    /// Verifies tree-structured candidate branches using tree-masking and selects the longest accepted path.
+    pub fn verify_tree_candidates(
+        &self,
+        tree_paths: &[Vec<u32>],
+        tree_probs: &[Vec<f32>],
+        target_probs: &[Vec<f32>],
+        target_recovery: &[Option<u32>],
+    ) -> SpeculativeVerificationResult {
+        let mut best_result = SpeculativeVerificationResult {
+            accepted_tokens: Vec::new(),
+            num_drafted: 0,
+            num_accepted: 0,
+            recovery_token: None,
+            acceptance_rate: 0.0,
+        };
+
+        for (i, path) in tree_paths.iter().enumerate() {
+            let path_probs = tree_probs.get(i).cloned().unwrap_or_default();
+            let tgt_probs = target_probs.get(i).cloned().unwrap_or_default();
+            let rec = target_recovery
+                .get(i)
+                .copied()
+                .flatten()
+                .map(|t| vec![t])
+                .unwrap_or_default();
+
+            let res = self.verify_draft_tokens(path, &path_probs, &tgt_probs, &rec);
+            if res.num_accepted > best_result.num_accepted
+                || (res.num_accepted == best_result.num_accepted
+                    && res.acceptance_rate > best_result.acceptance_rate)
+            {
+                best_result = res;
+            }
+        }
+
+        best_result
+    }
 }
 
 /// Speculative Engine Context with synchronized host and device sequence counter buffers.
@@ -348,5 +386,31 @@ mod tests {
         assert_eq!(predicted.len(), 2);
         assert_eq!(predicted[0], 3);
         assert_eq!(predicted[1], 6);
+    }
+
+    #[test]
+    fn test_tree_speculative_verification() {
+        let engine = SpeculativeDecoderEngine::new(SpeculativeConfig {
+            max_draft_tokens: 3,
+            acceptance_threshold: 0.8,
+            ..Default::default()
+        });
+
+        let path1 = vec![101, 102, 103];
+        let path2 = vec![101, 104, 105];
+        let probs1 = vec![0.9, 0.85, 0.3]; // Path 1 accepts 2 tokens
+        let probs2 = vec![0.9, 0.95, 0.9]; // Path 2 accepts 3 tokens
+        let tgt1 = vec![0.95, 0.9, 0.1];
+        let tgt2 = vec![0.95, 0.98, 0.95];
+
+        let result = engine.verify_tree_candidates(
+            &[path1, path2],
+            &[probs1, probs2],
+            &[tgt1, tgt2],
+            &[Some(999), None],
+        );
+
+        assert_eq!(result.accepted_tokens, vec![101, 104, 105]);
+        assert_eq!(result.num_accepted, 3);
     }
 }

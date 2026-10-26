@@ -49,7 +49,10 @@ pub use decoding::{
     BeamHypothesis, BeamSearchConfig, BeamSearchEngine, ParallelSampleCandidate,
     ParallelSamplingEngine,
 };
-pub use distributed::{MeshCoordinate, ParallelMeshConfig, RingAttentionStep, TpColumnLinear};
+pub use distributed::{
+    MeshCoordinate, ParallelMeshConfig, RingAttentionStep, TpColumnLinear, all_gather_tp,
+    all_reduce_tp,
+};
 pub use engine::OxideEngine;
 pub use executor::ComputeGraphExecutor;
 pub use graph::{

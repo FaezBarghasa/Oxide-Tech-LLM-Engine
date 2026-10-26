@@ -493,15 +493,15 @@ mod tests {
 
         // Token 0:
         // kv_head 0 uses q_head 0. Set decision value at [0, 0, 3] = 0.1 > (5.0 / 100.0 = 0.05) -> evict
-        q[0 * 16 + 0 * 4 + 3] = 0.1;
+        q[3] = 0.1;
         // kv_head 1 uses q_head 2. Set decision value at [0, 2, 3] = 0.01 < 0.05 -> keep
-        q[0 * 16 + 2 * 4 + 3] = 0.01;
+        q[11] = 0.01;
 
         // Token 1:
         // kv_head 0 uses q_head 0. Set decision value at [1, 0, 3] = 0.02 < 0.05 -> keep
-        q[1 * 16 + 0 * 4 + 3] = 0.02;
+        q[19] = 0.02;
         // kv_head 1 uses q_head 2. Set decision value at [1, 2, 3] = 0.2 > 0.05 -> evict
-        q[1 * 16 + 2 * 4 + 3] = 0.2;
+        q[27] = 0.2;
 
         let evict_mask = extractor
             .extract_and_zero_borrowed_neuron(&mut q, 2, &config)
@@ -510,10 +510,10 @@ mod tests {
         assert_eq!(evict_mask, vec![true, false, false, true]);
 
         // Verify the borrowed neurons are zeroed out
-        assert_eq!(q[0 * 16 + 0 * 4 + 3], 0.0);
-        assert_eq!(q[0 * 16 + 2 * 4 + 3], 0.0);
-        assert_eq!(q[1 * 16 + 0 * 4 + 3], 0.0);
-        assert_eq!(q[1 * 16 + 2 * 4 + 3], 0.0);
+        assert_eq!(q[3], 0.0);
+        assert_eq!(q[11], 0.0);
+        assert_eq!(q[19], 0.0);
+        assert_eq!(q[27], 0.0);
     }
 
     #[test]
