@@ -7,7 +7,7 @@
 //! - Achieves zero mutex contention in the hot continuous scheduling loop.
 
 use oxide_core::error::{EngineError, Result};
-use oxide_core::sampler::SamplerConfig;
+use oxide_core::sampler::SamplingConfig;
 use std::collections::VecDeque;
 
 // --- Typestate Markers ---
@@ -63,7 +63,7 @@ pub struct Request<S> {
     pub prompt_tokens: Vec<u32>,
     pub generated_tokens: Vec<u32>,
     pub max_tokens: usize,
-    pub sampling: SamplerConfig,
+    pub sampling: SamplingConfig,
     pub state: S,
 }
 
@@ -74,7 +74,7 @@ impl Request<Pending> {
         request_id: u64,
         prompt_tokens: Vec<u32>,
         max_tokens: usize,
-        sampling: SamplerConfig,
+        sampling: SamplingConfig,
     ) -> Self {
         Self {
             request_id,
@@ -285,7 +285,7 @@ mod tests {
     fn test_typestate_fsm_lifecycle() {
         let mut scheduler = TypestateScheduler::new();
 
-        let req = Request::new(1001, vec![1, 2, 3], 2, SamplerConfig::default());
+        let req = Request::new(1001, vec![1, 2, 3], 2, SamplingConfig::default());
         scheduler.submit(req);
 
         // Allocate slot 0

@@ -45,6 +45,7 @@ pub mod llama3;
 pub mod loader;
 pub mod lora;
 pub mod manifest;
+pub mod mla;
 pub mod moe;
 pub mod monarch;
 pub mod needle;
@@ -57,6 +58,7 @@ pub mod tokenizer;
 pub mod vision;
 
 pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
+pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};
 
 pub use attention_kernels::{
     AttentionKernelBackend, FlashInferConfig, FlashInferEngine, FlashMlaEngine,
