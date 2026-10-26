@@ -43,7 +43,6 @@ pub mod simd;
 pub mod torchao;
 
 // High-level re-exports
-pub use qr::{QrQuantKind, QuantizedResidentTensor};
 pub use bitsandbytes::{BlockFp4Bnb_64, BlockNf4_64, BnbInt8, FP4_TABLE, NF4_TABLE};
 pub use compressed_tensors::{
     CompressedQuantType, CompressedTensorsConfig, CompressionFormat, QuantizationStrategy,
@@ -73,4 +72,5 @@ pub use mxfp::{BlockMxFp4, BlockMxFp6, BlockMxFp8, BlockMxInt8, E8M0Scale};
 pub use nvfp4::{BlockNvFp4_16, NvFp4};
 pub use pq2_0::PackedQuant2_0;
 pub use ptq1_0::{Ternary1_58Bit, TernaryBlock128};
+pub use qr::{QrQuantKind, QuantizedResidentTensor};
 pub use torchao::{TorchAoLinearDescriptor, TorchAoQuantType, dequantize_fp6_e3m2};

@@ -36,7 +36,11 @@ pub enum QuantizedResidentTensor<'a> {
 
 impl<'a> QuantizedResidentTensor<'a> {
     /// Creates a zero-copy Q4_K resident tensor from a raw byte slice.
-    pub fn from_q4_k_bytes(rows: usize, cols: usize, raw_bytes: &'a [u8]) -> Result<Self, &'static str> {
+    pub fn from_q4_k_bytes(
+        rows: usize,
+        cols: usize,
+        raw_bytes: &'a [u8],
+    ) -> Result<Self, &'static str> {
         if !cols.is_multiple_of(256) {
             return Err("Cols must be a multiple of 256 for Q4_K");
         }
@@ -56,7 +60,11 @@ impl<'a> QuantizedResidentTensor<'a> {
     }
 
     /// Creates a zero-copy Q8_0 resident tensor from a raw byte slice.
-    pub fn from_q8_0_bytes(rows: usize, cols: usize, raw_bytes: &'a [u8]) -> Result<Self, &'static str> {
+    pub fn from_q8_0_bytes(
+        rows: usize,
+        cols: usize,
+        raw_bytes: &'a [u8],
+    ) -> Result<Self, &'static str> {
         if !cols.is_multiple_of(32) {
             return Err("Cols must be a multiple of 32 for Q8_0");
         }
@@ -134,7 +142,12 @@ impl<'a> QuantizedResidentTensor<'a> {
                         let block = &blocks[r * blocks_per_row + b];
                         let act_start = b * 256;
                         if let Ok(act_chunk) = x[act_start..act_start + 256].try_into() {
-                            row_sum += dot_q4_k(&block.qs, act_chunk, block.d.to_f32(), block.dmin.to_f32());
+                            row_sum += dot_q4_k(
+                                &block.qs,
+                                act_chunk,
+                                block.d.to_f32(),
+                                block.dmin.to_f32(),
+                            );
                         }
                     }
                     *out_val = row_sum;

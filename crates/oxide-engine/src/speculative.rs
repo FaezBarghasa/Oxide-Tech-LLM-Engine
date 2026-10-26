@@ -315,8 +315,8 @@ impl NativeMtpModule {
             for tok in 0..v {
                 let row_start = base_offset + tok * h;
                 let mut dot = 0.0f32;
-                for j in 0..h {
-                    dot += self.mtp_head_weights[row_start + j] * last_hidden[j];
+                for (j, &val) in last_hidden.iter().enumerate().take(h) {
+                    dot += self.mtp_head_weights[row_start + j] * val;
                 }
                 if dot > best_logit {
                     best_logit = dot;

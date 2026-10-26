@@ -63,13 +63,13 @@ pub use pipeline::SpecializedPipeline;
 pub use slot_manager::{
     ChunkedBatchItem, ContinuousBatchingSlotManager, InferenceSlot, SlotRequest, SlotState,
 };
-pub use speculative::{
-    NativeMtpModule, SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeStrategy,
-    SpeculativeVerificationResult,
-};
 pub use sparse_context::{
     BlockSparseConfig, SequenceSparseBlockIndex, SparseBlockCentroid, SparseContextManager,
     SparsePrefillPolicy, TOKENS_PER_SPARSE_BLOCK,
+};
+pub use speculative::{
+    NativeMtpModule, SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeStrategy,
+    SpeculativeVerificationResult,
 };
 pub use tensor_split::{
     AcceleratorKind, TensorSliceDescriptor, TensorSplitDistributionEngine, TensorSplitMode,
@@ -78,4 +78,3 @@ pub use typestate_fsm::{
     Allocated, Cancelled, Completed, DecodeStepResult, Decoding, FinishReason, Pending, Prefilling,
     Request, TypestateScheduler,
 };
-

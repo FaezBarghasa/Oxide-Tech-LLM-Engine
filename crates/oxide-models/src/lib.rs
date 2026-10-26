@@ -57,8 +57,8 @@ pub mod speculative;
 pub mod tokenizer;
 pub mod vision;
 
-pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
 pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};
+pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
 
 pub use attention_kernels::{
     AttentionKernelBackend, FlashInferConfig, FlashInferEngine, FlashMlaEngine,

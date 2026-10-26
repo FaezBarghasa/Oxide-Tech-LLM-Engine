@@ -162,7 +162,9 @@ impl SlabPoolArena {
 
         // Steal from other NUMA nodes if primary is exhausted
         for node in 0..self.num_numa_nodes {
-            if node != primary_node && let Some(slab_id) = self.free_queues[node].pop() {
+            if node != primary_node
+                && let Some(slab_id) = self.free_queues[node].pop()
+            {
                 return Some(slab_id);
             }
         }
@@ -226,11 +228,11 @@ mod tests {
     #[test]
     fn test_slab_pool_numa_allocation_and_write() {
         let mut pool = SlabPoolArena::new(
-            8,  // 8 slabs per layer
-            2,  // 2 layers
-            2,  // 2 KV heads
-            4,  // head_dim = 4 -> head_dim_total = 8
-            2,  // 2 NUMA nodes
+            8, // 8 slabs per layer
+            2, // 2 layers
+            2, // 2 KV heads
+            4, // head_dim = 4 -> head_dim_total = 8
+            2, // 2 NUMA nodes
         );
 
         // Allocate slab for NUMA node 0

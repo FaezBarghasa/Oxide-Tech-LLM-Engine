@@ -317,10 +317,7 @@ mod tests {
             DecodeStepResult::Done(completed, slot) => {
                 assert_eq!(slot, 0);
                 assert_eq!(completed.generated_tokens, vec![42, 999]);
-                assert_eq!(
-                    completed.state.finish_reason,
-                    FinishReason::StopToken(999)
-                );
+                assert_eq!(completed.state.finish_reason, FinishReason::StopToken(999));
             }
             DecodeStepResult::Continue(_, _) => panic!("Should be done on EOS"),
         }

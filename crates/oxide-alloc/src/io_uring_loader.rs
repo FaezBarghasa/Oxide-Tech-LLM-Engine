@@ -128,7 +128,8 @@ mod tests {
 
     #[test]
     fn test_async_weight_loader_batch_read() -> io::Result<()> {
-        let file_path = std::env::temp_dir().join(format!("test_weights_{}.bin", std::process::id()));
+        let file_path =
+            std::env::temp_dir().join(format!("test_weights_{}.bin", std::process::id()));
 
         // Create dummy weight file
         let mut f = File::create(&file_path)?;

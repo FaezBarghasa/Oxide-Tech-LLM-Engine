@@ -256,7 +256,8 @@ impl MoELayer {
                 let shared_slice = if offset + expert_stride <= self.shared_expert_weights.len() {
                     &self.shared_expert_weights[offset..offset + expert_stride]
                 } else {
-                    &self.shared_expert_weights[..expert_stride.min(self.shared_expert_weights.len())]
+                    &self.shared_expert_weights
+                        [..expert_stride.min(self.shared_expert_weights.len())]
                 };
 
                 let mut activated = vec![0.0f32; inter];
@@ -302,7 +303,8 @@ impl MoELayer {
                 let routed_slice = if offset + expert_stride <= self.routed_expert_weights.len() {
                     &self.routed_expert_weights[offset..offset + expert_stride]
                 } else {
-                    &self.routed_expert_weights[..expert_stride.min(self.routed_expert_weights.len())]
+                    &self.routed_expert_weights
+                        [..expert_stride.min(self.routed_expert_weights.len())]
                 };
 
                 let mut activated = vec![0.0f32; inter];
@@ -378,4 +380,3 @@ mod tests {
         }
     }
 }
-

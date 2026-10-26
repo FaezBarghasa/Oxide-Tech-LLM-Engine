@@ -223,11 +223,18 @@ impl DmsCompactKvArena {
     }
 
     /// Allocates an active sequence entry with the specified DMS retention policy.
-    pub fn allocate_sequence(&mut self, seq_id: u64, policy: DmsPolicy) -> Result<(), &'static str> {
+    pub fn allocate_sequence(
+        &mut self,
+        seq_id: u64,
+        policy: DmsPolicy,
+    ) -> Result<(), &'static str> {
         if self.tables.contains_key(&seq_id) {
             return Ok(());
         }
-        let seq_slot = self.free_seq_slots.pop().ok_or("No free sequence slots in DmsCompactKvArena")?;
+        let seq_slot = self
+            .free_seq_slots
+            .pop()
+            .ok_or("No free sequence slots in DmsCompactKvArena")?;
         let table = SequenceCompactTable::new(seq_id, policy);
         self.tables.insert(seq_id, (seq_slot, table));
         Ok(())
@@ -261,7 +268,10 @@ impl DmsCompactKvArena {
         let head_dim_total = self.head_dim_total;
         let num_layers = self.num_layers;
 
-        let (seq_slot, table) = self.tables.get_mut(&seq_id).ok_or("Sequence not found in DmsCompactKvArena")?;
+        let (seq_slot, table) = self
+            .tables
+            .get_mut(&seq_id)
+            .ok_or("Sequence not found in DmsCompactKvArena")?;
         let seq_slot = *seq_slot;
 
         // Check if we need to evict before appending or if we're at capacity
@@ -287,7 +297,8 @@ impl DmsCompactKvArena {
 
         // Write token KV states into buffers across layers
         for layer in 0..num_layers {
-            let start = ((layer * self.max_sequences + seq_slot) * self.max_retained_tokens + phys_slot)
+            let start = ((layer * self.max_sequences + seq_slot) * self.max_retained_tokens
+                + phys_slot)
                 * head_dim_total;
             let end = start + head_dim_total;
 
@@ -316,7 +327,8 @@ impl DmsCompactKvArena {
     ) {
         let live_count = table.slots.len();
         for layer in 0..num_layers {
-            let base_offset = (layer * max_sequences + seq_slot) * max_retained_tokens * head_dim_total;
+            let base_offset =
+                (layer * max_sequences + seq_slot) * max_retained_tokens * head_dim_total;
             for (new_idx, slot) in table.slots.iter().enumerate() {
                 let target_start = base_offset + new_idx * head_dim_total;
                 let src_start = base_offset + slot.physical_slot * head_dim_total;
@@ -347,13 +359,19 @@ impl DmsCompactKvArena {
         let start = self.offset(layer_idx, seq_slot, 0);
         let end = start + live_tokens * self.head_dim_total;
 
-        Some((&self.k_buffer[start..end], &self.v_buffer[start..end], live_tokens))
+        Some((
+            &self.k_buffer[start..end],
+            &self.v_buffer[start..end],
+            live_tokens,
+        ))
     }
 
     /// Returns the live compression ratio for a sequence.
     #[must_use]
     pub fn get_compression_ratio(&self, seq_id: u64) -> Option<f32> {
-        self.tables.get(&seq_id).map(|(_, table)| table.compression_ratio())
+        self.tables
+            .get(&seq_id)
+            .map(|(_, table)| table.compression_ratio())
     }
 }
 
@@ -406,11 +424,11 @@ mod tests {
     #[test]
     fn test_dms_compact_arena_in_place_lifecycle() {
         let mut arena = DmsCompactKvArena::new(
-            2,  // 2 layers
-            2,  // 2 KV heads
-            4,  // head_dim = 4 -> head_dim_total = 8
-            4,  // 4 max sequences
-            8,  // max 8 tokens per sequence
+            2, // 2 layers
+            2, // 2 KV heads
+            4, // head_dim = 4 -> head_dim_total = 8
+            4, // 4 max sequences
+            8, // max 8 tokens per sequence
         );
 
         let policy = DmsPolicy {
@@ -430,9 +448,11 @@ mod tests {
         // Append 5 tokens (exceeding policy max of 4)
         for i in 0..5 {
             let score = if i == 0 { 100.0 } else { i as f32 };
-            assert!(arena
-                .append_token(1, i, score, &[&k1, &k2], &[&v1, &v2])
-                .is_ok());
+            assert!(
+                arena
+                    .append_token(1, i, score, &[&k1, &k2], &[&v1, &v2])
+                    .is_ok()
+            );
         }
 
         // Must be capped at max_retained_tokens = 4

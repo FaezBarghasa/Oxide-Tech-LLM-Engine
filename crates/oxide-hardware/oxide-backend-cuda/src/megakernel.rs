@@ -7,8 +7,8 @@
 //! - Prevents spilling intermediate activations to global device DRAM.
 //! - Delivers up to 37,800 prefill tok/s and 413 decode tok/s at 1.87 tok/Joule.
 
-use crate::driver::CudaDeviceBuffer;
 use crate::CudaLayerWeights;
+use crate::driver::CudaDeviceBuffer;
 use oxide_core::error::{EngineError, Result};
 
 /// Hardware and grid dispatch configuration for the Cooperative Megakernel.
@@ -190,8 +190,12 @@ mod tests {
         };
 
         let megakernel = CooperativeMegakernel::new(config);
-        assert!(CooperativeMegakernel::is_cooperative_launch_supported((8, 6))); // RTX 3090 / 4060
-        assert!(!CooperativeMegakernel::is_cooperative_launch_supported((6, 1))); // Pascal (unsupported)
+        assert!(CooperativeMegakernel::is_cooperative_launch_supported((
+            8, 6
+        ))); // RTX 3090 / 4060
+        assert!(!CooperativeMegakernel::is_cooperative_launch_supported((
+            6, 1
+        ))); // Pascal (unsupported)
 
         // Create lightweight layer descriptors
         let mut layers = Vec::new();

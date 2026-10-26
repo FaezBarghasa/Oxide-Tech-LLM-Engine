@@ -146,7 +146,8 @@ impl SequenceSparseBlockIndex {
         }
 
         // Sort descending by score
-        middle_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        middle_candidates
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let available_slots = self.config.top_k_blocks.saturating_sub(selected.len());
         for (b, _) in middle_candidates.into_iter().take(available_slots) {
