@@ -62,7 +62,7 @@ pub mod vision;
 
 pub use dflash::{DFlashConfig, DFlashModel};
 pub use dspark::{DSparkConfig, DSparkModel};
-pub use gdn::{GatedDeltaNet, GdnReplayState, GdnUpdateRecord};
+pub use gdn::{GatedDeltaNet, GdnReplayState, GdnStepInputs, GdnUpdateRecord};
 pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};
 pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
 

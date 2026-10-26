@@ -122,12 +122,7 @@ impl GatedDeltaNet {
     ///   $u_t = v_t - \beta_t (S_{t-1} k_t)$
     ///   $S_t = g_t \odot S_{t-1} + u_t k_t^T$
     /// - Appends update record to the replay ledger for zero-copy rollback.
-    pub fn step(
-        &self,
-        inputs: GdnStepInputs<'_>,
-        state: &mut GdnReplayState,
-        output: &mut [f32],
-    ) {
+    pub fn step(&self, inputs: GdnStepInputs<'_>, state: &mut GdnReplayState, output: &mut [f32]) {
         let d_v = self.d_v;
         let d_k = self.d_k;
         assert_eq!(inputs.query.len(), d_k);
