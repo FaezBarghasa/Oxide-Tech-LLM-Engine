@@ -23,7 +23,10 @@
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    clippy::approx_constant,
+    clippy::needless_range_loop,
+    clippy::manual_memcpy
 )]
 
 pub mod arch;

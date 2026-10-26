@@ -22,7 +22,7 @@ use oxide_core::error::{EngineError, Result};
 pub const HIDDEN_SIZE: usize = 1024;
 pub const INTERMEDIATE_SIZE: usize = 3584;
 pub const NUM_LAYERS: usize = 24;
-pub const VOCAB_SIZE: usize = 248320;
+pub const VOCAB_SIZE: usize = 248_320;
 pub const RMS_EPS: f32 = 1e-6;
 
 // Full Attention
@@ -278,7 +278,7 @@ pub struct MegakernelStats {
 
 #[inline(always)]
 fn fast_exp(x: f32) -> f32 {
-    (x * 1.442_695).exp2()
+    (x * std::f32::consts::LOG2_E).exp2()
 }
 
 #[inline(always)]

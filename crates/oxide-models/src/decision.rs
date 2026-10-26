@@ -144,8 +144,7 @@ impl DecisionScorer {
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(idx, _)| idx)
-            .unwrap_or(0);
+            .map_or(0, |(idx, _)| idx);
 
         Ok(LabelPromptResult {
             tokens: prompt_tokens_len,

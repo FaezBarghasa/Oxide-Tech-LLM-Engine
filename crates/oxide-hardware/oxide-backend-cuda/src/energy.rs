@@ -26,19 +26,20 @@ pub const NVML_ERROR_DRIVER_NOT_LOADED: c_int = 9;
 pub const NVML_ERROR_TIMEOUT: c_int = 10;
 pub const NVML_ERROR_UNKNOWN: c_int = 999;
 
-type NvmlDevice = *mut c_void;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmlDevice(pub *mut c_void);
 
 type FnNvmlInit = unsafe extern "C" fn() -> c_int;
 type FnNvmlShutdown = unsafe extern "C" fn() -> c_int;
-type FnNvmlDeviceGetHandleByIndex = unsafe extern "C" fn(c_uint, *mut NvmlDevice) -> c_int;
-type FnNvmlDeviceGetTotalEnergyConsumption = unsafe extern "C" fn(NvmlDevice, *mut u64) -> c_int;
-type FnNvmlDeviceGetPowerUsage = unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> c_int;
+type FnNvmlDeviceGetHandleByIndex = unsafe extern "C" fn(c_uint, *mut *mut c_void) -> c_int;
+type FnNvmlDeviceGetTotalEnergyConsumption = unsafe extern "C" fn(*mut c_void, *mut u64) -> c_int;
+type FnNvmlDeviceGetPowerUsage = unsafe extern "C" fn(*mut c_void, *mut c_uint) -> c_int;
 type FnNvmlErrorString = unsafe extern "C" fn(c_int) -> *const c_char;
 
 /// Dynamic NVML runtime function pointer table.
 #[derive(Debug)]
 pub struct DynamicNvml {
-    _handle: *mut c_void,
+    lib_handle: *mut c_void,
     fn_shutdown: FnNvmlShutdown,
     fn_get_handle: FnNvmlDeviceGetHandleByIndex,
     fn_get_energy: Option<FnNvmlDeviceGetTotalEnergyConsumption>,
@@ -98,7 +99,7 @@ impl DynamicNvml {
             }
 
             Some(Self {
-                _handle: handle,
+                lib_handle: handle,
                 fn_shutdown,
                 fn_get_handle,
                 fn_get_energy,
@@ -126,11 +127,11 @@ impl DynamicNvml {
         if !self.initialized {
             return None;
         }
-        let mut dev: NvmlDevice = std::ptr::null_mut();
+        let mut dev: *mut c_void = std::ptr::null_mut();
         // SAFETY: Calling dynamically resolved nvmlDeviceGetHandleByIndex with valid pointer.
-        let ret = unsafe { (self.fn_get_handle)(device_index as c_uint, &mut dev) };
+        let ret = unsafe { (self.fn_get_handle)(device_index as c_uint, &raw mut dev) };
         if ret == NVML_SUCCESS && !dev.is_null() {
-            Some(dev)
+            Some(NvmlDevice(dev))
         } else {
             None
         }
@@ -141,7 +142,7 @@ impl DynamicNvml {
         let fn_get_energy = self.fn_get_energy?;
         let mut energy_mj: u64 = 0;
         // SAFETY: Calling nvmlDeviceGetTotalEnergyConsumption with valid device handle.
-        let ret = unsafe { (fn_get_energy)(device, &mut energy_mj) };
+        let ret = unsafe { (fn_get_energy)(device.0, &raw mut energy_mj) };
         if ret == NVML_SUCCESS {
             Some(energy_mj)
         } else {
@@ -154,7 +155,7 @@ impl DynamicNvml {
         let fn_get_power = self.fn_get_power?;
         let mut power_mw: c_uint = 0;
         // SAFETY: Calling nvmlDeviceGetPowerUsage with valid device handle.
-        let ret = unsafe { (fn_get_power)(device, &mut power_mw) };
+        let ret = unsafe { (fn_get_power)(device.0, &raw mut power_mw) };
         if ret == NVML_SUCCESS {
             Some(power_mw as u32)
         } else {
@@ -183,8 +184,8 @@ impl Drop for DynamicNvml {
             // SAFETY: Shutting down NVML cleanly and closing library handle.
             unsafe {
                 (self.fn_shutdown)();
-                if !self._handle.is_null() {
-                    libc::dlclose(self._handle);
+                if !self.lib_handle.is_null() {
+                    libc::dlclose(self.lib_handle);
                 }
             }
         }
@@ -287,14 +288,11 @@ impl EnergySampler {
             }
         };
 
-        let device = match nvml.get_device_handle(device_index) {
-            Some(dev) => dev,
-            None => {
-                return Self {
-                    start_time,
-                    backend: SamplerBackend::Unavailable,
-                };
-            }
+        let Some(device) = nvml.get_device_handle(device_index) else {
+            return Self {
+                start_time,
+                backend: SamplerBackend::Unavailable,
+            };
         };
 
         // Try monotonic hardware energy counter first (Volta+, Ada Lovelace RTX 4060, Hopper, etc.)
@@ -321,9 +319,8 @@ impl EnergySampler {
             let join_handle = thread::Builder::new()
                 .name("oxide-energy-poller".to_string())
                 .spawn(move || {
-                    let thread_device = match thread_nvml.get_device_handle(device_index) {
-                        Some(d) => d,
-                        None => return,
+                    let Some(thread_device) = thread_nvml.get_device_handle(device_index) else {
+                        return;
                     };
                     let mut last_tick = Instant::now();
                     while !thread_stop.load(Ordering::Relaxed) {
@@ -333,7 +330,7 @@ impl EnergySampler {
                         last_tick = now;
 
                         if let Some(mw) = thread_nvml.get_power_usage_mw(thread_device) {
-                            let joules_step = (mw as f64 / 1000.0) * dt;
+                            let joules_step = (f64::from(mw) / 1000.0) * dt;
                             if let Ok(mut lock) = thread_accum.lock() {
                                 *lock += joules_step;
                             }
