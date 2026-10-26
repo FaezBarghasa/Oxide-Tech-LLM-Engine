@@ -250,6 +250,72 @@ impl FlashAttentionEngine {
         }
     }
 
+    /// Dynamic Flash Attention forward pass supporting variable head_dim per layer and sliding window attention.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_decode_gqa_dyn(
+        &self,
+        q_head: &[f32],
+        k_cache: &[f32],
+        v_cache: &[f32],
+        kv_head_idx: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        context_len: usize,
+        sliding_window: Option<usize>,
+        output: &mut [f32],
+    ) {
+        let kv_dim = num_kv_heads * head_dim;
+        let kv_head_offset = kv_head_idx * head_dim;
+        let softmax_scale = 1.0 / (head_dim as f32).sqrt();
+
+        output.fill(0.0);
+        if context_len == 0 {
+            return;
+        }
+
+        let start_t = if let Some(sw) = sliding_window {
+            context_len.saturating_sub(sw)
+        } else {
+            0
+        };
+
+        let mut max_score = f32::NEG_INFINITY;
+        let mut sum_exp = 0.0f32;
+
+        for t in start_t..context_len {
+            let t_offset = t * kv_dim + kv_head_offset;
+            if t_offset + head_dim > k_cache.len() || t_offset + head_dim > v_cache.len() {
+                break;
+            }
+            let k_vec = &k_cache[t_offset..t_offset + head_dim];
+            let v_vec = &v_cache[t_offset..t_offset + head_dim];
+
+            let mut dot = 0.0f32;
+            for d in 0..head_dim {
+                dot += q_head[d] * k_vec[d];
+            }
+            let score = dot * softmax_scale;
+
+            let new_max = max_score.max(score);
+            let alpha = (max_score - new_max).exp();
+            let beta = (score - new_max).exp();
+
+            max_score = new_max;
+            sum_exp = sum_exp * alpha + beta;
+
+            for d in 0..head_dim {
+                output[d] = output[d] * alpha + beta * v_vec[d];
+            }
+        }
+
+        if sum_exp > 0.0 {
+            let inv_sum = 1.0 / sum_exp;
+            for val in output.iter_mut() {
+                *val *= inv_sum;
+            }
+        }
+    }
+
     /// Computes Flash Attention forward pass over Paged KV Cache blocks:
     /// Iterates through physical page blocks mapped by `block_table`, accessing memory without copying or allocating.
     #[allow(clippy::too_many_arguments)]

@@ -88,6 +88,16 @@ fn test_real_gguf_models_in_home_dir() {
             let encoded = tok.encode("What is 2 + 2?");
             println!("  'What is 2 + 2?' -> {:?}", encoded);
             println!("  Decoded -> {:?}", tok.decode(&encoded));
+
+            if name.contains("Ornith") {
+                println!("  -- Ornith blk.0 and blk.1 tensors --");
+                for t_name in parsed.tensors.keys() {
+                    if t_name.starts_with("blk.0.") || t_name.starts_with("blk.1.") {
+                        let t = &parsed.tensors[t_name];
+                        println!("    {}: dims={:?}, quant={:?}", t_name, t.dimensions, t.quant_type);
+                    }
+                }
+            }
             let cfg = oxide_models::llama3::Llama3Config::from_gguf(&parsed);
             println!("  Llama3Config: hidden={}, layers={}, heads={}, kv_heads={}, head_dim={}, inter={}, vocab={}, eps={:?}",
                 cfg.hidden_dim, cfg.num_layers, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, cfg.intermediate_dim, cfg.vocab_size, cfg.rms_norm_eps_f32());

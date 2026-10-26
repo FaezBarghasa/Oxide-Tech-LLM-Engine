@@ -451,10 +451,8 @@ impl SpecializedPipeline {
 
             let is_apu = backend_name.eq_ignore_ascii_case("apu");
             let is_cpu_igpu = backend_name.eq_ignore_ascii_case("cpu_igpu");
-            let auto_apu = backend_name.eq_ignore_ascii_case("cpu")
-                && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some();
 
-            if is_apu || is_cpu_igpu || auto_apu {
+            if is_apu || is_cpu_igpu {
                 let has_npu = is_apu
                     || oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
                         .is_some_and(|(_, _, npu)| npu);

@@ -13,11 +13,14 @@ pub struct Llama3Config {
     pub num_heads: usize,
     pub num_kv_heads: usize,
     pub head_dim: usize,
+    pub head_dim_full: Option<usize>,
     pub vocab_size: usize,
     pub max_seq_len: usize,
     pub rms_norm_eps: u32, // Store scaled integer eps (e.g. 1e-5 represented as bits or f32)
     pub eos_token_id: Option<u32>,
     pub rope_theta: u32,
+    pub rope_theta_swa: Option<u32>,
+    pub sliding_window: Option<usize>,
     pub is_gemma: bool,
     pub is_qwen: bool,
     pub final_logit_softcapping: Option<u32>,
@@ -32,11 +35,14 @@ impl Default for Llama3Config {
             num_heads: 32,
             num_kv_heads: 8,
             head_dim: 128,
+            head_dim_full: None,
             vocab_size: 128_256,
             max_seq_len: 131_072,
             rms_norm_eps: 1e-5f32.to_bits(),
             eos_token_id: Some(128_001),
             rope_theta: 500_000.0f32.to_bits(),
+            rope_theta_swa: None,
+            sliding_window: None,
             is_gemma: false,
             is_qwen: false,
             final_logit_softcapping: None,
@@ -55,15 +61,23 @@ impl Llama3Config {
             num_heads: 4,
             num_kv_heads: 2,
             head_dim: 32,
+            head_dim_full: None,
             vocab_size: 1024,
             max_seq_len: 2048,
             rms_norm_eps: 1e-5f32.to_bits(),
             eos_token_id: Some(2),
             rope_theta: 10_000.0f32.to_bits(),
+            rope_theta_swa: None,
+            sliding_window: None,
             is_gemma: false,
             is_qwen: false,
             final_logit_softcapping: None,
         }
+    }
+
+    #[must_use]
+    pub fn max_head_dim(&self) -> usize {
+        self.head_dim_full.unwrap_or(self.head_dim).max(self.head_dim)
     }
 
     #[must_use]
@@ -74,6 +88,11 @@ impl Llama3Config {
     #[must_use]
     pub fn rope_theta_f32(&self) -> f32 {
         f32::from_bits(self.rope_theta)
+    }
+
+    #[must_use]
+    pub fn rope_theta_swa_f32(&self) -> Option<f32> {
+        self.rope_theta_swa.map(f32::from_bits)
     }
 
     #[must_use]
@@ -91,11 +110,14 @@ impl Llama3Config {
             num_heads: spec.num_heads as usize,
             num_kv_heads: spec.num_kv_heads as usize,
             head_dim: spec.head_dim as usize,
+            head_dim_full: None,
             vocab_size: spec.vocab_size as usize,
             max_seq_len: spec.max_context_tokens as usize,
             rms_norm_eps: 1e-5f32.to_bits(),
             eos_token_id: None,
             rope_theta: 500_000.0f32.to_bits(),
+            rope_theta_swa: None,
+            sliding_window: None,
             is_gemma: false,
             is_qwen: false,
             final_logit_softcapping: None,
@@ -166,6 +188,21 @@ impl Llama3Config {
         let eos_token_id = gguf.get_u32("tokenizer.ggml.eos_token_id");
 
         let rope_theta = gguf.get_f32(&format!("{arch}.rope.freq_base")).unwrap_or(500_000.0);
+        let key_len = gguf
+            .get_u64(&format!("{arch}.attention.key_length"))
+            .map(|v| v as usize);
+        let key_len_swa = gguf
+            .get_u64(&format!("{arch}.attention.key_length_swa"))
+            .map(|v| v as usize);
+        let head_dim_full = key_len;
+        let rope_theta_swa = gguf
+            .get_f32(&format!("{arch}.rope.freq_base_swa"))
+            .map(|f| f.to_bits());
+        let sliding_window = gguf
+            .get_u64(&format!("{arch}.attention.sliding_window"))
+            .map(|v| v as usize);
+        let head_dim = key_len_swa.unwrap_or(head_dim);
+
         let is_gemma = arch.contains("gemma");
         let is_qwen = arch.contains("qwen");
         let final_logit_softcapping = gguf.get_f32(&format!("{arch}.final_logit_softcapping")).map(|f| f.to_bits());
@@ -177,11 +214,14 @@ impl Llama3Config {
             num_heads,
             num_kv_heads,
             head_dim,
+            head_dim_full,
             vocab_size,
             max_seq_len,
             rms_norm_eps: eps.to_bits(),
             eos_token_id,
             rope_theta: rope_theta.to_bits(),
+            rope_theta_swa,
+            sliding_window,
             is_gemma,
             is_qwen,
             final_logit_softcapping,
@@ -722,6 +762,7 @@ impl Llama3LayerWeights {
 pub struct Llama3Model {
     pub config: Llama3Config,
     pub rope: RopeScalingEngine,
+    pub rope_swa: Option<RopeScalingEngine>,
     pub flash_attn: FlashAttentionEngine,
     pub token_embedding: Vec<f32>, // [vocab_size, hidden_dim]
     pub token_embd_tensor: Option<QuantizedTensor>,
@@ -744,13 +785,26 @@ impl Llama3Model {
                 original_max_position: 8192,
             }
         };
+        let rope_dim = config.head_dim_full.unwrap_or(config.head_dim);
         let rope_config = RopeConfig {
-            head_dim: config.head_dim,
+            head_dim: rope_dim,
             base_theta: config.rope_theta_f32(),
             scaling,
             max_position_embeddings: config.max_seq_len,
         };
         let rope = RopeScalingEngine::new(rope_config);
+        let rope_swa = if let Some(swa_theta_bits) = config.rope_theta_swa {
+            let swa_theta = f32::from_bits(swa_theta_bits);
+            let rope_swa_cfg = RopeConfig {
+                head_dim: config.head_dim,
+                base_theta: swa_theta,
+                scaling: RopeScalingType::Default,
+                max_position_embeddings: config.max_seq_len,
+            };
+            Some(RopeScalingEngine::new(rope_swa_cfg))
+        } else {
+            None
+        };
         let flash_attn_cfg =
             FlashAttentionConfig::new(config.num_heads, config.num_kv_heads, config.head_dim, true);
         let flash_attn = FlashAttentionEngine::new(flash_attn_cfg);
@@ -774,6 +828,7 @@ impl Llama3Model {
         Self {
             config,
             rope,
+            rope_swa,
             flash_attn,
             token_embedding,
             token_embd_tensor: None,
@@ -797,13 +852,26 @@ impl Llama3Model {
                 original_max_position: 8192,
             }
         };
+        let rope_dim = config.head_dim_full.unwrap_or(config.head_dim);
         let rope_config = RopeConfig {
-            head_dim: config.head_dim,
+            head_dim: rope_dim,
             base_theta: config.rope_theta_f32(),
             scaling,
             max_position_embeddings: config.max_seq_len,
         };
         let rope = RopeScalingEngine::new(rope_config);
+        let rope_swa = if let Some(swa_theta_bits) = config.rope_theta_swa {
+            let swa_theta = f32::from_bits(swa_theta_bits);
+            let rope_swa_cfg = RopeConfig {
+                head_dim: config.head_dim,
+                base_theta: swa_theta,
+                scaling: RopeScalingType::Default,
+                max_position_embeddings: config.max_seq_len,
+            };
+            Some(RopeScalingEngine::new(rope_swa_cfg))
+        } else {
+            None
+        };
         let flash_attn_cfg =
             FlashAttentionConfig::new(config.num_heads, config.num_kv_heads, config.head_dim, true);
         let flash_attn = FlashAttentionEngine::new(flash_attn_cfg);
@@ -815,6 +883,7 @@ impl Llama3Model {
         Self {
             config,
             rope,
+            rope_swa,
             flash_attn,
             token_embedding: Vec::new(),
             token_embd_tensor: None,
@@ -1571,8 +1640,21 @@ impl Llama3Model {
         let cur_v_dim = layer.v_proj.rows();
 
         if cur_q_dim > 0 && cur_k_dim > 0 && cur_v_dim > 0 {
-            let cur_heads = cur_q_dim / self.config.head_dim.max(1);
-            let cur_kv_heads = cur_k_dim / self.config.head_dim.max(1);
+            let cur_heads = self.config.num_heads;
+            let cur_kv_heads = self.config.num_kv_heads;
+            let cur_head_dim = if cur_heads > 0 {
+                cur_q_dim / cur_heads
+            } else {
+                self.config.head_dim
+            };
+
+            let is_swa = cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
+            let sliding_window = if is_swa { self.config.sliding_window } else { None };
+            let rope_engine = if cur_head_dim <= self.config.head_dim && self.rope_swa.is_some() {
+                self.rope_swa.as_ref().unwrap()
+            } else {
+                &self.rope
+            };
 
             Self::rms_norm(
                 &scratch.hidden[..h],
@@ -1593,7 +1675,7 @@ impl Llama3Model {
             );
 
             // QK-Norm (applied per-head before RoPE)
-            let hd = self.config.head_dim;
+            let hd = cur_head_dim;
             if !layer.attn_q_norm.is_empty() && layer.attn_q_norm.len() >= hd {
                 let mut tmp = [0.0f32; 512];
                 if hd <= tmp.len() {
@@ -1623,19 +1705,17 @@ impl Llama3Model {
 
             // RoPE Rotary Embedding
             for head_idx in 0..cur_heads {
-                let start = head_idx * self.config.head_dim;
-                let end = start + self.config.head_dim;
+                let start = head_idx * cur_head_dim;
+                let end = start + cur_head_dim;
                 if end <= scratch.q.len() {
-                    self.rope
-                        .apply_rotary_in_place(&mut scratch.q[start..end], position);
+                    rope_engine.apply_rotary_in_place(&mut scratch.q[start..end], position);
                 }
             }
             for kv_head_idx in 0..cur_kv_heads {
-                let start = kv_head_idx * self.config.head_dim;
-                let end = start + self.config.head_dim;
+                let start = kv_head_idx * cur_head_dim;
+                let end = start + cur_head_dim;
                 if end <= scratch.k.len() {
-                    self.rope
-                        .apply_rotary_in_place(&mut scratch.k[start..end], position);
+                    rope_engine.apply_rotary_in_place(&mut scratch.k[start..end], position);
                 }
             }
 
@@ -1653,19 +1733,21 @@ impl Llama3Model {
 
             // Attention Output Projection with GQA over full historical KV context
             for head in 0..cur_heads {
-                let q_start = head * self.config.head_dim;
-                let q_slice = &scratch.q[q_start..q_start + self.config.head_dim];
-                let out_slice = &mut scratch.attn_out[q_start..q_start + self.config.head_dim];
+                let q_start = head * cur_head_dim;
+                let q_slice = &scratch.q[q_start..q_start + cur_head_dim];
+                let out_slice = &mut scratch.attn_out[q_start..q_start + cur_head_dim];
 
                 let kv_head = head / (cur_heads / cur_kv_heads.max(1)).max(1);
 
-                self.flash_attn.forward_decode_gqa(
+                self.flash_attn.forward_decode_gqa_dyn(
                     q_slice,
                     k_buf,
                     v_buf,
                     kv_head,
                     cur_kv_heads,
+                    cur_head_dim,
                     context_len,
+                    sliding_window,
                     out_slice,
                 );
             }
@@ -2020,8 +2102,9 @@ impl Llama3ScratchBuffers {
     #[must_use]
     pub fn new(config: &Llama3Config) -> Self {
         let h = config.hidden_dim;
-        let q_dim = config.num_heads * config.head_dim;
-        let kv_dim = config.num_kv_heads * config.head_dim;
+        let max_hd = config.max_head_dim();
+        let q_dim = config.num_heads * max_hd;
+        let kv_dim = config.num_kv_heads * max_hd;
         let inter = config.intermediate_dim;
         let v = config.vocab_size;
 
