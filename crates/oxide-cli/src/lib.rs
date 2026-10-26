@@ -211,6 +211,19 @@ pub enum Commands {
     Bench(BenchArgs),
     /// AI Research Laboratory Suite: custom models, training/fine-tuning, quant/pruning, debugging, multimodal
     Lab(LabArgs),
+    /// Native Pure Rust Hardware GPU Capability & Unlock Engine (Ampere RTX 3000 & Ada RTX 4000)
+    GpuUnlock(GpuUnlockArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct GpuUnlockArgs {
+    /// Target specific PCI Bus-Device-Function (e.g. 0000:01:00.0) or 'all'
+    #[arg(short = 't', long, default_value = "all")]
+    pub target: String,
+
+    /// Boost SM clock in MHz for theoretical throughput calculation (defaults to 2500 MHz)
+    #[arg(long, default_value_t = 2500.0)]
+    pub clock_mhz: f32,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -587,6 +600,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ),
 
         Some(Commands::Lab(lab)) => run_lab_command(lab),
+        Some(Commands::GpuUnlock(args)) => run_gpu_unlock_probe(&args),
         Some(Commands::Server(srv)) => {
             let addr: SocketAddr = format!("{}:{}", srv.host, srv.port).parse()?;
             run_server_with_options(
@@ -1666,4 +1680,156 @@ pub fn run_lab_command(args: LabArgs) -> Result<(), Box<dyn std::error::Error + 
             Ok(())
         }
     }
+}
+
+pub fn run_gpu_unlock_probe(
+    args: &GpuUnlockArgs,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let engine = oxide_backend_cuda::HardwareGpuUnlockEngine::new();
+    let gpus = engine.scan_pci_devices();
+
+    println!("============================================================================");
+    println!(" Oxide Engine: Pure Rust Hardware GPU Capability & Unlock Engine");
+    println!(" Architecture Support: Ampere (RTX 3000) & Ada Lovelace (RTX 4000)");
+    println!("============================================================================");
+
+    if gpus.is_empty() {
+        println!("\n[!] No PCI NVIDIA display/compute devices detected in /sys/bus/pci/devices/.");
+        println!("    Running on non-PCI / virtualized / CPU-only environment.");
+    } else {
+        for gpu in &gpus {
+            if args.target != "all" && gpu.pci_bdf != args.target {
+                continue;
+            }
+            println!(
+                "\n[+] Detected Physical GPU: {} (PCI {})",
+                gpu.model_name, gpu.pci_bdf
+            );
+            println!(
+                "    PCI ID: 10de:{:04x} | Subsystem: {:04x}:{:04x}",
+                gpu.device_id, gpu.subsystem_vendor, gpu.subsystem_device
+            );
+            if let Some(bar0) = gpu.bar0_region {
+                println!(
+                    "    BAR0 MMIO: 0x{:08x} ({} MB, prefetchable: {})",
+                    bar0.physical_address,
+                    bar0.size_bytes / (1024 * 1024),
+                    bar0.is_prefetchable
+                );
+            }
+            if let Some(ref speed) = gpu.current_link_speed {
+                println!(
+                    "    PCIe Link Speed: {} (Max: {})",
+                    speed,
+                    gpu.max_link_speed.as_deref().unwrap_or("unknown")
+                );
+            }
+            println!("    NUMA Node: {}", gpu.numa_node);
+
+            match &gpu.capability {
+                oxide_backend_cuda::GpuUnlockCapability::AdaNativeUnthrottled {
+                    chip_series,
+                    cuda_cores,
+                    sm_count,
+                } => {
+                    println!("    Architecture: Ada Lovelace (RTX 4000 Series, SM 8.9)");
+                    println!("    Status: \x1b[92mNATIVE 4TH-GEN TENSOR CORES (UNTHROTTLED)\x1b[0m");
+                    println!(
+                        "    Hardware Specs: Chip {}, {} CUDA cores, {} Streaming Multiprocessors (SM)",
+                        chip_series, cuda_cores, sm_count
+                    );
+                    println!(
+                        "    Precision Capabilities: FP8 (E4M3/E5M2), FP16, BF16, TF32, INT8, INT4 Marlin"
+                    );
+                    println!("    Issue Rate: Native Dual-Issue (Unthrottled Full-Rate by Design)");
+
+                    if let Some(proj) =
+                        oxide_backend_cuda::HardwareGpuUnlockEngine::compute_gemm_projections(
+                            &gpu.capability,
+                            args.clock_mhz,
+                        )
+                    {
+                        println!(
+                            "    Theoretical Dense Throughput (@ {:.0} MHz):",
+                            args.clock_mhz
+                        );
+                        println!("      - FP32 Vector Rate:   {:.2} TFLOPS", proj.fp32_tflops);
+                        println!(
+                            "      - FP16/BF16 Dense TC: {:.2} TFLOPS",
+                            proj.fp16_dense_tflops
+                        );
+                        println!(
+                            "      - TF32 Dense TC:      {:.2} TFLOPS",
+                            proj.tf32_dense_tflops
+                        );
+                        println!("      - FP8 Dense TC:       {:.2} TFLOPS", proj.fp8_dense_tflops);
+                    }
+                }
+                oxide_backend_cuda::GpuUnlockCapability::AmpereThrottledStock {
+                    chip_series,
+                    cuda_cores,
+                    sm_count,
+                    potential_gemm_gain_pct,
+                } => {
+                    println!("    Architecture: Ampere (RTX 3000 Series, SM 8.6)");
+                    println!(
+                        "    Status: \x1b[93mTHROTTLED IN STOCK VBIOS (COMPATIBLE WITH UNLOCK)\x1b[0m"
+                    );
+                    println!(
+                        "    Hardware Specs: Chip {}, {} CUDA cores, {} SMs",
+                        chip_series, cuda_cores, sm_count
+                    );
+                    println!(
+                        "    Potential Speedup: {} dense BF16 GEMM throughput",
+                        potential_gemm_gain_pct
+                    );
+                    println!(
+                        "    Register Offsets: PLM=0x{:08x}, SS0=0x{:08x}, SS1=0x{:08x}",
+                        oxide_backend_cuda::gpu_unlock_registers::FEAT_OVR_PLM,
+                        oxide_backend_cuda::gpu_unlock_registers::FEAT_OVR_SM_SPD_0,
+                        oxide_backend_cuda::gpu_unlock_registers::FEAT_OVR_SM_SPD_1
+                    );
+                    if let Some(proj) =
+                        oxide_backend_cuda::HardwareGpuUnlockEngine::compute_gemm_projections(
+                            &gpu.capability,
+                            args.clock_mhz,
+                        )
+                    {
+                        println!(
+                            "    Throughput Comparison (@ {:.0} MHz):",
+                            args.clock_mhz
+                        );
+                        println!(
+                            "      - BF16 Stock (Half-Rate):      {:.2} TFLOPS",
+                            proj.bf16_stock_tflops
+                        );
+                        println!(
+                            "      - BF16 Unlocked (Full-Rate):   {:.2} TFLOPS (+{:.1}%)",
+                            proj.bf16_unlocked_tflops,
+                            (proj.bf16_unlocked_tflops / proj.bf16_stock_tflops - 1.0) * 100.0
+                        );
+                    }
+                }
+                oxide_backend_cuda::GpuUnlockCapability::AmpereUnlocked { chip_series } => {
+                    println!("    Architecture: Ampere ({})", chip_series);
+                    println!(
+                        "    Status: \x1b[92mALREADY UNLOCKED (FULL BF16 ISSUE RATE ACTIVE)\x1b[0m"
+                    );
+                }
+                oxide_backend_cuda::GpuUnlockCapability::ModernNativeUnthrottled {
+                    architecture,
+                } => {
+                    println!("    Architecture: {:?}", architecture);
+                    println!(
+                        "    Status: \x1b[92mNATIVE FULL-RATE UNTHROTTLED (ENTERPRISE/DATACENTER)\x1b[0m"
+                    );
+                }
+                oxide_backend_cuda::GpuUnlockCapability::Unsupported { device_id } => {
+                    println!("    Status: Unsupported PCI device 0x{:04x}", device_id);
+                }
+            }
+        }
+    }
+    println!("============================================================================");
+    Ok(())
 }

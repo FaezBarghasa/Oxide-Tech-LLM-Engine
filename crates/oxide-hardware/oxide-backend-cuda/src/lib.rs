@@ -28,6 +28,7 @@
 
 pub mod arch;
 pub mod driver;
+pub mod gpu_unlock;
 pub mod graph;
 pub mod kernels;
 pub mod megakernel;
@@ -35,6 +36,10 @@ pub mod nccl;
 
 pub use arch::KernelExecutionPlan;
 pub use driver::{CudaDeviceBuffer, CudaStream};
+pub use gpu_unlock::{
+    GpuThroughputProjection, GpuUnlockCapability, HardwareGpuUnlockEngine, PciBarRegion,
+    PhysicalPciGpu, registers as gpu_unlock_registers,
+};
 pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
 pub use kernels::CudaLlmKernels;
 pub use megakernel::{CooperativeMegakernel, CooperativeMegakernelConfig, MegakernelStats};
