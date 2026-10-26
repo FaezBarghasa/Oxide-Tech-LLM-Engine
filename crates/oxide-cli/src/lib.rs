@@ -705,7 +705,16 @@ fn run_chat_session(
 
     if let Some(p) = prompt {
         println!("Prompt: {p}");
-        let tokens = tokenizer.encode(p);
+        let formatted = if tokenizer.token_to_id.contains_key("<|im_start|>") {
+            format!("<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n")
+        } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
+            format!("<start_of_turn>user\n{p}<end_of_turn>\n<start_of_turn>model\n")
+        } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
+            format!("<|start_header_id|>user<|end_header_id|>\n\n{p}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n")
+        } else {
+            p.to_string()
+        };
+        let tokens = tokenizer.encode(&formatted);
         let prompt_tokens = if tokens.is_empty() { vec![1] } else { tokens };
 
         print!("Assistant: ");
@@ -847,14 +856,31 @@ fn run_chat_session(
             continue;
         }
 
-        let tokens = tokenizer.encode(trimmed);
-        let mut cur_token = tokens.last().copied().unwrap_or(1);
+        let formatted = if tokenizer.token_to_id.contains_key("<|im_start|>") {
+            format!("<|im_start|>user\n{trimmed}<|im_end|>\n<|im_start|>assistant\n")
+        } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
+            format!("<start_of_turn>user\n{trimmed}<end_of_turn>\n<start_of_turn>model\n")
+        } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
+            format!("<|start_header_id|>user<|end_header_id|>\n\n{trimmed}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n")
+        } else {
+            trimmed.to_string()
+        };
+        let prompt_tokens = tokenizer.encode(&formatted);
+        let mut cur_token = 1u32;
+        for &tok in &prompt_tokens {
+            let cmd = StepCommand::new(1, tok, 0, false);
+            let step_res = pipeline.step(&cmd)?;
+            cur_token = step_res.sampled_token;
+        }
+
         print!("\x1b[32mAssistant\x1b[0m: ");
+        let first_text = tokenizer.decode_token(cur_token);
+        print!("{first_text}");
         let _ = std::io::Write::flush(&mut std::io::stdout());
 
         // Reverse prompt stop markers (e.g. User:, \n\nUser, <|eot_id|>)
-        let reverse_prompts = ["User:", "User", "Human:", "\n\nUser", "<|eot_id|>"];
-        let mut generated_accum = String::new();
+        let reverse_prompts = ["User:", "User", "Human:", "\n\nUser", "<|eot_id|>", "<|im_end|>", "<end_of_turn>"];
+        let mut generated_accum = String::from(&first_text);
 
         for _ in 0..256 {
             let cmd = StepCommand::new(1, cur_token, 0, false);

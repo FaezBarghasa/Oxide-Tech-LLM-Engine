@@ -151,8 +151,12 @@ impl SpecializedPipeline {
                 let mut max_idx = 0;
                 let mut max_val = f32::NEG_INFINITY;
                 for (i, &l) in scratch.logits.iter().enumerate() {
-                    if l > max_val {
-                        max_val = l;
+                    let mut score = l;
+                    if cmd.input_token == i as u32 {
+                        score = if score > 0.0 { score / 1.15 } else { score * 1.15 };
+                    }
+                    if score > max_val {
+                        max_val = score;
                         max_idx = i;
                     }
                 }
@@ -236,8 +240,12 @@ impl SpecializedPipeline {
                 let mut max_idx = 0;
                 let mut max_val = f32::NEG_INFINITY;
                 for (i, &l) in scratch.logits.iter().enumerate() {
-                    if l > max_val {
-                        max_val = l;
+                    let mut score = l;
+                    if cmd.input_token == i as u32 {
+                        score = if score > 0.0 { score / 1.15 } else { score * 1.15 };
+                    }
+                    if score > max_val {
+                        max_val = score;
                         max_idx = i;
                     }
                 }

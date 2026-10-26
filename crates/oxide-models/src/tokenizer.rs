@@ -166,78 +166,47 @@ impl GgufTokenizer {
         }
 
         let mut tokens = Vec::new();
+        let bytes = text.as_bytes();
+        let mut i = 0;
 
-        // Split text on whitespace boundaries while preserving punctuation
-        for word in text.split_inclusive(|c: char| c.is_whitespace() || c.is_ascii_punctuation()) {
-            if word.is_empty() {
-                continue;
-            }
+        while i < bytes.len() {
+            let max_len = (bytes.len() - i).min(64);
+            let mut matched = false;
 
-            // Direct full word match in vocabulary
-            if let Some(&id) = self.token_to_id.get(word) {
-                tokens.push(id);
-                continue;
-            }
-
-            // SentencePiece prefix match with ' '
-            let sp_word = format!("\u{2581}{word}");
-            if let Some(&id) = self.token_to_id.get(&sp_word) {
-                tokens.push(id);
-                continue;
-            }
-
-            // Subword / byte-level fallback
-            let mut word_parts: Vec<String> = word.chars().map(|c| c.to_string()).collect();
-
-            // Perform iterative BPE merges if merges table is populated
-            if !self.merges.is_empty() && word_parts.len() > 1 {
-                loop {
-                    let mut best_pair = None;
-                    let mut best_rank = usize::MAX;
-                    let mut best_idx = 0;
-
-                    for i in 0..word_parts.len() - 1 {
-                        let pair = (word_parts[i].clone(), word_parts[i + 1].clone());
-                        if let Some(&rank) = self.merges.get(&pair)
-                            && rank < best_rank
-                        {
-                            best_rank = rank;
-                            best_pair = Some(pair);
-                            best_idx = i;
-                        }
-                    }
-
-                    if best_pair.is_none() {
+            // 1. Try exact longest matching substring from current position
+            for len in (1..=max_len).rev() {
+                if let Ok(sub) = std::str::from_utf8(&bytes[i..i + len]) {
+                    if let Some(&id) = self.token_to_id.get(sub) {
+                        tokens.push(id);
+                        i += len;
+                        matched = true;
                         break;
                     }
-
-                    let combined = format!("{}{}", word_parts[best_idx], word_parts[best_idx + 1]);
-                    word_parts[best_idx] = combined;
-                    word_parts.remove(best_idx + 1);
-
-                    if word_parts.len() <= 1 {
+                    // 2. SentencePiece underscore prefix
+                    let sp_sub = format!("\u{2581}{sub}");
+                    if let Some(&id) = self.token_to_id.get(&sp_sub) {
+                        tokens.push(id);
+                        i += len;
+                        matched = true;
                         break;
                     }
                 }
             }
 
-            // Map merged subword pieces to token IDs
-            for part in word_parts {
-                if let Some(&id) = self.token_to_id.get(&part) {
+            if !matched {
+                // 3. Fallback to single byte
+                let b = bytes[i];
+                let hex_tok = format!("<0x{b:02X}>");
+                if let Some(&id) = self.token_to_id.get(&hex_tok) {
                     tokens.push(id);
+                } else if let Some(&id) = self.token_to_id.get(&(b as char).to_string()) {
+                    tokens.push(id);
+                } else if let Some(unk) = self.unk_id {
+                    tokens.push(unk);
                 } else {
-                    // Raw UTF-8 byte tokens fallback
-                    for b in part.as_bytes() {
-                        let hex_tok = format!("<0x{b:02X}>");
-                        if let Some(&id) = self.token_to_id.get(&hex_tok) {
-                            tokens.push(id);
-                        } else if let Some(unk) = self.unk_id {
-                            tokens.push(unk);
-                        } else {
-                            tokens.push(u32::from(*b));
-                        }
-                    }
+                    tokens.push(u32::from(b));
                 }
+                i += 1;
             }
         }
 
