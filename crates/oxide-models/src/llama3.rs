@@ -20,6 +20,7 @@ pub struct Llama3Config {
     pub rope_theta: u32,
     pub is_gemma: bool,
     pub is_qwen: bool,
+    pub final_logit_softcapping: Option<u32>,
 }
 
 impl Default for Llama3Config {
@@ -38,6 +39,7 @@ impl Default for Llama3Config {
             rope_theta: 500_000.0f32.to_bits(),
             is_gemma: false,
             is_qwen: false,
+            final_logit_softcapping: None,
         }
     }
 }
@@ -60,6 +62,7 @@ impl Llama3Config {
             rope_theta: 10_000.0f32.to_bits(),
             is_gemma: false,
             is_qwen: false,
+            final_logit_softcapping: None,
         }
     }
 
@@ -71,6 +74,11 @@ impl Llama3Config {
     #[must_use]
     pub fn rope_theta_f32(&self) -> f32 {
         f32::from_bits(self.rope_theta)
+    }
+
+    #[must_use]
+    pub fn final_logit_softcapping_f32(&self) -> Option<f32> {
+        self.final_logit_softcapping.map(f32::from_bits)
     }
 
     /// Construct configuration from a ModelSpecification in the catalog.
@@ -90,6 +98,7 @@ impl Llama3Config {
             rope_theta: 500_000.0f32.to_bits(),
             is_gemma: false,
             is_qwen: false,
+            final_logit_softcapping: None,
         }
     }
 
@@ -159,6 +168,7 @@ impl Llama3Config {
         let rope_theta = gguf.get_f32(&format!("{arch}.rope.freq_base")).unwrap_or(500_000.0);
         let is_gemma = arch.contains("gemma");
         let is_qwen = arch.contains("qwen");
+        let final_logit_softcapping = gguf.get_f32(&format!("{arch}.final_logit_softcapping")).map(|f| f.to_bits());
 
         Self {
             hidden_dim,
@@ -174,6 +184,7 @@ impl Llama3Config {
             rope_theta: rope_theta.to_bits(),
             is_gemma,
             is_qwen,
+            final_logit_softcapping,
         }
     }
 }
@@ -620,6 +631,10 @@ pub struct Llama3LayerWeights {
     pub down_proj: QuantizedTensor, // [hidden_dim, intermediate_dim]
     pub attn_norm: Vec<f32>,        // [hidden_dim]
     pub ffn_norm: Vec<f32>,         // [hidden_dim]
+    pub attn_q_norm: Vec<f32>,      // [head_dim] (QK-Norm)
+    pub attn_k_norm: Vec<f32>,      // [head_dim] (QK-Norm)
+    pub post_attn_norm: Vec<f32>,   // [hidden_dim] (Gemma 2 / Gemma 4 / Nemotron)
+    pub post_ffn_norm: Vec<f32>,    // [hidden_dim] (Gemma 2 / Gemma 4 / Nemotron)
 }
 
 impl Llama3LayerWeights {
@@ -635,6 +650,10 @@ impl Llama3LayerWeights {
             down_proj: QuantizedTensor::empty(),
             attn_norm: Vec::new(),
             ffn_norm: Vec::new(),
+            attn_q_norm: Vec::new(),
+            attn_k_norm: Vec::new(),
+            post_attn_norm: Vec::new(),
+            post_ffn_norm: Vec::new(),
         }
     }
 
@@ -690,6 +709,10 @@ impl Llama3LayerWeights {
             ),
             attn_norm: vec![1.0; h],
             ffn_norm: vec![1.0; h],
+            attn_q_norm: Vec::new(),
+            attn_k_norm: Vec::new(),
+            post_attn_norm: Vec::new(),
+            post_ffn_norm: Vec::new(),
         }
     }
 }
@@ -1333,6 +1356,32 @@ impl Llama3Model {
                     data_slice,
                     &mut layer.ffn_norm,
                 );
+
+                let q_norm_name = format!("blk.{i}.attn_q_norm.weight");
+                let k_norm_name = format!("blk.{i}.attn_k_norm.weight");
+                let post_attn_norm_name = format!("blk.{i}.post_attention_norm.weight");
+                let post_ffw_norm_name = format!("blk.{i}.post_ffw_norm.weight");
+
+                if let Some(t) = gguf.tensors.get(&q_norm_name) {
+                    let len = t.dimensions[0] as usize;
+                    layer.attn_q_norm.resize(len, 1.0);
+                    Self::extract_gguf_tensor_to_buffer(gguf, &q_norm_name, data_slice, &mut layer.attn_q_norm);
+                }
+                if let Some(t) = gguf.tensors.get(&k_norm_name) {
+                    let len = t.dimensions[0] as usize;
+                    layer.attn_k_norm.resize(len, 1.0);
+                    Self::extract_gguf_tensor_to_buffer(gguf, &k_norm_name, data_slice, &mut layer.attn_k_norm);
+                }
+                if let Some(t) = gguf.tensors.get(&post_attn_norm_name) {
+                    let len = t.dimensions[0] as usize;
+                    layer.post_attn_norm.resize(len, 1.0);
+                    Self::extract_gguf_tensor_to_buffer(gguf, &post_attn_norm_name, data_slice, &mut layer.post_attn_norm);
+                }
+                if let Some(t) = gguf.tensors.get(&post_ffw_norm_name) {
+                    let len = t.dimensions[0] as usize;
+                    layer.post_ffn_norm.resize(len, 1.0);
+                    Self::extract_gguf_tensor_to_buffer(gguf, &post_ffw_norm_name, data_slice, &mut layer.post_ffn_norm);
+                }
             });
 
         Ok(())
@@ -1491,6 +1540,14 @@ impl Llama3Model {
         // 4. LM Head projection to vocabulary logits
         self.lm_head.gemv(&scratch.final_norm[..h], &mut scratch.logits);
 
+        if let Some(cap) = self.config.final_logit_softcapping_f32() {
+            if cap > 0.0 {
+                for l in &mut scratch.logits {
+                    *l = cap * (*l / cap).tanh();
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1534,6 +1591,35 @@ impl Llama3Model {
                 &mut scratch.v,
                 &scratch.norm_hidden[..h],
             );
+
+            // QK-Norm (applied per-head before RoPE)
+            let hd = self.config.head_dim;
+            if !layer.attn_q_norm.is_empty() && layer.attn_q_norm.len() >= hd {
+                let mut tmp = [0.0f32; 512];
+                if hd <= tmp.len() {
+                    for head_idx in 0..cur_heads {
+                        let start = head_idx * hd;
+                        let end = start + hd;
+                        if end <= scratch.q.len() {
+                            tmp[..hd].copy_from_slice(&scratch.q[start..end]);
+                            Self::rms_norm(&tmp[..hd], &layer.attn_q_norm[..hd], &mut scratch.q[start..end], eps);
+                        }
+                    }
+                }
+            }
+            if !layer.attn_k_norm.is_empty() && layer.attn_k_norm.len() >= hd {
+                let mut tmp = [0.0f32; 512];
+                if hd <= tmp.len() {
+                    for kv_head_idx in 0..cur_kv_heads {
+                        let start = kv_head_idx * hd;
+                        let end = start + hd;
+                        if end <= scratch.k.len() {
+                            tmp[..hd].copy_from_slice(&scratch.k[start..end]);
+                            Self::rms_norm(&tmp[..hd], &layer.attn_k_norm[..hd], &mut scratch.k[start..end], eps);
+                        }
+                    }
+                }
+            }
 
             // RoPE Rotary Embedding
             for head_idx in 0..cur_heads {
@@ -1589,13 +1675,22 @@ impl Llama3Model {
                 .o_proj
                 .gemv(&scratch.attn_out[..o_in_dim], &mut scratch.o_proj_out[..h]);
 
+            // Post-attention norm (Gemma 2 / Gemma 4 / Nemotron)
+            if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
+                let mut tmp = [0.0f32; 4096];
+                if h <= tmp.len() {
+                    tmp[..h].copy_from_slice(&scratch.o_proj_out[..h]);
+                    Self::rms_norm(&tmp[..h], &layer.post_attn_norm[..h], &mut scratch.o_proj_out[..h], eps);
+                }
+            }
+
             // Residual 1
             for i in 0..h {
                 scratch.hidden[i] += scratch.o_proj_out[i];
             }
         }
 
-        // FFN RMSNorm & SwiGLU MLP
+        // FFN RMSNorm & MLP
         let cur_inter = layer.gate_proj.rows();
         if cur_inter > 0 && layer.up_proj.rows() > 0 && layer.down_proj.rows() > 0 {
             Self::rms_norm(
@@ -1613,16 +1708,37 @@ impl Llama3Model {
                 &scratch.ffn_norm_hidden[..h],
             );
 
-            // SwiGLU: down_proj(silu(gate) * up)
-            for i in 0..cur_inter {
-                let g = scratch.gate[i];
-                let silu_g = g / (1.0 + (-g).exp());
-                scratch.activated[i] = silu_g * scratch.up[i];
+            if self.config.is_gemma {
+                // Gemma GeLU activation (tanh approximation): 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+                const SQRT_2_OVER_PI: f32 = 0.797_884_6;
+                for i in 0..cur_inter {
+                    let g = scratch.gate[i];
+                    let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
+                    let gelu_g = 0.5 * g * (1.0 + inner.tanh());
+                    scratch.activated[i] = gelu_g * scratch.up[i];
+                }
+            } else {
+                // SwiGLU: silu(gate) * up
+                for i in 0..cur_inter {
+                    let g = scratch.gate[i];
+                    let silu_g = g / (1.0 + (-g).exp());
+                    scratch.activated[i] = silu_g * scratch.up[i];
+                }
             }
 
+            let d_cols = layer.down_proj.cols().min(cur_inter);
             layer
                 .down_proj
-                .gemv(&scratch.activated[..cur_inter], &mut scratch.mlp_out[..h]);
+                .gemv(&scratch.activated[..d_cols], &mut scratch.mlp_out[..h]);
+
+            // Post-FFN norm (Gemma 2 / Gemma 4 / Nemotron)
+            if !layer.post_ffn_norm.is_empty() && layer.post_ffn_norm.len() >= h {
+                let mut tmp = [0.0f32; 4096];
+                if h <= tmp.len() {
+                    tmp[..h].copy_from_slice(&scratch.mlp_out[..h]);
+                    Self::rms_norm(&tmp[..h], &layer.post_ffn_norm[..h], &mut scratch.mlp_out[..h], eps);
+                }
+            }
 
             // Residual 2
             for i in 0..h {

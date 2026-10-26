@@ -112,9 +112,30 @@ fn test_real_gguf_models_in_home_dir() {
                     }
                 }
             }
-            for tname in &["blk.0.attn_q.weight", "blk.0.attn_k.weight", "blk.0.attn_v.weight", "blk.0.attn_output.weight", "blk.0.attn_qkv.weight", "blk.0.ffn_gate.weight", "blk.0.ffn_up.weight", "blk.0.ffn_down.weight", "output_norm.weight", "output.weight"] {
-                if let Some(t) = parsed.tensors.get(*tname) {
-                    println!("    tensor {tname}: shape={:?}, type={:?}", t.dimensions, t.quant_type);
+            if name == &"gemma-4-e2b-it.Q8_0.gguf" {
+                println!("--- Testing Llama3Model forward step on {} ---", name);
+                let mut model = oxide_models::llama3::Llama3Model::new_empty(cfg);
+                let static_slice: &'static [u8] = unsafe {
+                    std::slice::from_raw_parts(mmap.as_ptr(), mmap.len())
+                };
+                model.load_from_gguf(&parsed, static_slice).expect("load_from_gguf");
+                let mut kv_cache = (0..model.config.num_layers)
+                    .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
+                    .collect::<Vec<_>>();
+                let mut scratch = model.create_scratch();
+                let prompt_tokens = tok.encode("What is 2 + 2?");
+                println!("Prompt tokens: {:?}", prompt_tokens);
+                for (pos, &t) in prompt_tokens.iter().enumerate() {
+                    model.forward_step_with_scratch(t, pos, &mut kv_cache, &mut scratch).expect("forward_step");
+                    let norm = oxide_quant::simd::dot_f32(&scratch.hidden, &scratch.hidden).sqrt();
+                    println!("  pos {pos} (token {t}): hidden norm = {norm:.4}");
+                }
+                let mut indexed_logits: Vec<_> = scratch.logits.iter().copied().enumerate().collect();
+                indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                println!("Top 5 logits after prompt:");
+                for (rank, (idx, val)) in indexed_logits.iter().take(5).enumerate() {
+                    let text = tok.decode_token(*idx as u32);
+                    println!("  #{rank}: token {idx} ('{text}') = {val:.4}");
                 }
             }
         } else {

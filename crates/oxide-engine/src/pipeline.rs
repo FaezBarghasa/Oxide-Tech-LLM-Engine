@@ -738,20 +738,7 @@ impl SpecializedPipeline {
                     model.config.num_layers,
                 ),
             ),
-            _ => {
-                if norm_backend == "cpu"
-                    && oxide_core::hardware::GpuDeviceProfile::detect_amd_cpu_and_igpu().is_some()
-                {
-                    let has_npu = oxide_core::hardware::GpuDeviceProfile::detect_amd_apu_full()
-                        .is_some_and(|(_, _, npu)| npu);
-                    Some(crate::hybrid::HybridDeviceTopology::amd_apu_full_partition(
-                        model.config.num_layers,
-                        has_npu,
-                    ))
-                } else {
-                    None
-                }
-            }
+            _ => None,
         };
 
         if let Some(topology) = maybe_topology {

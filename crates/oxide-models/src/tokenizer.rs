@@ -192,7 +192,25 @@ impl GgufTokenizer {
                         matched = true;
                         break;
                     }
-                    // 2. GPT-2 / Qwen byte BPE mapping
+                    // 2. SentencePiece with spaces replaced by \u{2581} (e.g. " is" -> " is")
+                    let sp_sub = sub.replace(' ', "\u{2581}");
+                    if let Some(&id) = self.token_to_id.get(&sp_sub) {
+                        tokens.push(id);
+                        i += len;
+                        matched = true;
+                        break;
+                    }
+                    // 3. SentencePiece leading underscore prefix (e.g. first word "What" -> " What")
+                    if !sub.starts_with(' ') {
+                        let sp_prefixed = format!("\u{2581}{sp_sub}");
+                        if let Some(&id) = self.token_to_id.get(&sp_prefixed) {
+                            tokens.push(id);
+                            i += len;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    // 4. GPT-2 / Qwen byte BPE mapping
                     let gpt2_sub = sub
                         .replace(' ', "\u{0120}")
                         .replace('\n', "\u{010A}")
@@ -204,22 +222,16 @@ impl GgufTokenizer {
                         matched = true;
                         break;
                     }
-                    // 3. SentencePiece underscore prefix
-                    let sp_sub = format!("\u{2581}{sub}");
-                    if let Some(&id) = self.token_to_id.get(&sp_sub) {
-                        tokens.push(id);
-                        i += len;
-                        matched = true;
-                        break;
-                    }
                 }
             }
 
             if !matched {
-                // 4. Fallback to single byte
+                // 5. Fallback to single byte
                 let b = bytes[i];
                 let hex_tok = format!("<0x{b:02X}>");
                 if let Some(&id) = self.token_to_id.get(&hex_tok) {
+                    tokens.push(id);
+                } else if b == b' ' && let Some(&id) = self.token_to_id.get("\u{2581}") {
                     tokens.push(id);
                 } else if b == b' ' && let Some(&id) = self.token_to_id.get("\u{0120}") {
                     tokens.push(id);
