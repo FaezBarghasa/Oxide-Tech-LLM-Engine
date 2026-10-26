@@ -28,11 +28,11 @@ pub mod compressed_tensors;
 pub mod cq2;
 pub mod exl2;
 pub mod fp8;
+pub mod fwht;
 pub mod gguf_quants;
 pub mod gptq_awq;
 pub mod int_quant;
 pub mod int_standard;
-pub mod fwht;
 pub mod kv_mean_center;
 pub mod marlin;
 pub mod modelopt;
@@ -53,6 +53,9 @@ pub use compressed_tensors::{
 pub use cq2::NeedleCQ2;
 pub use exl2::{Exl2BitsPerWeight, Exl2Quant, Exl2WeightMatrix};
 pub use fp8::{BlockFp8E4M3, Fp8E4M3, Fp8E5M2};
+pub use fwht::{
+    fused_rmsnorm_fwht, fwht_butterfly_in_place, fwht_row_in_place, fwht_signed_row_in_place,
+};
 pub use gguf_quants::{
     BlockIQ1_M, BlockIQ1_S, BlockIQ2_M, BlockIQ2_S, BlockIQ2_XS, BlockIQ2_XXS, BlockIQ3_M,
     BlockIQ3_S, BlockIQ3_XS, BlockIQ3_XXS, BlockIQ4_NL, BlockIQ4_XS, BlockQ2_K_S, BlockQ3_K_L,
@@ -68,12 +71,11 @@ pub use int_quant::{
     BlockQ5_0, BlockQ5_1, BlockQ6_K, BlockQ8_0, BlockQ8_1, BlockQ8_K, f16,
 };
 pub use int_standard::{Int4Asym, Int4Sym, Int8Asym, Int8Sym};
+pub use kv_mean_center::{LayerKeyBias, OnlineMeanCalibrator};
 pub use marlin::{MarlinQuant, MarlinQuantizedMatrix, MarlinWeightMatrix, pack_marlin_int4};
 pub use modelopt::{ModelOptAlgorithm, ModelOptConfig, apply_smoothquant_weights};
 pub use mxfp::{BlockMxFp4, BlockMxFp6, BlockMxFp8, BlockMxInt8, E8M0Scale};
 pub use nvfp4::{BlockNvFp4_16, NvFp4};
-pub use fwht::{fused_rmsnorm_fwht, fwht_butterfly_in_place, fwht_row_in_place, fwht_signed_row_in_place};
-pub use kv_mean_center::{LayerKeyBias, OnlineMeanCalibrator};
 pub use pq2_0::{BlockPQ2_0, PackedQuant2_0};
 pub use ptq1_0::{BlockPTQ1_0, Ternary1_58Bit, TernaryBlock128};
 pub use qr::{QrQuantKind, QuantizedResidentTensor};

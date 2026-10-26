@@ -9,23 +9,26 @@
 ///   x[i] = u + v
 ///   x[i + h] = u - v
 pub fn fwht_butterfly_in_place(buf: &mut [f32]) {
-    let n = buf.len();
-    assert!(n.is_power_of_two(), "FWHT length must be a power of 2");
+    let total_len = buf.len();
+    assert!(
+        total_len.is_power_of_two(),
+        "FWHT length must be a power of 2"
+    );
 
-    let mut h = 1;
-    while h < n {
-        let step = h << 1;
-        let mut i = 0;
-        while i < n {
-            for j in 0..h {
-                let u = buf[i + j];
-                let v = buf[i + j + h];
-                buf[i + j] = u + v;
-                buf[i + j + h] = u - v;
+    let mut half_stride = 1;
+    while half_stride < total_len {
+        let full_stride = half_stride << 1;
+        let mut chunk_start = 0;
+        while chunk_start < total_len {
+            for offset in 0..half_stride {
+                let val_a = buf[chunk_start + offset];
+                let val_b = buf[chunk_start + offset + half_stride];
+                buf[chunk_start + offset] = val_a + val_b;
+                buf[chunk_start + offset + half_stride] = val_a - val_b;
             }
-            i += step;
+            chunk_start += full_stride;
         }
-        h = step;
+        half_stride = full_stride;
     }
 }
 

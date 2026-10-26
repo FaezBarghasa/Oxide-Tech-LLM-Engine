@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use oxide_core::traits::QuantScheme;
 
-use crate::int_quant::{f16, BlockQ8_0};
+use crate::int_quant::{BlockQ8_0, f16};
 
 /// Ternary 1.58-bit (PTQ1_0) quantization scheme marker.
 /// 128 weights packed into 28 bytes (1.75 bits per weight).
@@ -109,8 +109,8 @@ impl BlockPTQ1_0 {
                     let xi = (val.round() as i32 + 1).clamp(0, 2) as u16;
                     q = q * 3 + xi;
                 }
-                // Ceiling division: (q * 256 + 242) / 243
-                let byte = ((q as u32 * 256 + 242) / 243) as u8;
+                // Ceiling division: (q * 256).div_ceil(243)
+                let byte = (q as u32 * 256).div_ceil(243) as u8;
                 qs[j + m] = byte;
             }
             j += c;
@@ -126,7 +126,7 @@ impl BlockPTQ1_0 {
                 q = q * 3 + xi;
             }
             q *= 3; // Shift to most significant trit
-            let byte = ((q as u32 * 256 + 242) / 243) as u8;
+            let byte = (q as u32 * 256).div_ceil(243) as u8;
             qh[h] = byte;
         }
 

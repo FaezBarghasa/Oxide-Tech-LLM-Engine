@@ -116,6 +116,7 @@ mod tests {
         let dim = n_heads * head_dim;
 
         let q = [1.0f32, -0.5, 2.0, 0.1, 0.0, 1.2, -1.0, 0.5];
+        assert_eq!(dim, q.len());
         let mut k = [0.5f32, 1.5, -0.2, 0.8, -1.0, 0.3, 0.9, -0.4];
 
         let bias = LayerKeyBias::from_slice(

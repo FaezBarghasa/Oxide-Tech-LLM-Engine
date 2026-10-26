@@ -36,10 +36,13 @@ pub mod attention_kernels;
 pub mod audio;
 pub mod bonsai2;
 pub mod chat_template;
+pub mod dflash;
 pub mod diffusion;
+pub mod dspark;
 pub mod engram;
 pub mod flash_attn;
 pub mod formats;
+pub mod gdn;
 pub mod hf_architectures;
 pub mod llama3;
 pub mod loader;
@@ -57,6 +60,9 @@ pub mod speculative;
 pub mod tokenizer;
 pub mod vision;
 
+pub use dflash::{DFlashConfig, DFlashModel};
+pub use dspark::{DSparkConfig, DSparkModel};
+pub use gdn::{GatedDeltaNet, GdnReplayState, GdnUpdateRecord};
 pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};
 pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
 

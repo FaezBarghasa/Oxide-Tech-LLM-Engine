@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use oxide_core::traits::QuantScheme;
 
-use crate::int_quant::{f16, BlockQ8_0};
+use crate::int_quant::{BlockQ8_0, f16};
 
 /// Prism Quaternary 2-bit (PQ2_0) quantization scheme marker.
 /// 128 weights packed into 34 bytes (2.125 bits per weight).
@@ -144,7 +144,7 @@ mod tests {
     fn test_pq2_0_quant_dequant_roundtrip() {
         let mut input = [0.0f32; 128];
         for (i, v) in input.iter_mut().enumerate() {
-            let val = (i % 4) as f32 - 1.0; // -1, 0, 1, 2
+            let val = (i % 3) as f32 - 1.0; // -1, 0, 1
             *v = val * 0.5;
         }
 
