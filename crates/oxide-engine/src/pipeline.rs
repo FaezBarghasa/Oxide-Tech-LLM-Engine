@@ -287,6 +287,44 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Returns a borrowed slice of the latest model logits if supported by the pipeline variant.
+    pub fn logits(&self) -> Option<&[f32]> {
+        match self {
+            Self::Llama3Dense { scratch, .. }
+            | Self::Llama3AmdApuCpuIgpu { scratch, .. } => Some(&scratch.logits),
+            _ => None,
+        }
+    }
+
+    /// Explicitly purges KV cache layers and sequence position tracking for a completed sequence.
+    pub fn evict_sequence(&mut self, sequence_id: u64) {
+        match self {
+            Self::Llama3Dense {
+                kv_cache,
+                seq_positions,
+                ..
+            }
+            | Self::Llama3AmdApuCpuIgpu {
+                kv_cache,
+                seq_positions,
+                ..
+            } => {
+                kv_cache.remove(&sequence_id);
+                seq_positions.remove(&sequence_id);
+            }
+            _ => {}
+        }
+    }
+
+    /// Prefills prompt tokens into the sequence KV cache before autoregressive token generation.
+    pub fn prefill(&mut self, sequence_id: u64, tokens: &[u32], slot_idx: u16) -> Result<()> {
+        for &tok in tokens {
+            let cmd = StepCommand::new(sequence_id, tok, slot_idx, true);
+            self.step(&cmd)?;
+        }
+        Ok(())
+    }
+
     /// Universal model loader resolving from a local file path (GGUF/SafeTensors),
     /// a catalog model name (e.g. Qwen, DeepSeek, Mistral, Llama), or domain pipelines.
     pub fn from_model_or_path(
