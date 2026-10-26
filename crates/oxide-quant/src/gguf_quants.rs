@@ -22,6 +22,11 @@ pub struct BlockQ4_K {
     pub qs: [u8; 128],
 }
 
+// SAFETY: BlockQ4_K is repr(C, align(16)) and contains only f16 and [u8; N] with zero padding bytes.
+unsafe impl bytemuck::Zeroable for BlockQ4_K {}
+// SAFETY: All bit patterns are valid for BlockQ4_K (f16 and [u8; N]).
+unsafe impl bytemuck::Pod for BlockQ4_K {}
+
 impl Default for BlockQ4_K {
     fn default() -> Self {
         Self {

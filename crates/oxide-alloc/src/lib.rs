@@ -27,24 +27,31 @@
     clippy::unreadable_literal
 )]
 
+pub mod compact_kv;
 pub mod device_arena;
 pub mod hierarchical_kv;
 pub mod host_arena;
+pub mod io_uring_loader;
 pub mod kv_advanced;
 pub mod paged_kv;
 pub mod radix_cache;
+pub mod slab_pool;
 pub mod transactional;
 
+pub use compact_kv::{CompactSlotMetadata, DmsCompactKvArena, DmsPolicy, SequenceCompactTable};
 pub use device_arena::DeviceMemoryArena;
 pub use hierarchical_kv::{
     CacheTierLocation, DistributedKvBlockPayload, HierarchicalKvCache, KvBlockDescriptor,
     TOKENS_PER_KV_BLOCK,
 };
 pub use host_arena::HostPinnedArena;
+pub use io_uring_loader::{AsyncIoStats, AsyncReadRequest, HighThroughputWeightLoader};
 pub use kv_advanced::{
     ContextShiftManager, KvCacheDumpContainer, KvQuantizationPrecision, PromptCacheRegistry,
     QuantizedKvBlock,
 };
 pub use paged_kv::{PagedKvArena, PhysicalPageBlock, SequenceBlockTable, TOKENS_PER_PAGE};
 pub use radix_cache::{RadixNode, RadixPrefixCache};
+pub use slab_pool::{PhysicalSlabBlock, SequenceSlabTable, SlabPoolArena, TOKENS_PER_SLAB};
 pub use transactional::TransactionalBlockTable;
+

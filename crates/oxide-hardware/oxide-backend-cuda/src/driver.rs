@@ -129,6 +129,15 @@ unsafe impl Send for CudaDeviceBuffer {}
 unsafe impl Sync for CudaDeviceBuffer {}
 
 impl CudaDeviceBuffer {
+    /// Creates an empty device buffer pointing to null.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            ptr: ptr::null_mut(),
+            size_bytes: 0,
+        }
+    }
+
     /// Allocates physical memory directly on the CUDA device via `cudaMalloc`.
     pub fn allocate(size_bytes: usize) -> Result<Self, String> {
         if size_bytes == 0 {

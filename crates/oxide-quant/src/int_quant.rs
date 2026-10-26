@@ -374,6 +374,11 @@ pub struct BlockQ8_0 {
     pub qs: [i8; 32],
 }
 
+// SAFETY: BlockQ8_0 is repr(C) and contains only f16 and [i8; 32] with zero padding bytes.
+unsafe impl bytemuck::Zeroable for BlockQ8_0 {}
+// SAFETY: All bit patterns are valid for BlockQ8_0 (f16 and [i8; 32]).
+unsafe impl bytemuck::Pod for BlockQ8_0 {}
+
 impl BlockQ8_0 {
     #[must_use]
     pub fn quantize(values: &[f32; 32]) -> Self {

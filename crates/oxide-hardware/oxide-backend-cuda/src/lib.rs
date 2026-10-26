@@ -30,12 +30,14 @@ pub mod arch;
 pub mod driver;
 pub mod graph;
 pub mod kernels;
+pub mod megakernel;
 pub mod nccl;
 
 pub use arch::KernelExecutionPlan;
 pub use driver::{CudaDeviceBuffer, CudaStream};
 pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
 pub use kernels::CudaLlmKernels;
+pub use megakernel::{CooperativeMegakernel, CooperativeMegakernelConfig, MegakernelStats};
 pub use nccl::{CudaDeviceClusterArray, NcclCommunicator};
 
 use oxide_core::error::{EngineError, Result};

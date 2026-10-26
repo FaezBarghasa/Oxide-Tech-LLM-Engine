@@ -38,10 +38,12 @@ pub mod mxfp;
 pub mod nvfp4;
 pub mod pq2_0;
 pub mod ptq1_0;
+pub mod qr;
 pub mod simd;
 pub mod torchao;
 
 // High-level re-exports
+pub use qr::{QrQuantKind, QuantizedResidentTensor};
 pub use bitsandbytes::{BlockFp4Bnb_64, BlockNf4_64, BnbInt8, FP4_TABLE, NF4_TABLE};
 pub use compressed_tensors::{
     CompressedQuantType, CompressedTensorsConfig, CompressionFormat, QuantizationStrategy,
