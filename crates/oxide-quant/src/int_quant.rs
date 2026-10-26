@@ -637,21 +637,27 @@ impl BlockQ6_K {
         let mut ql = [0u8; 128];
         let mut qh = [0u8; 64];
 
-        for i in 0..128 {
-            let v0 = (values[i] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32;
-            let v1 = (values[i + 128] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32;
+        for half in 0..2 {
+            let ql_offset = half * 64;
+            let qh_offset = half * 32;
+            let y_offset = half * 128;
 
-            let u0 = v0 as u8;
-            let u1 = v1 as u8;
+            for l in 0..32 {
+                let v1 = ((values[y_offset + l + 0] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
+                let v2 = ((values[y_offset + l + 32] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
+                let v3 = ((values[y_offset + l + 64] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
+                let v4 = ((values[y_offset + l + 96] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
 
-            ql[i] = (u0 & 0x0F) | ((u1 & 0x0F) << 4);
+                ql[ql_offset + l] = (v1 & 0x0F) | ((v3 & 0x0F) << 4);
+                ql[ql_offset + l + 32] = (v2 & 0x0F) | ((v4 & 0x0F) << 4);
 
-            let h0 = (u0 >> 4) & 0x03;
-            let h1 = (u1 >> 4) & 0x03;
+                let h1 = (v1 >> 4) & 0x03;
+                let h2 = (v2 >> 4) & 0x03;
+                let h3 = (v3 >> 4) & 0x03;
+                let h4 = (v4 >> 4) & 0x03;
 
-            let qh_idx = i / 2;
-            let shift = (i % 2) * 4;
-            qh[qh_idx] |= ((h0 | (h1 << 2)) & 0x0F) << shift;
+                qh[qh_offset + l] = h1 | (h2 << 2) | (h3 << 4) | (h4 << 6);
+            }
         }
 
         Self {
@@ -664,20 +670,33 @@ impl BlockQ6_K {
 
     pub fn dequantize(&self, output: &mut [f32; 256]) {
         let d = self.d.to_f32();
-        for i in 0..128 {
-            let byte_l = self.ql[i];
-            let qh_idx = i / 2;
-            let shift = (i % 2) * 4;
-            let byte_h = (self.qh[qh_idx] >> shift) & 0x0F;
+        for half in 0..2 {
+            let ql_offset = half * 64;
+            let qh_offset = half * 32;
+            let sc_offset = half * 8;
+            let y_offset = half * 128;
 
-            let h0 = byte_h & 0x03;
-            let h1 = (byte_h >> 2) & 0x03;
+            for l in 0..32 {
+                let is = l / 16;
+                let qh_byte = self.qh[qh_offset + l];
+                let ql0 = self.ql[ql_offset + l];
+                let ql32 = self.ql[ql_offset + l + 32];
 
-            let q0 = ((h0 << 4) | (byte_l & 0x0F)) as i8 - 32;
-            let q1 = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i8 - 32;
+                let q1 = ((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) as i8 - 32;
+                let q2 = ((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) as i8 - 32;
+                let q3 = ((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) as i8 - 32;
+                let q4 = ((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) as i8 - 32;
 
-            output[i] = (q0 as f32) * d;
-            output[i + 128] = (q1 as f32) * d;
+                let sc0 = self.scales[sc_offset + is + 0] as f32;
+                let sc2 = self.scales[sc_offset + is + 2] as f32;
+                let sc4 = self.scales[sc_offset + is + 4] as f32;
+                let sc6 = self.scales[sc_offset + is + 6] as f32;
+
+                output[y_offset + l + 0] = d * sc0 * (q1 as f32);
+                output[y_offset + l + 32] = d * sc2 * (q2 as f32);
+                output[y_offset + l + 64] = d * sc4 * (q3 as f32);
+                output[y_offset + l + 96] = d * sc6 * (q4 as f32);
+            }
         }
     }
 }

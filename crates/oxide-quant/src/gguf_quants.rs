@@ -83,18 +83,54 @@ impl BlockQ4_K {
     pub fn dequantize(&self, output: &mut [f32; 256]) {
         let d = self.d.to_f32();
         let dmin = self.dmin.to_f32();
-        for i in 0..128 {
-            let byte = self.qs[i];
-            let q0 = (byte & 0x0F) as f32;
-            let q1 = ((byte >> 4) & 0x0F) as f32;
-            output[i] = q0 * d + dmin;
-            output[i + 128] = q1 * d + dmin;
+        let mut is = 0;
+        for chunk in 0..4 {
+            let (sc1, m1) = get_scale_min_k4(is + 0, &self.scales);
+            let d1 = d * sc1;
+            let min1 = dmin * m1;
+
+            let (sc2, m2) = get_scale_min_k4(is + 1, &self.scales);
+            let d2 = d * sc2;
+            let min2 = dmin * m2;
+
+            let q_base = chunk * 32;
+            let y_base = chunk * 64;
+
+            for l in 0..32 {
+                let byte = self.qs[q_base + l];
+                let q0 = (byte & 0x0F) as f32;
+                let q1 = (byte >> 4) as f32;
+
+                output[y_base + l] = d1 * q0 - min1;
+                output[y_base + l + 32] = d2 * q1 - min2;
+            }
+            is += 2;
         }
     }
 
     #[must_use]
     pub fn dot_product(&self, activations: &[f32; 256]) -> f32 {
-        crate::simd::dot_q4_k(&self.qs, activations, self.d.to_f32(), self.dmin.to_f32())
+        crate::simd::dot_q4_k(
+            &self.qs,
+            &self.scales,
+            activations,
+            self.d.to_f32(),
+            self.dmin.to_f32(),
+        )
+    }
+}
+
+/// Unpacks the 6-bit scale and 6-bit minimum from the 12-byte scales array in a Q4_K block.
+#[inline(always)]
+pub fn get_scale_min_k4(j: usize, scales: &[u8; 12]) -> (f32, f32) {
+    if j < 4 {
+        let sc = scales[j] & 63;
+        let m = scales[j + 4] & 63;
+        (sc as f32, m as f32)
+    } else {
+        let sc = (scales[j + 4] & 0x0F) | ((scales[j - 4] >> 6) << 4);
+        let m = (scales[j + 4] >> 4) | ((scales[j] >> 6) << 4);
+        (sc as f32, m as f32)
     }
 }
 

@@ -144,6 +144,7 @@ impl<'a> QuantizedResidentTensor<'a> {
                         if let Ok(act_chunk) = x[act_start..act_start + 256].try_into() {
                             row_sum += dot_q4_k(
                                 &block.qs,
+                                &block.scales,
                                 act_chunk,
                                 block.d.to_f32(),
                                 block.dmin.to_f32(),

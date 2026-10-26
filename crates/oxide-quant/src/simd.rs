@@ -519,54 +519,80 @@ unsafe fn dot_q4_0_avx2(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
 /// Compute dot product between a Q4_K super-block (128 bytes = 256 weights) and 256 f32 activations.
 #[inline]
 #[must_use]
-pub fn dot_q4_k(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
+pub fn dot_q4_k(
+    qs: &[u8; 128],
+    scales: &[u8; 12],
+    act: &[f32; 256],
+    d: f32,
+    dmin: f32,
+) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
-            // SAFETY: Verified AVX-512F and AVX-512BW support.
-            unsafe {
-                return dot_q4_k_avx512(qs, act, d, dmin);
-            }
-        }
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: Verified AVX2 and FMA support.
             unsafe {
-                return dot_q4_k_avx2(qs, act, d, dmin);
+                return dot_q4_k_avx2(qs, scales, act, d, dmin);
             }
         }
     }
 
-    dot_q4_k_portable(qs, act, d, dmin)
+    dot_q4_k_portable(qs, scales, act, d, dmin)
 }
 
 #[inline(always)]
-fn dot_q4_k_portable(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
-    let mut sum_q = 0.0f32;
-    let mut sum_act = 0.0f32;
+fn dot_q4_k_portable(
+    qs: &[u8; 128],
+    scales: &[u8; 12],
+    act: &[f32; 256],
+    d: f32,
+    dmin: f32,
+) -> f32 {
+    let mut sum = 0.0f32;
+    let mut is = 0;
+    for chunk in 0..4 {
+        let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is + 0, scales);
+        let d1 = d * sc1;
+        let min1 = dmin * m1;
 
-    // 8-way unrolled nibble unpack
-    for i in 0..16 {
-        let base = i * 8;
-        for j in 0..8 {
-            let byte = qs[base + j];
+        let (sc2, m2) = crate::gguf_quants::get_scale_min_k4(is + 1, scales);
+        let d2 = d * sc2;
+        let min2 = dmin * m2;
+
+        let q_base = chunk * 32;
+        let act_base = chunk * 64;
+
+        for l in 0..32 {
+            let byte = qs[q_base + l];
             let q0 = (byte & 0x0F) as f32;
-            let q1 = ((byte >> 4) & 0x0F) as f32;
+            let q1 = (byte >> 4) as f32;
 
-            let a0 = act[base + j];
-            let a1 = act[base + j + 128];
+            let w0 = d1 * q0 - min1;
+            let w1 = d2 * q1 - min2;
 
-            sum_q += q0 * a0 + q1 * a1;
-            sum_act += a0 + a1;
+            sum += w0 * act[act_base + l] + w1 * act[act_base + 32 + l];
         }
+        is += 2;
     }
-
-    sum_q * d + sum_act * dmin
+    sum
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
-#[allow(clippy::too_many_lines)]
-unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
+#[allow(dead_code)]
+unsafe fn dot_q4_k_avx512(
+    qs: &[u8; 128],
+    scales: &[u8; 12],
+    act: &[f32; 256],
+    d: f32,
+    dmin: f32,
+) -> f32 {
+    unsafe { dot_q4_k_avx2(qs, scales, act, d, dmin) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f", enable = "avx512bw")]
+#[allow(clippy::too_many_lines, dead_code)]
+unsafe fn dot_q4_k_avx512_legacy(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     use core::arch::x86_64::{
         _MM_HINT_T0, _mm_and_si128, _mm_loadu_si128, _mm_prefetch, _mm_set1_epi8, _mm_srli_epi16,
         _mm512_add_ps, _mm512_cvtepi8_epi32, _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps,
@@ -774,114 +800,119 @@ unsafe fn dot_q4_k_avx512(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
-unsafe fn dot_q4_k_avx2(qs: &[u8; 128], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
+unsafe fn dot_q4_k_avx2(
+    qs: &[u8; 128],
+    scales: &[u8; 12],
+    act: &[f32; 256],
+    d: f32,
+    dmin: f32,
+) -> f32 {
     use core::arch::x86_64::{
-        _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm_srli_si128,
-        _mm256_add_ps, _mm256_cvtepi8_epi32, _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_ps,
-        _mm256_setzero_ps, _mm256_storeu_ps,
+        _mm_and_si128, _mm_loadl_epi64, _mm_set1_epi8, _mm_srli_epi16,
+        _mm256_cvtepi32_ps, _mm256_cvtepu8_epi32, _mm256_fmadd_ps, _mm256_fmsub_ps,
+        _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
-    // SAFETY: Verified AVX2 and FMA support and valid slices.
     unsafe {
         let mask_0f = _mm_set1_epi8(0x0F);
-        let mut sum_q_vec = _mm256_setzero_ps();
-        let mut sum_act_vec = _mm256_setzero_ps();
+        let mut acc_vec = _mm256_setzero_ps();
+        let mut is = 0;
 
-        for i in 0..8 {
-            let base_byte = i * 16;
-            let base_act = i * 16;
+        for chunk in 0..4 {
+            let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is + 0, scales);
+            let d1_vec = _mm256_set1_ps(d * sc1);
+            let min1_vec = _mm256_set1_ps(dmin * m1);
 
-            let raw = _mm_loadu_si128(qs.as_ptr().add(base_byte).cast());
-            let lo_nibbles = _mm_and_si128(raw, mask_0f);
-            let hi_shifted = _mm_srli_epi16(raw, 4);
-            let hi_nibbles = _mm_and_si128(hi_shifted, mask_0f);
+            let (sc2, m2) = crate::gguf_quants::get_scale_min_k4(is + 1, scales);
+            let d2_vec = _mm256_set1_ps(d * sc2);
+            let min2_vec = _mm256_set1_ps(dmin * m2);
 
-            // lo_nibbles 0..8
-            let f32_q0_lo = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo_nibbles));
-            let act0_lo = _mm256_loadu_ps(act.as_ptr().add(base_act));
-            sum_q_vec = _mm256_fmadd_ps(f32_q0_lo, act0_lo, sum_q_vec);
-            sum_act_vec = _mm256_add_ps(sum_act_vec, act0_lo);
+            let q_base = chunk * 32;
+            let act_base = chunk * 64;
 
-            // lo_nibbles 8..16
-            let f32_q0_hi = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo_nibbles, 8)));
-            let act0_hi = _mm256_loadu_ps(act.as_ptr().add(base_act + 8));
-            sum_q_vec = _mm256_fmadd_ps(f32_q0_hi, act0_hi, sum_q_vec);
-            sum_act_vec = _mm256_add_ps(sum_act_vec, act0_hi);
+            for step in 0..4 {
+                let byte_offset = q_base + step * 8;
+                let raw_8 = _mm_loadl_epi64(qs.as_ptr().add(byte_offset).cast());
+                let lo = _mm_and_si128(raw_8, mask_0f);
+                let hi = _mm_and_si128(_mm_srli_epi16(raw_8, 4), mask_0f);
 
-            // hi_nibbles 0..8
-            let f32_q1_lo = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi_nibbles));
-            let act1_lo = _mm256_loadu_ps(act.as_ptr().add(base_act + 128));
-            sum_q_vec = _mm256_fmadd_ps(f32_q1_lo, act1_lo, sum_q_vec);
-            sum_act_vec = _mm256_add_ps(sum_act_vec, act1_lo);
+                let q0_f32 = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(lo));
+                let q1_f32 = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(hi));
 
-            // hi_nibbles 8..16
-            let f32_q1_hi = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi_nibbles, 8)));
-            let act1_hi = _mm256_loadu_ps(act.as_ptr().add(base_act + 128 + 8));
-            sum_q_vec = _mm256_fmadd_ps(f32_q1_hi, act1_hi, sum_q_vec);
-            sum_act_vec = _mm256_add_ps(sum_act_vec, act1_hi);
+                let act0 = _mm256_loadu_ps(act.as_ptr().add(act_base + step * 8));
+                let act1 = _mm256_loadu_ps(act.as_ptr().add(act_base + 32 + step * 8));
+
+                let w0 = _mm256_fmsub_ps(q0_f32, d1_vec, min1_vec);
+                let w1 = _mm256_fmsub_ps(q1_f32, d2_vec, min2_vec);
+
+                acc_vec = _mm256_fmadd_ps(w0, act0, acc_vec);
+                acc_vec = _mm256_fmadd_ps(w1, act1, acc_vec);
+            }
+            is += 2;
         }
 
-        let mut buf_q = [0.0f32; 8];
-        let mut buf_act = [0.0f32; 8];
-        _mm256_storeu_ps(buf_q.as_mut_ptr(), sum_q_vec);
-        _mm256_storeu_ps(buf_act.as_mut_ptr(), sum_act_vec);
-
-        let mut sum_q = 0.0f32;
-        let mut sum_act = 0.0f32;
-        for i in 0..8 {
-            sum_q += buf_q[i];
-            sum_act += buf_act[i];
-        }
-
-        sum_q * d + sum_act * dmin
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), acc_vec);
+        buf.iter().sum()
     }
 }
 
 /// Compute dot product between a Q6_K super-block (210 bytes = 256 weights) and 256 f32 activations.
 #[inline]
 #[must_use]
-pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
-            // SAFETY: Verified AVX-512F and AVX-512BW support.
-            unsafe {
-                return dot_q6_k_avx512(ql, qh, act, d);
-            }
-        }
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            // SAFETY: Verified AVX2 and FMA support.
-            unsafe {
-                return dot_q6_k_avx2(ql, qh, act, d);
-            }
-        }
-    }
-
-    dot_q6_k_portable(ql, qh, act, d)
+pub fn dot_q6_k(
+    ql: &[u8; 128],
+    qh: &[u8; 64],
+    scales: &[i8; 16],
+    act: &[f32; 256],
+    d: f32,
+) -> f32 {
+    dot_q6_k_portable(ql, qh, scales, act, d)
 }
 
 #[inline(always)]
-fn dot_q6_k_portable(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
+fn dot_q6_k_portable(
+    ql: &[u8; 128],
+    qh: &[u8; 64],
+    scales: &[i8; 16],
+    act: &[f32; 256],
+    d: f32,
+) -> f32 {
     let mut sum = 0.0f32;
-    for i in 0..128 {
-        let byte_l = ql[i];
-        let qh_idx = i / 2;
-        let shift = (i % 2) * 4;
-        let byte_h = (qh[qh_idx] >> shift) & 0x0F;
+    for half in 0..2 {
+        let ql_offset = half * 64;
+        let qh_offset = half * 32;
+        let sc_offset = half * 8;
+        let y_offset = half * 128;
 
-        let h0 = byte_h & 0x03;
-        let h1 = (byte_h >> 2) & 0x03;
+        for l in 0..32 {
+            let is = l / 16;
+            let qh_byte = qh[qh_offset + l];
+            let ql0 = ql[ql_offset + l];
+            let ql32 = ql[ql_offset + l + 32];
 
-        let q0 = ((h0 << 4) | (byte_l & 0x0F)) as i8 - 32;
-        let q1 = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i8 - 32;
+            let q1 = ((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) as i8 - 32;
+            let q2 = ((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) as i8 - 32;
+            let q3 = ((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) as i8 - 32;
+            let q4 = ((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) as i8 - 32;
 
-        sum += (q0 as f32) * act[i] + (q1 as f32) * act[i + 128];
+            let sc0 = scales[sc_offset + is + 0] as f32;
+            let sc2 = scales[sc_offset + is + 2] as f32;
+            let sc4 = scales[sc_offset + is + 4] as f32;
+            let sc6 = scales[sc_offset + is + 6] as f32;
+
+            sum += sc0 * (q1 as f32) * act[y_offset + l + 0]
+                + sc2 * (q2 as f32) * act[y_offset + l + 32]
+                + sc4 * (q3 as f32) * act[y_offset + l + 64]
+                + sc6 * (q4 as f32) * act[y_offset + l + 96];
+        }
     }
     sum * d
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
+#[allow(dead_code)]
 unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
     use core::arch::x86_64::{
         _mm512_cvtepi32_ps, _mm512_fmadd_ps, _mm512_loadu_ps, _mm512_loadu_si512,
@@ -939,6 +970,7 @@ unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f3
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
+#[allow(dead_code)]
 unsafe fn dot_q6_k_avx2(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
     use core::arch::x86_64::{
         _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256,
@@ -1018,7 +1050,7 @@ pub fn gemv_q6_k(
                 let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
                     .try_into()
                     .expect("slice length 256");
-                acc += dot_q6_k(&blk.ql, &blk.qh, act_chunk, blk.d.to_f32());
+                acc += dot_q6_k(&blk.ql, &blk.qh, &blk.scales, act_chunk, blk.d.to_f32());
             }
             output[row] = acc;
         }
@@ -1038,7 +1070,7 @@ pub fn gemv_q6_k(
                         let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
                             .try_into()
                             .expect("slice length 256");
-                        acc += dot_q6_k(&blk.ql, &blk.qh, act_chunk, blk.d.to_f32());
+                        acc += dot_q6_k(&blk.ql, &blk.qh, &blk.scales, act_chunk, blk.d.to_f32());
                     }
                     *out_val = acc;
                 }
@@ -1358,11 +1390,6 @@ pub fn gemv_q4_k(
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
-    #[cfg(target_arch = "x86_64")]
-    let use_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw");
-    #[cfg(target_arch = "x86_64")]
-    let use_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
-
     let compute_row = |row: usize| -> f32 {
         let row_offset = row * blocks_per_row;
         let mut acc = 0.0f32;
@@ -1371,20 +1398,7 @@ pub fn gemv_q4_k(
             let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
                 .try_into()
                 .expect("slice length 256");
-            #[cfg(target_arch = "x86_64")]
-            if use_avx512 {
-                // SAFETY: Target feature AVX-512 has been checked via is_x86_feature_detected!.
-                acc += unsafe {
-                    dot_q4_k_avx512(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32())
-                };
-                continue;
-            } else if use_avx2 {
-                // SAFETY: Target feature AVX2 has been checked via is_x86_feature_detected!.
-                acc +=
-                    unsafe { dot_q4_k_avx2(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32()) };
-                continue;
-            }
-            acc += dot_q4_k_portable(&blk.qs, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
+            acc += dot_q4_k(&blk.qs, &blk.scales, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
         }
         acc
     };
@@ -1445,91 +1459,10 @@ pub fn gemv_q4_k(
                         let blk2 = &matrix[off2 + b];
                         let blk3 = &matrix[off3 + b];
 
-                        #[cfg(target_arch = "x86_64")]
-                        if use_avx512 {
-                            // SAFETY: Target features avx512f and avx512bw checked dynamically via is_x86_feature_detected!.
-                            unsafe {
-                                acc0 += dot_q4_k_avx512(
-                                    &blk0.qs,
-                                    act_chunk,
-                                    blk0.d.to_f32(),
-                                    blk0.dmin.to_f32(),
-                                );
-                                acc1 += dot_q4_k_avx512(
-                                    &blk1.qs,
-                                    act_chunk,
-                                    blk1.d.to_f32(),
-                                    blk1.dmin.to_f32(),
-                                );
-                                acc2 += dot_q4_k_avx512(
-                                    &blk2.qs,
-                                    act_chunk,
-                                    blk2.d.to_f32(),
-                                    blk2.dmin.to_f32(),
-                                );
-                                acc3 += dot_q4_k_avx512(
-                                    &blk3.qs,
-                                    act_chunk,
-                                    blk3.d.to_f32(),
-                                    blk3.dmin.to_f32(),
-                                );
-                            }
-                            continue;
-                        } else if use_avx2 {
-                            // SAFETY: Target features avx2 and fma checked dynamically via is_x86_feature_detected!.
-                            unsafe {
-                                acc0 += dot_q4_k_avx2(
-                                    &blk0.qs,
-                                    act_chunk,
-                                    blk0.d.to_f32(),
-                                    blk0.dmin.to_f32(),
-                                );
-                                acc1 += dot_q4_k_avx2(
-                                    &blk1.qs,
-                                    act_chunk,
-                                    blk1.d.to_f32(),
-                                    blk1.dmin.to_f32(),
-                                );
-                                acc2 += dot_q4_k_avx2(
-                                    &blk2.qs,
-                                    act_chunk,
-                                    blk2.d.to_f32(),
-                                    blk2.dmin.to_f32(),
-                                );
-                                acc3 += dot_q4_k_avx2(
-                                    &blk3.qs,
-                                    act_chunk,
-                                    blk3.d.to_f32(),
-                                    blk3.dmin.to_f32(),
-                                );
-                            }
-                            continue;
-                        }
-
-                        acc0 += dot_q4_k_portable(
-                            &blk0.qs,
-                            act_chunk,
-                            blk0.d.to_f32(),
-                            blk0.dmin.to_f32(),
-                        );
-                        acc1 += dot_q4_k_portable(
-                            &blk1.qs,
-                            act_chunk,
-                            blk1.d.to_f32(),
-                            blk1.dmin.to_f32(),
-                        );
-                        acc2 += dot_q4_k_portable(
-                            &blk2.qs,
-                            act_chunk,
-                            blk2.d.to_f32(),
-                            blk2.dmin.to_f32(),
-                        );
-                        acc3 += dot_q4_k_portable(
-                            &blk3.qs,
-                            act_chunk,
-                            blk3.d.to_f32(),
-                            blk3.dmin.to_f32(),
-                        );
+                        acc0 += dot_q4_k(&blk0.qs, &blk0.scales, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
+                        acc1 += dot_q4_k(&blk1.qs, &blk1.scales, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
+                        acc2 += dot_q4_k(&blk2.qs, &blk2.scales, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
+                        acc3 += dot_q4_k(&blk3.qs, &blk3.scales, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
                     }
 
                     out_chunk[i] = acc0;
@@ -1835,15 +1768,19 @@ mod tests {
     #[test]
     fn test_dot_q4_k_parity() {
         let mut qs = [0u8; 128];
+        let mut scales = [1u8; 12];
         let mut act = [0.0f32; 256];
         for i in 0..128 {
             qs[i] = ((i * 11) % 256) as u8;
         }
+        for i in 0..12 {
+            scales[i] = ((i * 7) % 64) as u8;
+        }
         for i in 0..256 {
             act[i] = (i as f32 * 0.05).sin();
         }
-        let expected = dot_q4_k_portable(&qs, &act, 0.02, -0.5);
-        let computed = dot_q4_k(&qs, &act, 0.02, -0.5);
+        let expected = dot_q4_k_portable(&qs, &scales, &act, 0.02, -0.5);
+        let computed = dot_q4_k(&qs, &scales, &act, 0.02, -0.5);
         assert!((expected - computed).abs() < 1e-4);
     }
 
@@ -1961,6 +1898,7 @@ mod tests {
     fn test_dot_q6_k_parity() {
         let mut ql = [0u8; 128];
         let mut qh = [0u8; 64];
+        let mut scales = [1i8; 16];
         let mut act = [0.0f32; 256];
         for i in 0..128 {
             ql[i] = ((i * 17) % 256) as u8;
@@ -1968,11 +1906,14 @@ mod tests {
         for i in 0..64 {
             qh[i] = ((i * 31) % 256) as u8;
         }
+        for i in 0..16 {
+            scales[i] = ((i as i8 * 3) % 30) - 15;
+        }
         for i in 0..256 {
             act[i] = (i as f32 * 0.03).cos();
         }
-        let expected = dot_q6_k_portable(&ql, &qh, &act, 0.05);
-        let computed = dot_q6_k(&ql, &qh, &act, 0.05);
+        let expected = dot_q6_k_portable(&ql, &qh, &scales, &act, 0.05);
+        let computed = dot_q6_k(&ql, &qh, &scales, &act, 0.05);
         assert!((expected - computed).abs() < 1e-4);
     }
 
