@@ -335,6 +335,21 @@ pub enum QuantizedTensor {
         m: usize,
         n: usize,
     },
+    Q3_K {
+        blocks: std::borrow::Cow<'static, [oxide_quant::BlockQ3_K]>,
+        m: usize,
+        n: usize,
+    },
+    Q2_K {
+        blocks: std::borrow::Cow<'static, [oxide_quant::BlockQ2_K]>,
+        m: usize,
+        n: usize,
+    },
+    Q5_K {
+        blocks: std::borrow::Cow<'static, [oxide_quant::BlockQ5_K]>,
+        m: usize,
+        n: usize,
+    },
 }
 
 impl QuantizedTensor {
@@ -406,13 +421,43 @@ impl QuantizedTensor {
     }
 
     #[must_use]
+    pub fn from_q3_k_slice(blocks: &'static [oxide_quant::BlockQ3_K], m: usize, n: usize) -> Self {
+        Self::Q3_K {
+            blocks: std::borrow::Cow::Borrowed(blocks),
+            m,
+            n,
+        }
+    }
+
+    #[must_use]
+    pub fn from_q2_k_slice(blocks: &'static [oxide_quant::BlockQ2_K], m: usize, n: usize) -> Self {
+        Self::Q2_K {
+            blocks: std::borrow::Cow::Borrowed(blocks),
+            m,
+            n,
+        }
+    }
+
+    #[must_use]
+    pub fn from_q5_k_slice(blocks: &'static [oxide_quant::BlockQ5_K], m: usize, n: usize) -> Self {
+        Self::Q5_K {
+            blocks: std::borrow::Cow::Borrowed(blocks),
+            m,
+            n,
+        }
+    }
+
+    #[must_use]
     pub fn rows(&self) -> usize {
         match self {
             Self::F32 { m, .. }
             | Self::Q4_K { m, .. }
             | Self::Q6_K { m, .. }
             | Self::Q8_0 { m, .. }
-            | Self::PTQ1_0 { m, .. } => *m,
+            | Self::PTQ1_0 { m, .. }
+            | Self::Q3_K { m, .. }
+            | Self::Q2_K { m, .. }
+            | Self::Q5_K { m, .. } => *m,
         }
     }
 
@@ -423,7 +468,10 @@ impl QuantizedTensor {
             | Self::Q4_K { n, .. }
             | Self::Q6_K { n, .. }
             | Self::Q8_0 { n, .. }
-            | Self::PTQ1_0 { n, .. } => *n,
+            | Self::PTQ1_0 { n, .. }
+            | Self::Q3_K { n, .. }
+            | Self::Q2_K { n, .. }
+            | Self::Q5_K { n, .. } => *n,
         }
     }
 
@@ -548,6 +596,78 @@ impl QuantizedTensor {
                     None
                 }
             }
+            Self::Q3_K { blocks, .. } => {
+                if !n.is_multiple_of(256) {
+                    return None;
+                }
+                let bpr = n / 256;
+                let start_b = start_row * bpr;
+                let end_b = start_b + num_rows * bpr;
+                if end_b <= blocks.len() {
+                    match blocks {
+                        std::borrow::Cow::Borrowed(s) => Some(Self::Q3_K {
+                            blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
+                            m: num_rows,
+                            n,
+                        }),
+                        std::borrow::Cow::Owned(v) => Some(Self::Q3_K {
+                            blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
+                            m: num_rows,
+                            n,
+                        }),
+                    }
+                } else {
+                    None
+                }
+            }
+            Self::Q2_K { blocks, .. } => {
+                if !n.is_multiple_of(256) {
+                    return None;
+                }
+                let bpr = n / 256;
+                let start_b = start_row * bpr;
+                let end_b = start_b + num_rows * bpr;
+                if end_b <= blocks.len() {
+                    match blocks {
+                        std::borrow::Cow::Borrowed(s) => Some(Self::Q2_K {
+                            blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
+                            m: num_rows,
+                            n,
+                        }),
+                        std::borrow::Cow::Owned(v) => Some(Self::Q2_K {
+                            blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
+                            m: num_rows,
+                            n,
+                        }),
+                    }
+                } else {
+                    None
+                }
+            }
+            Self::Q5_K { blocks, .. } => {
+                if !n.is_multiple_of(256) {
+                    return None;
+                }
+                let bpr = n / 256;
+                let start_b = start_row * bpr;
+                let end_b = start_b + num_rows * bpr;
+                if end_b <= blocks.len() {
+                    match blocks {
+                        std::borrow::Cow::Borrowed(s) => Some(Self::Q5_K {
+                            blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
+                            m: num_rows,
+                            n,
+                        }),
+                        std::borrow::Cow::Owned(v) => Some(Self::Q5_K {
+                            blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
+                            m: num_rows,
+                            n,
+                        }),
+                    }
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -606,6 +726,39 @@ impl QuantizedTensor {
                     }
                 }
             }
+            Self::Q3_K { blocks, n, .. } => {
+                let blocks_per_row = *n / 256;
+                let start_block = row_idx * blocks_per_row;
+                if start_block + blocks_per_row <= blocks.len() && out.len() >= *n {
+                    let mut chunk = [0.0f32; 256];
+                    for b in 0..blocks_per_row {
+                        blocks[start_block + b].dequantize(&mut chunk);
+                        out[b * 256..(b + 1) * 256].copy_from_slice(&chunk);
+                    }
+                }
+            }
+            Self::Q2_K { blocks, n, .. } => {
+                let blocks_per_row = *n / 256;
+                let start_block = row_idx * blocks_per_row;
+                if start_block + blocks_per_row <= blocks.len() && out.len() >= *n {
+                    let mut chunk = [0.0f32; 256];
+                    for b in 0..blocks_per_row {
+                        blocks[start_block + b].dequantize(&mut chunk);
+                        out[b * 256..(b + 1) * 256].copy_from_slice(&chunk);
+                    }
+                }
+            }
+            Self::Q5_K { blocks, n, .. } => {
+                let blocks_per_row = *n / 256;
+                let start_block = row_idx * blocks_per_row;
+                if start_block + blocks_per_row <= blocks.len() && out.len() >= *n {
+                    let mut chunk = [0.0f32; 256];
+                    for b in 0..blocks_per_row {
+                        blocks[start_block + b].dequantize(&mut chunk);
+                        out[b * 256..(b + 1) * 256].copy_from_slice(&chunk);
+                    }
+                }
+            }
         }
     }
 
@@ -655,6 +808,48 @@ impl QuantizedTensor {
                     *n
                 );
                 oxide_quant::simd::gemv_ptq1_0(blocks.as_ref(), vector, *m, *n, output);
+            }
+            Self::Q3_K { blocks, m, n } => {
+                let mut chunk = [0.0f32; 256];
+                let bpr = *n / 256;
+                for r in 0..*m {
+                    let mut sum = 0.0f32;
+                    for b in 0..bpr {
+                        blocks[r * bpr + b].dequantize(&mut chunk);
+                        for i in 0..256 {
+                            sum += chunk[i] * vector[b * 256 + i];
+                        }
+                    }
+                    output[r] = sum;
+                }
+            }
+            Self::Q2_K { blocks, m, n } => {
+                let mut chunk = [0.0f32; 256];
+                let bpr = *n / 256;
+                for r in 0..*m {
+                    let mut sum = 0.0f32;
+                    for b in 0..bpr {
+                        blocks[r * bpr + b].dequantize(&mut chunk);
+                        for i in 0..256 {
+                            sum += chunk[i] * vector[b * 256 + i];
+                        }
+                    }
+                    output[r] = sum;
+                }
+            }
+            Self::Q5_K { blocks, m, n } => {
+                let mut chunk = [0.0f32; 256];
+                let bpr = *n / 256;
+                for r in 0..*m {
+                    let mut sum = 0.0f32;
+                    for b in 0..bpr {
+                        blocks[r * bpr + b].dequantize(&mut chunk);
+                        for i in 0..256 {
+                            sum += chunk[i] * vector[b * 256 + i];
+                        }
+                    }
+                    output[r] = sum;
+                }
             }
         }
     }
@@ -734,6 +929,33 @@ impl QuantizedTensor {
                     )
                 }
             }
+            Self::Q3_K { blocks, .. } => {
+                // SAFETY: BlockQ3_K slice trivially reinterprets as u8 slice without alignment fault.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        blocks.as_ptr().cast::<u8>(),
+                        blocks.len() * std::mem::size_of::<oxide_quant::BlockQ3_K>(),
+                    )
+                }
+            }
+            Self::Q2_K { blocks, .. } => {
+                // SAFETY: BlockQ2_K slice trivially reinterprets as u8 slice without alignment fault.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        blocks.as_ptr().cast::<u8>(),
+                        blocks.len() * std::mem::size_of::<oxide_quant::BlockQ2_K>(),
+                    )
+                }
+            }
+            Self::Q5_K { blocks, .. } => {
+                // SAFETY: BlockQ5_K slice trivially reinterprets as u8 slice without alignment fault.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        blocks.as_ptr().cast::<u8>(),
+                        blocks.len() * std::mem::size_of::<oxide_quant::BlockQ5_K>(),
+                    )
+                }
+            }
         }
     }
 
@@ -745,6 +967,9 @@ impl QuantizedTensor {
             Self::Q6_K { .. } => 2,
             Self::Q8_0 { .. } => 3,
             Self::PTQ1_0 { .. } => 4,
+            Self::Q3_K { .. } => 5,
+            Self::Q2_K { .. } => 6,
+            Self::Q5_K { .. } => 7,
         }
     }
 }
@@ -1425,6 +1650,133 @@ impl Llama3Model {
                             });
                         }
                         Some(QuantizedTensor::PTQ1_0 {
+                            blocks: std::borrow::Cow::Owned(blocks),
+                            m,
+                            n,
+                        })
+                    }
+                } else {
+                    None
+                }
+            }
+            crate::formats::GgufQuantType::Q3_K => {
+                let block_size = 110; // 32 (hmask) + 64 (qs) + 12 (scales) + 2 (d) = 110 bytes
+                let num_blocks = (m * n) / 256;
+                let needed_bytes = num_blocks * block_size;
+                if avail.len() >= needed_bytes {
+                    let ptr = avail.as_ptr();
+                    if (ptr as usize).is_multiple_of(std::mem::align_of::<oxide_quant::BlockQ3_K>()) {
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                ptr.cast::<oxide_quant::BlockQ3_K>(),
+                                num_blocks,
+                            )
+                        };
+                        Some(QuantizedTensor::from_q3_k_slice(blocks, m, n))
+                    } else {
+                        let mut blocks = Vec::with_capacity(num_blocks);
+                        for b_idx in 0..num_blocks {
+                            let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                            let mut hmask = [0u8; 32];
+                            hmask.copy_from_slice(&block_raw[0..32]);
+                            let mut qs = [0u8; 64];
+                            qs.copy_from_slice(&block_raw[32..96]);
+                            let mut scales = [0u8; 12];
+                            scales.copy_from_slice(&block_raw[96..108]);
+                            let d_raw = u16::from_le_bytes([block_raw[108], block_raw[109]]);
+                            blocks.push(oxide_quant::BlockQ3_K {
+                                hmask,
+                                qs,
+                                scales,
+                                d: oxide_quant::f16(d_raw),
+                            });
+                        }
+                        Some(QuantizedTensor::Q3_K {
+                            blocks: std::borrow::Cow::Owned(blocks),
+                            m,
+                            n,
+                        })
+                    }
+                } else {
+                    None
+                }
+            }
+            crate::formats::GgufQuantType::Q2_K => {
+                let block_size = 84; // 16 (scales) + 64 (qs) + 2 (d) + 2 (dmin) = 84 bytes
+                let num_blocks = (m * n) / 256;
+                let needed_bytes = num_blocks * block_size;
+                if avail.len() >= needed_bytes {
+                    let ptr = avail.as_ptr();
+                    if (ptr as usize).is_multiple_of(std::mem::align_of::<oxide_quant::BlockQ2_K>()) {
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                ptr.cast::<oxide_quant::BlockQ2_K>(),
+                                num_blocks,
+                            )
+                        };
+                        Some(QuantizedTensor::from_q2_k_slice(blocks, m, n))
+                    } else {
+                        let mut blocks = Vec::with_capacity(num_blocks);
+                        for b_idx in 0..num_blocks {
+                            let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                            let mut scales = [0u8; 16];
+                            scales.copy_from_slice(&block_raw[0..16]);
+                            let mut qs = [0u8; 64];
+                            qs.copy_from_slice(&block_raw[16..80]);
+                            let d_raw = u16::from_le_bytes([block_raw[80], block_raw[81]]);
+                            let dmin_raw = u16::from_le_bytes([block_raw[82], block_raw[83]]);
+                            blocks.push(oxide_quant::BlockQ2_K {
+                                scales,
+                                qs,
+                                d: oxide_quant::f16(d_raw),
+                                dmin: oxide_quant::f16(dmin_raw),
+                            });
+                        }
+                        Some(QuantizedTensor::Q2_K {
+                            blocks: std::borrow::Cow::Owned(blocks),
+                            m,
+                            n,
+                        })
+                    }
+                } else {
+                    None
+                }
+            }
+            crate::formats::GgufQuantType::Q5_K_M => {
+                let block_size = 176; // 2 (d) + 2 (dmin) + 12 (scales) + 32 (qh) + 128 (qs) = 176 bytes
+                let num_blocks = (m * n) / 256;
+                let needed_bytes = num_blocks * block_size;
+                if avail.len() >= needed_bytes {
+                    let ptr = avail.as_ptr();
+                    if (ptr as usize).is_multiple_of(std::mem::align_of::<oxide_quant::BlockQ5_K>()) {
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                ptr.cast::<oxide_quant::BlockQ5_K>(),
+                                num_blocks,
+                            )
+                        };
+                        Some(QuantizedTensor::from_q5_k_slice(blocks, m, n))
+                    } else {
+                        let mut blocks = Vec::with_capacity(num_blocks);
+                        for b_idx in 0..num_blocks {
+                            let block_raw = &avail[b_idx * block_size..(b_idx + 1) * block_size];
+                            let d_raw = u16::from_le_bytes([block_raw[0], block_raw[1]]);
+                            let dmin_raw = u16::from_le_bytes([block_raw[2], block_raw[3]]);
+                            let mut scales = [0u8; 12];
+                            scales.copy_from_slice(&block_raw[4..16]);
+                            let mut qh = [0u8; 32];
+                            qh.copy_from_slice(&block_raw[16..48]);
+                            let mut qs = [0u8; 128];
+                            qs.copy_from_slice(&block_raw[48..176]);
+                            blocks.push(oxide_quant::BlockQ5_K {
+                                d: oxide_quant::f16(d_raw),
+                                dmin: oxide_quant::f16(dmin_raw),
+                                scales,
+                                qh,
+                                qs,
+                            });
+                        }
+                        Some(QuantizedTensor::Q5_K {
                             blocks: std::borrow::Cow::Owned(blocks),
                             m,
                             n,

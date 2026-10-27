@@ -141,6 +141,7 @@ pub struct CudaBackend {
     pub final_logit_softcapping: Option<f32>,
     pub sampler: oxide_core::sampler::AcademicSamplerEngine,
     pub sampler_state: oxide_core::sampler::SamplerState,
+    pub kv_capacity: usize,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -234,6 +235,7 @@ impl CudaBackend {
                 sampling_config.dry_multiplier = 0.8;
                 oxide_core::sampler::SamplerState::from_config(&sampling_config)
             },
+            kv_capacity: 512,
         }
     }
 
@@ -595,8 +597,9 @@ impl CudaBackend {
             None
         };
 
+        let kv_cap = self.kv_capacity.max(64);
         let kv_bytes =
-            2048 * self.num_kv_heads.max(1) * self.head_dim.max(64) * std::mem::size_of::<f32>();
+            kv_cap * self.num_kv_heads.max(1) * self.head_dim.max(64) * std::mem::size_of::<f32>();
         let mut kv_k_buf =
             CudaDeviceBuffer::allocate(kv_bytes.max(1024)).map_err(EngineError::BackendError)?;
         kv_k_buf
@@ -819,9 +822,10 @@ impl HardwareBackend for CudaBackend {
                         }
 
                         // KV Cache update: copy current token's K and V into KV cache ring buffer at `pos`
+                        let kv_cap = self.kv_capacity.max(64);
                         let kv_dim = self.num_kv_heads * self.head_dim;
                         let kv_bytes = kv_dim * std::mem::size_of::<f32>();
-                        let kv_offset = (pos % 2048) * kv_bytes;
+                        let kv_offset = (pos % kv_cap) * kv_bytes;
                         if let (Some(d_k), Some(d_v)) = (&self.d_scratch_k, &self.d_scratch_v) {
                             if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
                                 let k_dst = unsafe {
@@ -868,7 +872,7 @@ impl HardwareBackend for CudaBackend {
                                         self.num_heads as i32,
                                         self.num_kv_heads as i32,
                                         self.head_dim as i32,
-                                        (pos + 1).min(2048) as i32,
+                                        (pos + 1).min(kv_cap) as i32,
                                         sm_scale,
                                         s,
                                     );

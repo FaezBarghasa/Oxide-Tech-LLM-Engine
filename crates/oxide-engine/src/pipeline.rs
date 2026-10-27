@@ -414,13 +414,7 @@ impl SpecializedPipeline {
             match norm_backend.as_str() {
                 "cuda" => {
                     let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
-                    // SAFETY: Reinterprets f32 embedding slice as raw bytes for GPU upload without alignment hazard.
-                    let token_embd_bytes = unsafe {
-                        std::slice::from_raw_parts(
-                            model.token_embedding.as_ptr().cast::<u8>(),
-                            model.token_embedding.len() * std::mem::size_of::<f32>(),
-                        )
-                    };
+                    // Host-side embedding lookup via mmap avoids allocating gigabytes of VRAM for token_embd.
                     backend.configure_model(
                         model.config.hidden_dim,
                         model.config.vocab_size,
@@ -429,7 +423,7 @@ impl SpecializedPipeline {
                         model.config.head_dim,
                         &model.output_norm,
                         model.lm_head.as_raw_bytes(),
-                        token_embd_bytes,
+                        &[],
                         model.lm_head.quant_type(),
                     )?;
                     let theta = f32::from_bits(model.config.rope_theta);
@@ -627,13 +621,6 @@ impl SpecializedPipeline {
         match backend_name.to_ascii_lowercase().as_str() {
             "cuda" => {
                 let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
-                // SAFETY: Reinterprets f32 embedding slice as raw bytes for GPU upload without alignment hazard.
-                let token_embd_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        model.token_embedding.as_ptr().cast::<u8>(),
-                        model.token_embedding.len() * std::mem::size_of::<f32>(),
-                    )
-                };
                 let _ = backend.configure_model(
                     model.config.hidden_dim,
                     model.config.vocab_size,
@@ -642,7 +629,7 @@ impl SpecializedPipeline {
                     model.config.head_dim,
                     &model.output_norm,
                     model.lm_head.as_raw_bytes(),
-                    token_embd_bytes,
+                    &[],
                     model.lm_head.quant_type(),
                 );
                 if let Some(mmap) = model.mmap_handle.clone() {
