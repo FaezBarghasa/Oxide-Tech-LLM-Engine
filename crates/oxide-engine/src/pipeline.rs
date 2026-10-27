@@ -208,6 +208,13 @@ impl SpecializedPipeline {
                     }
                 }
 
+                if model.config.is_gemma {
+                    let scale = (h as f32).sqrt();
+                    for x in &mut scratch.hidden[..h] {
+                        *x *= scale;
+                    }
+                }
+
                 // 2. Collaborative execution across topology partitions (CPU AVX2 threads + iGPU CUs)
                 for partition in &topology.partitions {
                     model.forward_layers(
@@ -235,6 +242,14 @@ impl SpecializedPipeline {
 
                 // 4. LM Head projection via multithreaded SIMD matrix-vector multiplication
                 model.lm_head.gemv(&scratch.final_norm, &mut scratch.logits);
+
+                if let Some(cap) = model.config.final_logit_softcapping_f32() {
+                    if cap > 0.0 {
+                        for l in &mut scratch.logits {
+                            *l = cap * (*l / cap).tanh();
+                        }
+                    }
+                }
 
                 *pos += 1;
                 let mut max_idx = 0;

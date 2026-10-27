@@ -133,8 +133,9 @@ fn test_real_gguf_models_in_home_dir() {
                     .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
                     .collect::<Vec<_>>();
                 let mut scratch = model.create_scratch();
-                let prompt_tokens = tok.encode("What is 2 + 2?");
-                println!("Prompt tokens: {:?}", prompt_tokens);
+                let chat_prompt = "<bos><|turn>system\n<|think|><turn|>\n<|turn>user\nWhat is 2 + 2? Answer concisely.<turn|>\n<|turn>model\n";
+                let prompt_tokens = tok.encode(chat_prompt);
+                println!("Full chat prompt tokens (len={}): {:?}", prompt_tokens.len(), prompt_tokens);
                 for (pos, &t) in prompt_tokens.iter().enumerate() {
                     model.forward_step_with_scratch(t, pos, &mut kv_cache, &mut scratch).expect("forward_step");
                     let norm = oxide_quant::simd::dot_f32(&scratch.hidden, &scratch.hidden).sqrt();
@@ -142,10 +143,14 @@ fn test_real_gguf_models_in_home_dir() {
                 }
                 let mut indexed_logits: Vec<_> = scratch.logits.iter().copied().enumerate().collect();
                 indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                println!("Top 5 logits after prompt:");
-                for (rank, (idx, val)) in indexed_logits.iter().take(5).enumerate() {
+                println!("Top 10 logits after prompt:");
+                for (rank, (idx, val)) in indexed_logits.iter().take(10).enumerate() {
                     let text = tok.decode_token(*idx as u32);
                     println!("  #{rank}: token {idx} ('{text}') = {val:.4}");
+                }
+                if let Some(pos) = indexed_logits.iter().position(|&(idx, _)| idx == 236812) {
+                    let val = indexed_logits[pos].1;
+                    println!("Token 236812 ('4') rank = #{pos}, logit = {val:.4}");
                 }
             }
         } else {
