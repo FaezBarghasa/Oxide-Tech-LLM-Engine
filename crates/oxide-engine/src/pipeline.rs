@@ -364,6 +364,22 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Configures sampling parameters (temperature, top_p, top_k, seed, greedy) on the underlying backend.
+    pub fn configure_sampling(&mut self, temp: f32, top_p: f32, top_k: usize, seed: u64, greedy: bool) {
+        match self {
+            Self::Llama3Cuda(engine) => {
+                engine.backend.configure_sampling(temp, top_p, top_k, seed, greedy);
+            }
+            Self::Needle3Cuda(engine) => {
+                engine.backend.configure_sampling(temp, top_p, top_k, seed, greedy);
+            }
+            Self::Bonsai2Cuda(engine) => {
+                engine.backend.configure_sampling(temp, top_p, top_k, seed, greedy);
+            }
+            _ => {}
+        }
+    }
+
     /// Explicitly purges KV cache layers and sequence position tracking for a completed sequence.
     pub fn evict_sequence(&mut self, sequence_id: u64) {
         match self {
@@ -498,6 +514,9 @@ impl SpecializedPipeline {
                             layer.k_proj.cols(),
                             layer.gate_proj.rows(),
                             layer.gate_proj.cols(),
+                            layer.o_proj.rows(),
+                            layer.o_proj.cols(),
+                            layer.layer_output_scale,
                             [
                                 layer.q_proj.quant_type(),
                                 layer.k_proj.quant_type(),
@@ -702,6 +721,9 @@ impl SpecializedPipeline {
                         layer.k_proj.cols(),
                         layer.gate_proj.rows(),
                         layer.gate_proj.cols(),
+                        layer.o_proj.rows(),
+                        layer.o_proj.cols(),
+                        layer.layer_output_scale,
                         [
                             layer.q_proj.quant_type(),
                             layer.k_proj.quant_type(),

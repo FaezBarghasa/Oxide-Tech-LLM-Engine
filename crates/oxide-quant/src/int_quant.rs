@@ -230,7 +230,7 @@ impl BlockQ4_3 {
 // ============================================================================
 
 /// Q5_0: 32 weights per block. 1x FP16 scale + 4 bytes high bits + 16 bytes low bits = 22 bytes.
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ5_0 {
     pub scale: f16,

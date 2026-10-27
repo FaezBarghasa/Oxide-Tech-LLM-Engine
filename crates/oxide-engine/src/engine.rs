@@ -6,8 +6,8 @@ use std::marker::PhantomData;
 
 /// Monomorphized execution engine generic over hardware backend B, model config M, and quant scheme Q.
 pub struct OxideEngine<B: HardwareBackend, M: ModelConfig, Q: QuantScheme> {
-    backend: B,
-    config: M,
+    pub backend: B,
+    pub config: M,
     _quant_marker: PhantomData<Q>,
 }
 

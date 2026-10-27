@@ -418,7 +418,7 @@ impl QuantScheme for BlockTQ1_0 {
 }
 
 /// TQ2_0: Ternary quantization 2-bit variant (~2.06 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockTQ2_0 {
     pub d: f16,
@@ -430,6 +430,24 @@ impl Default for BlockTQ2_0 {
         Self {
             d: f16::from_f32(0.0),
             qs: [0u8; 64],
+        }
+    }
+}
+
+impl BlockTQ2_0 {
+    pub fn dequantize(&self, output: &mut [f32; 256]) {
+        let d = self.d.to_f32();
+        for i in 0..64 {
+            let byte = self.qs[i];
+            let q0 = ((byte & 3) as i8 - 1) as f32;
+            let q1 = (((byte >> 2) & 3) as i8 - 1) as f32;
+            let q2 = (((byte >> 4) & 3) as i8 - 1) as f32;
+            let q3 = (((byte >> 6) & 3) as i8 - 1) as f32;
+
+            output[i] = q0 * d;
+            output[i + 64] = q1 * d;
+            output[i + 128] = q2 * d;
+            output[i + 192] = q3 * d;
         }
     }
 }

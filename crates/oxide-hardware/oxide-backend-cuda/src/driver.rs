@@ -84,9 +84,26 @@ unsafe extern "C" {
 
     pub fn launch_cuda_gemv_q4_0(
         y: *mut f32,
-        weight_bytes: *const u8,
+        raw_blocks: *const std::ffi::c_void,
         x: *const f32,
-        scales: *const u16,
+        m: i32,
+        k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_gemv_q5_0(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const f32,
+        m: i32,
+        k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_gemv_tq2_0(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const f32,
         m: i32,
         k: i32,
         stream: cudaStream_t,
@@ -156,6 +173,7 @@ unsafe extern "C" {
     ) -> i32;
 
     pub fn launch_cuda_vector_add(a: *mut f32, b: *const f32, n: i32, stream: cudaStream_t) -> i32;
+    pub fn launch_cuda_vector_scale(x: *mut f32, scale: f32, n: i32, stream: cudaStream_t) -> i32;
 
     pub fn launch_cuda_swiglu(
         out: *mut f32,
@@ -250,7 +268,7 @@ impl CudaDeviceBuffer {
         // SAFETY: Calling cudaMalloc with valid pointer and size.
         let status = unsafe { cudaMalloc(&raw mut d_ptr, size_bytes) };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaMalloc failed with status code {status}"));
+            return Err(format!("cudaMalloc failed with status code {status} (requested {size_bytes} bytes = {:.2} MB)", size_bytes as f64 / 1_048_576.0));
         }
         Ok(Self {
             ptr: d_ptr,

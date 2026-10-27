@@ -393,6 +393,26 @@ pub struct ChatArgs {
     /// Optional path to weights file
     #[arg(long)]
     pub weights: Option<String>,
+
+    /// Temperature for sampling (0.0 for greedy, default 0.7)
+    #[arg(long = "temp", alias = "temperature", default_value_t = 0.7)]
+    pub temp: f32,
+
+    /// Top-p (nucleus) sampling cutoff (default 0.95)
+    #[arg(long = "top-p", default_value_t = 0.95)]
+    pub top_p: f32,
+
+    /// Top-k sampling cutoff (default 40)
+    #[arg(long = "top-k", default_value_t = 40)]
+    pub top_k: usize,
+
+    /// Random seed for sampling
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+
+    /// Force greedy decoding (equivalent to --temp 0.0)
+    #[arg(long)]
+    pub greedy: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -551,6 +571,26 @@ pub struct Cli {
     /// Tier 3 External Storage / NVMe KV cache capacity in blocks
     #[arg(long, default_value_t = 32768)]
     pub kv_storage_blocks: usize,
+
+    /// Temperature for sampling (0.0 for greedy, default 0.7)
+    #[arg(long = "temp", alias = "temperature", default_value_t = 0.7)]
+    pub temp: f32,
+
+    /// Top-p (nucleus) sampling cutoff (default 0.95)
+    #[arg(long = "top-p", default_value_t = 0.95)]
+    pub top_p: f32,
+
+    /// Top-k sampling cutoff (default 40)
+    #[arg(long = "top-k", default_value_t = 40)]
+    pub top_k: usize,
+
+    /// Random seed for sampling
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+
+    /// Force greedy decoding (equivalent to --temp 0.0)
+    #[arg(long)]
+    pub greedy: bool,
 }
 
 impl Cli {
@@ -614,6 +654,11 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             None,
             chat.max_tokens,
             chat.threads,
+            chat.temp,
+            chat.top_p,
+            chat.top_k,
+            chat.seed,
+            chat.greedy,
         ),
         Some(Commands::Img(img)) => {
             tracing::info!(
@@ -681,6 +726,11 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.models_dir.as_deref(),
                     cli.max_tokens,
                     cli.threads,
+                    cli.temp,
+                    cli.top_p,
+                    cli.top_k,
+                    cli.seed,
+                    cli.greedy,
                 )
             } else {
                 run_server_with_options(
@@ -713,6 +763,11 @@ fn run_chat_session(
     models_dir: Option<&str>,
     max_tokens: usize,
     threads: usize,
+    temp: f32,
+    top_p: f32,
+    top_k: usize,
+    seed: u64,
+    greedy: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if threads > 0 {
         let _ = rayon::ThreadPoolBuilder::new()
@@ -733,9 +788,10 @@ fn run_chat_session(
     );
     let mut pipeline =
         SpecializedPipeline::from_model_or_path(&current_model, backend_str, gpu, 1, weights)?;
+    pipeline.configure_sampling(temp, top_p, top_k, seed, greedy);
 
     println!(
-        "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens}"
+        "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens} | Temp: {temp} | TopP: {top_p} | TopK: {top_k} | Greedy: {greedy}"
     );
 
     let tokenizer = {
@@ -760,7 +816,13 @@ fn run_chat_session(
         }
     };
 
-    let stop_tokens = [2u32, 106, 107, 128_001, 128_008, 128_009, 151_643, 151_645];
+    let mut stop_tokens = vec![106u32, 107, 128_001, 128_008, 128_009, 151_643, 151_645];
+    if tokenizer.bos_id != Some(2) {
+        stop_tokens.push(2);
+    }
+    if let Some(eos) = tokenizer.eos_id {
+        stop_tokens.push(eos);
+    }
 
     if let Some(p) = prompt {
         println!("Prompt: {p}");
@@ -775,7 +837,12 @@ fn run_chat_session(
         } else {
             p.to_string()
         };
-        let tokens = tokenizer.encode(&formatted);
+        let mut tokens = tokenizer.encode(&formatted);
+        if let Some(bos) = tokenizer.bos_id {
+            if tokens.first().copied() != Some(bos) {
+                tokens.insert(0, bos);
+            }
+        }
         let prompt_tokens = if tokens.is_empty() { vec![1] } else { tokens };
 
         print!("Assistant: ");
@@ -944,7 +1011,12 @@ fn run_chat_session(
         } else {
             trimmed.to_string()
         };
-        let prompt_tokens = tokenizer.encode(&formatted);
+        let mut prompt_tokens = tokenizer.encode(&formatted);
+        if let Some(bos) = tokenizer.bos_id {
+            if prompt_tokens.first().copied() != Some(bos) {
+                prompt_tokens.insert(0, bos);
+            }
+        }
         let mut cur_token = 1u32;
         for &tok in &prompt_tokens {
             let cmd = StepCommand::new(1, tok, 0, false);
