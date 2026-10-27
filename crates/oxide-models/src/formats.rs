@@ -39,6 +39,7 @@ pub enum GgufQuantType {
     PTQ1_0,
     PQ2_0,
     TQ2_0,
+    IQ4_NL,
 }
 
 /// Parsed metadata for a SafeTensors tensor entry.
@@ -287,6 +288,7 @@ impl GgufFile {
                 12 => GgufQuantType::Q4_K_M,
                 13 => GgufQuantType::Q5_K_M,
                 14 => GgufQuantType::Q6_K,
+                20 => GgufQuantType::IQ4_NL,
                 30 => GgufQuantType::Bf16,
                 34 => GgufQuantType::PTQ1_0,
                 35 | 36 | 144 => GgufQuantType::TQ2_0,

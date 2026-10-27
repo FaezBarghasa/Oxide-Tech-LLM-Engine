@@ -67,7 +67,7 @@ pub use gguf_quants::{
     BlockIQ1_M, BlockIQ1_S, BlockIQ2_M, BlockIQ2_S, BlockIQ2_XS, BlockIQ2_XXS, BlockIQ3_M,
     BlockIQ3_S, BlockIQ3_XS, BlockIQ3_XXS, BlockIQ4_NL, BlockIQ4_XS, BlockQ2_K_S, BlockQ3_K_L,
     BlockQ3_K_M, BlockQ3_K_S, BlockQ4_K, BlockQ4_K_M, BlockQ4_K_S, BlockQ5_K, BlockQ5_K_M,
-    BlockQ5_K_S, BlockTQ1_0, BlockTQ2_0,
+    BlockQ5_K_S, BlockTQ1_0, BlockTQ2_0, KVALUES_IQ4NL,
 };
 pub use gptq_awq::{
     AwqPrecisionMode, AwqQuant, AwqWeightMatrix, GptqBitWidth, GptqQuant, GptqWeightMatrix,

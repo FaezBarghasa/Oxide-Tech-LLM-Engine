@@ -209,7 +209,7 @@ impl QuantScheme for BlockQ5_K {
 }
 
 /// IQ4_XS: Importance-matrix non-linear 4-bit quantization (4.25 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ4_XS {
     pub d: f16,
@@ -240,7 +240,7 @@ impl QuantScheme for BlockIQ4_XS {
 }
 
 /// IQ4_NL: Non-linear 4-bit quantization with grid table.
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ4_NL {
     pub d: f16,
@@ -256,20 +256,28 @@ impl Default for BlockIQ4_NL {
     }
 }
 
-impl QuantScheme for BlockIQ4_NL {
-    #[inline(always)]
-    fn bits_per_weight() -> f32 {
-        4.5
-    }
+pub const KVALUES_IQ4NL: [f32; 16] = [
+    -34.0, -21.0, -13.0, -7.0, -3.0, -1.0, 0.0, 1.0,
+    3.0, 6.0, 10.0, 15.0, 21.0, 29.0, 39.0, 53.0,
+];
 
+impl BlockIQ4_NL {
     #[inline(always)]
-    fn block_size() -> usize {
-        32
+    pub fn dequantize(&self, output: &mut [f32; 32]) {
+        let d = self.d.to_f32();
+        for i in 0..16 {
+            let byte = self.qs[i];
+            let q0 = (byte & 0x0F) as usize;
+            let q1 = ((byte >> 4) & 0x0F) as usize;
+            output[i] = d * KVALUES_IQ4NL[q0];
+            output[i + 16] = d * KVALUES_IQ4NL[q1];
+        }
     }
 }
 
+
 /// IQ3_XXS: Importance-matrix 3-bit quantization (3.06 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ3_XXS {
     pub d: f16,
@@ -298,7 +306,7 @@ impl QuantScheme for BlockIQ3_XXS {
 }
 
 /// IQ2_XXS: Importance-matrix 2-bit quantization (2.06 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ2_XXS {
     pub d: f16,
@@ -327,7 +335,7 @@ impl QuantScheme for BlockIQ2_XXS {
 }
 
 /// IQ1_S: Importance-matrix 1-bit quantization (1.56 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ1_S {
     pub d: f16,
@@ -356,7 +364,7 @@ impl QuantScheme for BlockIQ1_S {
 }
 
 /// IQ1_M: Importance-matrix 1-bit quantization medium variant (~1.75 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ1_M {
     pub d: f16,
@@ -389,7 +397,7 @@ impl QuantScheme for BlockIQ1_M {
 }
 
 /// TQ1_0: Ternary quantization ({-1, 0, +1}, ~1.69 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockTQ1_0 {
     pub d: f16,
@@ -465,7 +473,7 @@ impl QuantScheme for BlockTQ2_0 {
 }
 
 /// IQ2_XS: Importance-matrix 2-bit extra-small (~2.31 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ2_XS {
     pub d: f16,
@@ -496,7 +504,7 @@ impl QuantScheme for BlockIQ2_XS {
 }
 
 /// IQ2_S: Importance-matrix 2-bit small (~2.5 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ2_S {
     pub d: f16,
@@ -525,7 +533,7 @@ impl QuantScheme for BlockIQ2_S {
 }
 
 /// IQ2_M: Importance-matrix 2-bit medium (~2.7 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ2_M {
     pub d: f16,
@@ -556,7 +564,7 @@ impl QuantScheme for BlockIQ2_M {
 }
 
 /// IQ3_XS: Importance-matrix 3-bit extra small (~3.3 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ3_XS {
     pub d: f16,
@@ -587,7 +595,7 @@ impl QuantScheme for BlockIQ3_XS {
 }
 
 /// IQ3_S: Importance-matrix 3-bit small (~3.44 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ3_S {
     pub d: f16,
@@ -616,7 +624,7 @@ impl QuantScheme for BlockIQ3_S {
 }
 
 /// IQ3_M: Importance-matrix 3-bit medium (~3.66 bpw).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockIQ3_M {
     pub d: f16,
