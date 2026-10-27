@@ -365,6 +365,14 @@ pub struct ChatArgs {
     #[arg(short = 'c', long = "ctx-size", default_value_t = 4096)]
     pub ctx_size: usize,
 
+    /// Maximum tokens to generate (-n / --max-tokens / --n-predict)
+    #[arg(short = 'n', long = "max-tokens", alias = "n-predict", default_value_t = 512)]
+    pub max_tokens: usize,
+
+    /// Number of CPU threads to utilize (-t / --threads, defaults to 8)
+    #[arg(short = 't', long = "threads", default_value_t = 8)]
+    pub threads: usize,
+
     /// Prompt to run (if omitted, starts interactive chat)
     #[arg(short = 'p', long)]
     pub prompt: Option<String>,
@@ -510,6 +518,14 @@ pub struct Cli {
     #[arg(short = 'p', long)]
     pub prompt: Option<String>,
 
+    /// Maximum tokens to generate (-n / --max-tokens / --n-predict)
+    #[arg(short = 'n', long = "max-tokens", alias = "n-predict", default_value_t = 512)]
+    pub max_tokens: usize,
+
+    /// Number of CPU threads to utilize (-t / --threads, defaults to 8)
+    #[arg(short = 't', long = "threads", default_value_t = 8)]
+    pub threads: usize,
+
     /// Enter interactive chat REPL mode directly (llama.cpp -i / --interactive)
     #[arg(short = 'i', long)]
     pub interactive: bool,
@@ -564,6 +580,18 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    let threads = match &cli.command {
+        Some(Commands::Chat(chat)) => chat.threads,
+        _ => cli.threads,
+    };
+    if threads > 0 {
+        let _ = rayon::ThreadPoolBuilder::new().num_threads(threads).build_global();
+        // SAFETY: Executed at CLI entry before other runtime threads are spawned
+        unsafe {
+            std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
+        }
+    }
+
     match cli.command {
         Some(Commands::Chat(chat)) => run_chat_session(
             &chat.model,
@@ -572,6 +600,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chat.weights.as_deref(),
             chat.prompt.as_deref(),
             None,
+            chat.max_tokens,
+            chat.threads,
         ),
         Some(Commands::Img(img)) => {
             tracing::info!(
@@ -637,6 +667,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.weights.as_deref(),
                     cli.prompt.as_deref(),
                     cli.models_dir.as_deref(),
+                    cli.max_tokens,
+                    cli.threads,
                 )
             } else {
                 run_server_with_options(
@@ -667,7 +699,16 @@ fn run_chat_session(
     weights: Option<&str>,
     prompt: Option<&str>,
     models_dir: Option<&str>,
+    max_tokens: usize,
+    threads: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if threads > 0 {
+        let _ = rayon::ThreadPoolBuilder::new().num_threads(threads).build_global();
+        // SAFETY: Executed at chat initialization
+        unsafe {
+            std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
+        }
+    }
     let backend_str = backend.as_str();
     let mut current_model = initial_model.to_string();
     tracing::info!(
@@ -679,7 +720,7 @@ fn run_chat_session(
     let mut pipeline =
         SpecializedPipeline::from_model_or_path(&current_model, backend_str, gpu, 1, weights)?;
 
-    println!("Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str}");
+    println!("Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens}");
 
     let tokenizer = {
         let p = std::path::Path::new(&current_model);
@@ -702,6 +743,8 @@ fn run_chat_session(
             oxide_models::GgufTokenizer::default()
         }
     };
+
+    let stop_tokens = [2u32, 106, 107, 128_001, 128_008, 128_009, 151_643, 151_645];
 
     if let Some(p) = prompt {
         println!("Prompt: {p}");
@@ -738,17 +781,20 @@ fn run_chat_session(
         let _ = std::io::Write::flush(&mut std::io::stdout());
         gen_count += 1;
 
-        for _ in 1..64 {
+        for _ in 1..max_tokens {
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
             gen_count += 1;
             cur_token = step_res.sampled_token;
-            let text = tokenizer.decode_token(cur_token);
-            print!("{text}");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-            if step_res.is_terminal {
+            if stop_tokens.contains(&cur_token) || Some(cur_token) == tokenizer.eos_id || step_res.is_terminal {
                 break;
             }
+            let text = tokenizer.decode_token(cur_token);
+            if text.contains("<|im_end|>") || text.contains("<end_of_turn>") || text.contains("<|eot_id|>") {
+                break;
+            }
+            print!("{text}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
         }
         let elapsed = t_start.elapsed();
 
@@ -882,10 +928,13 @@ fn run_chat_session(
         let reverse_prompts = ["User:", "User", "Human:", "\n\nUser", "<|eot_id|>", "<|im_end|>", "<end_of_turn>"];
         let mut generated_accum = String::from(&first_text);
 
-        for _ in 0..256 {
+        for _ in 0..max_tokens {
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
             cur_token = step_res.sampled_token;
+            if stop_tokens.contains(&cur_token) || Some(cur_token) == tokenizer.eos_id || step_res.is_terminal {
+                break;
+            }
             let text = tokenizer.decode_token(cur_token);
 
             // Check reverse prompt triggers
@@ -903,9 +952,6 @@ fn run_chat_session(
 
             print!("{text}");
             let _ = std::io::Write::flush(&mut std::io::stdout());
-            if step_res.is_terminal {
-                break;
-            }
         }
         println!();
     }

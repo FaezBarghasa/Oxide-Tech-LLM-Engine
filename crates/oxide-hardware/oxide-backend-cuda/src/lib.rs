@@ -101,9 +101,6 @@ pub struct CudaBackend {
     profile: GpuDeviceProfile,
     execution_plan: KernelExecutionPlan,
     stream: Option<CudaStream>,
-    d_activations: Option<CudaDeviceBuffer>,
-    d_norm_out: Option<CudaDeviceBuffer>,
-    d_weights: Option<CudaDeviceBuffer>,
     pub layers: Vec<CudaLayerWeights>,
     pub d_output_norm: Option<CudaDeviceBuffer>,
     pub d_lm_head: Option<CudaDeviceBuffer>,
@@ -115,6 +112,8 @@ pub struct CudaBackend {
     pub d_scratch_v: Option<CudaDeviceBuffer>,
     pub d_scratch_attn_out: Option<CudaDeviceBuffer>,
     pub d_scratch_act: Option<CudaDeviceBuffer>,
+    pub d_scratch_gate: Option<CudaDeviceBuffer>,
+    pub d_scratch_up: Option<CudaDeviceBuffer>,
     pub d_logits: Option<CudaDeviceBuffer>,
     pub kv_k: Vec<CudaDeviceBuffer>,
     pub kv_v: Vec<CudaDeviceBuffer>,
@@ -124,6 +123,7 @@ pub struct CudaBackend {
     pub num_kv_heads: usize,
     pub head_dim: usize,
     pub seq_pos: usize,
+    pub embedding_lookup: Option<Box<dyn Fn(usize, &mut [f32]) + Send + Sync>>,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -160,22 +160,11 @@ impl CudaBackend {
 
         // Attempt real physical device initialization
         let stream = CudaStream::new().ok();
-        let (d_activations, d_norm_out, d_weights) = if stream.is_some() {
+        if stream.is_some() {
             #[allow(clippy::cast_possible_wrap)]
             // SAFETY: device_id is a valid integer device index passed to cudaSetDevice.
             let _ = unsafe { driver::cudaSetDevice(device_id as i32) };
-            let act = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
-            let norm = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
-            let mut w = CudaDeviceBuffer::allocate(128 * std::mem::size_of::<f32>()).ok();
-            if let (Some(w_buf), Some(st)) = (&mut w, &stream) {
-                let init_w = vec![1.0f32; 128];
-                let _ = w_buf.copy_from_host_async(&init_w, st.raw());
-                let _ = st.synchronize();
-            }
-            (act, norm, w)
-        } else {
-            (None, None, None)
-        };
+        }
 
         Self {
             device_id,
@@ -184,9 +173,6 @@ impl CudaBackend {
             profile,
             execution_plan,
             stream,
-            d_activations,
-            d_norm_out,
-            d_weights,
             layers: Vec::new(),
             d_output_norm: None,
             d_lm_head: None,
@@ -198,6 +184,8 @@ impl CudaBackend {
             d_scratch_v: None,
             d_scratch_attn_out: None,
             d_scratch_act: None,
+            d_scratch_gate: None,
+            d_scratch_up: None,
             d_logits: None,
             kv_k: Vec::new(),
             kv_v: Vec::new(),
@@ -207,7 +195,16 @@ impl CudaBackend {
             num_kv_heads: 0,
             head_dim: 0,
             seq_pos: 0,
+            embedding_lookup: None,
         }
+    }
+
+    /// Configures a host-side token embedding row dequantization callback.
+    pub fn set_embedding_lookup<F>(&mut self, f: F)
+    where
+        F: Fn(usize, &mut [f32]) + Send + Sync + 'static,
+    {
+        self.embedding_lookup = Some(Box::new(f));
     }
 
     #[must_use]
@@ -289,6 +286,14 @@ impl CudaBackend {
                 .map_err(EngineError::BackendError)?,
         );
         self.d_scratch_act = Some(
+            CudaDeviceBuffer::allocate(max_dim * 4 * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?,
+        );
+        self.d_scratch_gate = Some(
+            CudaDeviceBuffer::allocate(max_dim * 4 * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?,
+        );
+        self.d_scratch_up = Some(
             CudaDeviceBuffer::allocate(max_dim * 4 * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?,
         );
@@ -457,8 +462,15 @@ impl HardwareBackend for CudaBackend {
             let pos = self.seq_pos;
             self.seq_pos += 1;
 
-            // 1. Initial embedding lookup on GPU
-            if let Some(d_emb) = &self.d_token_embd {
+            // 1. Initial embedding lookup on GPU (or dequantized from host)
+            if let Some(lookup) = &self.embedding_lookup {
+                let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
+                let mut host_emb = vec![0.0f32; h];
+                lookup(tok_idx, &mut host_emb);
+                if let Some(d_hid) = &mut self.d_hidden {
+                    let _ = d_hid.copy_from_host_async(&host_emb, s);
+                }
+            } else if let Some(d_emb) = &self.d_token_embd {
                 let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
                 let offset = tok_idx * h * std::mem::size_of::<f32>();
                 if offset + h * 4 <= d_emb.size_bytes() {
@@ -538,7 +550,58 @@ impl HardwareBackend for CudaBackend {
                         }
                     }
 
-                    // Attention Flash Decode
+                    // Rotary Position Embedding (RoPE) on Q and K
+                    if let (Some(d_q), Some(d_k)) = (&mut self.d_scratch_q, &mut self.d_scratch_k) {
+                        unsafe {
+                            driver::launch_cuda_rope_single(
+                                d_q.as_typed_ptr::<f32>(),
+                                d_k.as_typed_ptr::<f32>(),
+                                pos as i32,
+                                self.num_heads as i32,
+                                self.num_kv_heads as i32,
+                                self.head_dim as i32,
+                                10000.0,
+                                s,
+                            );
+                        }
+                    }
+
+                    // KV Cache update: copy current token's K and V into KV cache ring buffer at `pos`
+                    let kv_dim = self.num_kv_heads * self.head_dim;
+                    let kv_bytes = kv_dim * std::mem::size_of::<f32>();
+                    let kv_offset = (pos % 2048) * kv_bytes;
+                    if let (Some(d_k), Some(d_v)) = (&self.d_scratch_k, &self.d_scratch_v) {
+                        if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
+                            let k_dst = unsafe {
+                                (self.kv_k[layer_idx].as_raw_ptr() as *mut u8).add(kv_offset)
+                                    as *mut std::ffi::c_void
+                            };
+                            let v_dst = unsafe {
+                                (self.kv_v[layer_idx].as_raw_ptr() as *mut u8).add(kv_offset)
+                                    as *mut std::ffi::c_void
+                            };
+                            let _ = unsafe {
+                                driver::cudaMemcpyAsync(
+                                    k_dst,
+                                    d_k.as_raw_ptr(),
+                                    kv_bytes,
+                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                    s,
+                                )
+                            };
+                            let _ = unsafe {
+                                driver::cudaMemcpyAsync(
+                                    v_dst,
+                                    d_v.as_raw_ptr(),
+                                    kv_bytes,
+                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                    s,
+                                )
+                            };
+                        }
+                    }
+
+                    // Attention Flash Decode (with GQA)
                     if let (Some(d_q), Some(d_out)) =
                         (&self.d_scratch_q, &mut self.d_scratch_attn_out)
                     {
@@ -551,8 +614,9 @@ impl HardwareBackend for CudaBackend {
                                     self.kv_k[layer_idx].as_typed_ptr::<f32>(),
                                     self.kv_v[layer_idx].as_typed_ptr::<f32>(),
                                     self.num_heads as i32,
+                                    self.num_kv_heads as i32,
                                     self.head_dim as i32,
-                                    pos.max(1) as i32,
+                                    (pos + 1).min(2048) as i32,
                                     sm_scale,
                                     s,
                                 );
@@ -560,7 +624,7 @@ impl HardwareBackend for CudaBackend {
                         }
                     }
 
-                    // Output Projection
+                    // Output Projection: wo x attn_out -> d_act
                     if let (Some(d_out), Some(d_act)) =
                         (&self.d_scratch_attn_out, &mut self.d_scratch_act)
                     {
@@ -572,6 +636,18 @@ impl HardwareBackend for CudaBackend {
                                 layer.d_wo.as_typed_ptr::<u16>(),
                                 h as i32,
                                 layer.q_m as i32,
+                                s,
+                            );
+                        }
+                    }
+
+                    // Residual 1: hidden += attn_out
+                    if let Some(d_act) = &self.d_scratch_act {
+                        unsafe {
+                            driver::launch_cuda_vector_add(
+                                d_hid.as_typed_ptr::<f32>(),
+                                d_act.as_typed_ptr::<f32>(),
+                                h as i32,
                                 s,
                             );
                         }
@@ -590,16 +666,63 @@ impl HardwareBackend for CudaBackend {
                         );
                     }
 
-                    // FFN Down Projection
-                    if let Some(d_act) = &mut self.d_scratch_act {
+                    // FFN Gate and Up projections
+                    if let (Some(d_gate), Some(d_up)) =
+                        (&mut self.d_scratch_gate, &mut self.d_scratch_up)
+                    {
+                        unsafe {
+                            driver::launch_cuda_gemv_q8_0(
+                                d_gate.as_typed_ptr::<f32>(),
+                                layer.d_w1.as_typed_ptr::<i8>(),
+                                d_norm.as_typed_ptr::<f32>(),
+                                layer.d_w1.as_typed_ptr::<u16>(),
+                                layer.inter_m as i32,
+                                h as i32,
+                                s,
+                            );
+                            driver::launch_cuda_gemv_q8_0(
+                                d_up.as_typed_ptr::<f32>(),
+                                layer.d_w3.as_typed_ptr::<i8>(),
+                                d_norm.as_typed_ptr::<f32>(),
+                                layer.d_w3.as_typed_ptr::<u16>(),
+                                layer.inter_m as i32,
+                                h as i32,
+                                s,
+                            );
+                            driver::launch_cuda_swiglu(
+                                d_gate.as_typed_ptr::<f32>(),
+                                d_gate.as_typed_ptr::<f32>(),
+                                d_up.as_typed_ptr::<f32>(),
+                                layer.inter_m as i32,
+                                s,
+                            );
+                        }
+                    }
+
+                    // FFN Down Projection: w2 x gate -> d_act
+                    if let (Some(d_gate), Some(d_act)) =
+                        (&self.d_scratch_gate, &mut self.d_scratch_act)
+                    {
                         unsafe {
                             driver::launch_cuda_gemv_q8_0(
                                 d_act.as_typed_ptr::<f32>(),
                                 layer.d_w2.as_typed_ptr::<i8>(),
-                                d_norm.as_typed_ptr::<f32>(),
+                                d_gate.as_typed_ptr::<f32>(),
                                 layer.d_w2.as_typed_ptr::<u16>(),
                                 h as i32,
                                 layer.inter_m as i32,
+                                s,
+                            );
+                        }
+                    }
+
+                    // Residual 2: hidden += ffn_out
+                    if let Some(d_act) = &self.d_scratch_act {
+                        unsafe {
+                            driver::launch_cuda_vector_add(
+                                d_hid.as_typed_ptr::<f32>(),
+                                d_act.as_typed_ptr::<f32>(),
+                                h as i32,
                                 s,
                             );
                         }
@@ -626,7 +749,7 @@ impl HardwareBackend for CudaBackend {
                 }
             }
 
-            // 4. LM Head Logit Projection
+            // 4. LM Head Logit Projection (full vocabulary)
             if let (Some(d_norm), Some(d_lm), Some(d_logits)) =
                 (&self.d_scratch_norm, &self.d_lm_head, &mut self.d_logits)
             {
@@ -636,12 +759,12 @@ impl HardwareBackend for CudaBackend {
                         d_lm.as_typed_ptr::<i8>(),
                         d_norm.as_typed_ptr::<f32>(),
                         d_lm.as_typed_ptr::<u16>(),
-                        self.vocab_size.min(1024) as i32,
+                        self.vocab_size as i32,
                         h as i32,
                         s,
                     );
                 }
-                let mut host_logits = vec![0.0f32; self.vocab_size.min(1024)];
+                let mut host_logits = vec![0.0f32; self.vocab_size];
                 let _ = d_logits.copy_to_host_async(&mut host_logits, s);
                 let _ = stream.synchronize();
 
@@ -657,41 +780,9 @@ impl HardwareBackend for CudaBackend {
                     self.host_token_buffer[slot] = best_tok;
                 }
             }
-        } else if self.hidden_dim > 0 {
-            return Err(oxide_core::error::EngineError::BackendError(
-                "Physical CUDA transformer layers not loaded into GPU VRAM for execution"
-                    .to_string(),
-            ));
-        } else if let (Some(d_act), Some(d_norm), Some(d_w)) = (
-            &mut self.d_activations,
-            &mut self.d_norm_out,
-            &self.d_weights,
-        ) {
-            // Standalone hardware verification test harness path (hidden_dim == 0)
-            let mut activations = [0.0f32; 128];
-            activations[0] = (cmd.input_token as f32) * 0.01;
-            activations[1] = 1.0;
-            let _ = d_act.copy_from_host_async(&activations, s);
-            unsafe {
-                driver::launch_cuda_rmsnorm(
-                    d_norm.as_typed_ptr::<f32>(),
-                    d_act.as_typed_ptr::<f32>(),
-                    d_w.as_typed_ptr::<f32>(),
-                    1,
-                    128,
-                    1e-5,
-                    s,
-                );
-            }
-            let mut out = [0.0f32; 128];
-            let _ = d_norm.copy_to_host_async(&mut out, s);
-            let _ = stream.synchronize();
-            if slot < self.host_token_buffer.len() {
-                self.host_token_buffer[slot] = (cmd.input_token.wrapping_add(1)).max(1);
-            }
         } else {
             return Err(oxide_core::error::EngineError::BackendError(
-                "Physical CUDA memory buffers unallocated on device".to_string(),
+                "Physical CUDA transformer layers not loaded into GPU VRAM for execution".to_string(),
             ));
         }
 

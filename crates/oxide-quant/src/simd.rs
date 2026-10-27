@@ -1503,6 +1503,29 @@ pub fn rmsnorm_f32(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) 
     }
 }
 
+/// Vectorized RMSNorm kernel with (1.0 + weight) offset scaling for Gemma 2 / Gemma 4 models.
+pub fn rmsnorm_f32_offset(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) {
+    let len = input.len();
+    assert!(
+        weight.len() >= len && output.len() >= len,
+        "Buffer dimension mismatch"
+    );
+    let sum_sq = dot_f32(input, input);
+    let mean_sq = sum_sq / (len as f32);
+    let inv_rms = 1.0 / (mean_sq + eps).sqrt();
+
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let base = i * 8;
+        for j in 0..8 {
+            output[base + j] = input[base + j] * inv_rms * (1.0 + weight[base + j]);
+        }
+    }
+    for i in (chunks * 8)..len {
+        output[i] = input[i] * inv_rms * (1.0 + weight[i]);
+    }
+}
+
 /// Vectorized Rotary Position Embedding (RoPE) kernel.
 pub fn rope_f32(x: &mut [f32], head_dim: usize, position: usize, theta: f32) {
     let half_dim = head_dim / 2;

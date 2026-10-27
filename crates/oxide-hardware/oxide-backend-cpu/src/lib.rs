@@ -75,16 +75,10 @@ impl CpuBackend {
 impl HardwareBackend for CpuBackend {
     type Event = CpuEventHandle;
 
-    fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
-        self.step_counter += 1;
-        let event = CpuEventHandle {
-            step_id: self.step_counter,
-        };
-
-        let slot = cmd.slot_idx as usize;
-        CpuLlmKernels::dispatch_full_step_decode(cmd.input_token, slot, &mut self.token_buffer)?;
-
-        Ok(event)
+    fn dispatch_step_kernel(&mut self, _cmd: &StepCommand) -> Result<Self::Event> {
+        Err(oxide_core::error::EngineError::BackendError(
+            "CpuBackend requires initialized physical model weights. Use SpecializedPipeline::from_model_or_path for CPU inference.".to_string(),
+        ))
     }
 
     fn query_event_completed(&self, _event: Self::Event) -> bool {

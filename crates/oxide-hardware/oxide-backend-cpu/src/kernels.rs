@@ -3,7 +3,6 @@
 //! AVX-512/AVX2 SIMD acceleration, and quantized GEMV operations.
 
 use core_affinity::CoreId;
-use oxide_core::error::Result;
 use std::sync::Arc;
 
 /// NUMA and core-affinity aware CPU thread pool for LLM compute.
@@ -136,55 +135,6 @@ impl CpuLlmKernels {
         );
     }
 
-    /// Executes a full specialized forward token decode step on CPU across all cores and threads.
-    /// Operates with zero heap allocations on the hot path.
-    pub fn dispatch_full_step_decode(
-        input_token: u32,
-        slot_idx: usize,
-        token_buffer: &mut [u32],
-    ) -> Result<u32> {
-        const HIDDEN_DIM: usize = 128;
-        let mut activations = [0.0f32; HIDDEN_DIM];
-        let mut norm_activations = [0.0f32; HIDDEN_DIM];
-        let weights = [1.0f32; HIDDEN_DIM];
-
-        // Realistic embedding lookup with positional frequency embedding table
-        let token_base = (input_token % 32000) as f32;
-        for (i, act) in activations.iter_mut().enumerate() {
-            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / HIDDEN_DIM as f32));
-            *act = if i % 2 == 0 {
-                (token_base * freq).sin() * 0.1
-            } else {
-                (token_base * freq).cos() * 0.1
-            };
-        }
-
-        // 1. RMSNorm vectorized reduction
-        Self::dispatch_cpu_rmsnorm(&mut norm_activations, &activations, &weights, 1e-5);
-
-        // 2. Multi-threaded Q8_0 quantized GEMV projection
-        let proj_blocks = [oxide_quant::int_quant::BlockQ8_0 {
-            scale: oxide_quant::int_quant::f16::from_f32(0.01),
-            qs: [55i8; 32],
-        }; 4]; // 4 blocks = 128 weights
-
-        let mut proj_out = [0.0f32; 1];
-        Self::dispatch_cpu_gemv_q8_0(
-            &mut proj_out,
-            &proj_blocks,
-            &norm_activations,
-            1,
-            HIDDEN_DIM,
-        );
-
-        // 3. Sample next token
-        let next_token = (input_token.wrapping_add(1) + (proj_out[0].abs() as u32)).max(1);
-        if slot_idx < token_buffer.len() {
-            token_buffer[slot_idx] = next_token;
-        }
-
-        Ok(next_token)
-    }
 }
 
 #[cfg(test)]
@@ -196,10 +146,6 @@ mod tests {
         let pool = CpuThreadPool::new();
         assert!(pool.num_threads() >= 1);
         let _ = pool.pin_current_thread(0);
-
-        let mut token_buf = vec![0u32; 4];
-        let tok = CpuLlmKernels::dispatch_full_step_decode(42, 0, &mut token_buf).unwrap();
-        assert!(tok >= 1);
-        assert_eq!(token_buf[0], tok);
     }
 }
+

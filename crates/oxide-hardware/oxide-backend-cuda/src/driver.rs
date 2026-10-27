@@ -101,12 +101,39 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_vector_add(
+        a: *mut f32,
+        b: *const f32,
+        n: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_swiglu(
+        out: *mut f32,
+        gate: *const f32,
+        up: *const f32,
+        n: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_rope_single(
+        q: *mut f32,
+        k: *mut f32,
+        pos: i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        theta: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_flash_decode(
         output: *mut f32,
         q: *const f32,
         k_cache: *const f32,
         v_cache: *const f32,
         num_heads: i32,
+        num_kv_heads: i32,
         head_dim: i32,
         num_kv_tokens: i32,
         sm_scale: f32,

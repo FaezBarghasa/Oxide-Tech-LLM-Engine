@@ -163,8 +163,18 @@ impl SpecializedPipeline {
                 let next_token = max_idx as u32;
                 let is_terminal = if let Some(eos) = model.config.eos_token_id {
                     next_token == eos
+                        || next_token == 2
+                        || next_token == 106
+                        || next_token == 107
+                        || next_token == 128_001
+                        || next_token == 128_008
+                        || next_token == 128_009
+                        || next_token == 151_643
+                        || next_token == 151_645
                 } else {
                     next_token == 2
+                        || next_token == 106
+                        || next_token == 107
                         || next_token == 128_001
                         || next_token == 128_008
                         || next_token == 128_009
@@ -267,8 +277,18 @@ impl SpecializedPipeline {
                 let next_token = max_idx as u32;
                 let is_terminal = if let Some(eos) = model.config.eos_token_id {
                     next_token == eos
+                        || next_token == 2
+                        || next_token == 106
+                        || next_token == 107
+                        || next_token == 128_001
+                        || next_token == 128_008
+                        || next_token == 128_009
+                        || next_token == 151_643
+                        || next_token == 151_645
                 } else {
                     next_token == 2
+                        || next_token == 106
+                        || next_token == 107
                         || next_token == 128_001
                         || next_token == 128_008
                         || next_token == 128_009

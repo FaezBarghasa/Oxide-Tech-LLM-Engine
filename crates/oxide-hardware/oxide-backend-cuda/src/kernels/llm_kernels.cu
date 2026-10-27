@@ -222,12 +222,77 @@ __global__ void gemv_q8_0_cuda_kernel(
 /**
  * Custom CUDA Kernel: FlashAttention-2 Paged Token Decode Kernel (Tiling + Online Softmax)
  */
+__global__ void vector_add_f32_kernel(
+    float* __restrict__ a,
+    const float* __restrict__ b,
+    int n
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        a[idx] += b[idx];
+    }
+}
+
+__global__ void swiglu_f32_kernel(
+    float* __restrict__ out,
+    const float* __restrict__ gate,
+    const float* __restrict__ up,
+    int n
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        float g = gate[idx];
+        float silu = g / (1.0f + expf(-g));
+        out[idx] = silu * up[idx];
+    }
+}
+
+__global__ void rope_single_token_kernel(
+    float* __restrict__ q,
+    float* __restrict__ k,
+    int pos,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    float theta
+) {
+    int head_idx = blockIdx.x;
+    int half_dim = head_dim / 2;
+    int d = threadIdx.x;
+    if (d >= half_dim) return;
+
+    float freq = 1.0f / powf(theta, (float)(2 * d) / (float)head_dim);
+    float angle = (float)pos * freq;
+    float cos_val = cosf(angle);
+    float sin_val = sinf(angle);
+
+    if (head_idx < num_heads && q != nullptr) {
+        int q_base = head_idx * head_dim;
+        float q0 = q[q_base + d];
+        float q1 = q[q_base + d + half_dim];
+        q[q_base + d]            = q0 * cos_val - q1 * sin_val;
+        q[q_base + d + half_dim] = q0 * sin_val + q1 * cos_val;
+    }
+
+    if (head_idx < num_kv_heads && k != nullptr) {
+        int k_base = head_idx * head_dim;
+        float k0 = k[k_base + d];
+        float k1 = k[k_base + d + half_dim];
+        k[k_base + d]            = k0 * cos_val - k1 * sin_val;
+        k[k_base + d + half_dim] = k0 * sin_val + k1 * cos_val;
+    }
+}
+
+/**
+ * Custom CUDA Kernel: FlashAttention-2 Paged Token Decode Kernel (Tiling + Online Softmax + GQA)
+ */
 __global__ void flash_decode_paged_kernel(
     float* __restrict__ output,
     const float* __restrict__ q,
     const float* __restrict__ k_cache,
     const float* __restrict__ v_cache,
     int num_heads,
+    int num_kv_heads,
     int head_dim,
     int num_kv_tokens,
     float sm_scale
@@ -238,12 +303,15 @@ __global__ void flash_decode_paged_kernel(
     const float* q_ptr = q + head_idx * head_dim;
     float* out_ptr = output + head_idx * head_dim;
 
+    int kv_heads = num_kv_heads > 0 ? num_kv_heads : num_heads;
+    int kv_head_idx = head_idx / (num_heads / kv_heads);
+
     float max_score = -1e20f;
     float sum_exp = 0.0f;
 
     // Grid-stride over past KV cached tokens
     for (int t = 0; t < num_kv_tokens; t++) {
-        const float* k_tok = k_cache + (t * num_heads + head_idx) * head_dim;
+        const float* k_tok = k_cache + (t * kv_heads + kv_head_idx) * head_dim;
 
         // Compute Q . K dot product for this head
         float score = 0.0f;
@@ -270,7 +338,7 @@ __global__ void flash_decode_paged_kernel(
         max_score = new_max;
         sum_exp = sum_exp * alpha + beta;
 
-        const float* v_tok = v_cache + (t * num_heads + head_idx) * head_dim;
+        const float* v_tok = v_cache + (t * kv_heads + kv_head_idx) * head_dim;
         for (int d = tid; d < head_dim; d += blockDim.x) {
             out_ptr[d] = out_ptr[d] * alpha + beta * v_tok[d];
         }
@@ -352,12 +420,56 @@ int launch_cuda_gemv_q8_0(
     return cudaGetLastError();
 }
 
+int launch_cuda_vector_add(
+    float* a,
+    const float* b,
+    int n,
+    cudaStream_t stream
+) {
+    int block_size = 256;
+    int grid = (n + block_size - 1) / block_size;
+    vector_add_f32_kernel<<<grid, block_size, 0, stream>>>(a, b, n);
+    return cudaGetLastError();
+}
+
+int launch_cuda_swiglu(
+    float* out,
+    const float* gate,
+    const float* up,
+    int n,
+    cudaStream_t stream
+) {
+    int block_size = 256;
+    int grid = (n + block_size - 1) / block_size;
+    swiglu_f32_kernel<<<grid, block_size, 0, stream>>>(out, gate, up, n);
+    return cudaGetLastError();
+}
+
+int launch_cuda_rope_single(
+    float* q,
+    float* k,
+    int pos,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    float theta,
+    cudaStream_t stream
+) {
+    int grid = num_heads > num_kv_heads ? num_heads : num_kv_heads;
+    int block_size = head_dim / 2;
+    rope_single_token_kernel<<<grid, block_size, 0, stream>>>(
+        q, k, pos, num_heads, num_kv_heads, head_dim, theta
+    );
+    return cudaGetLastError();
+}
+
 int launch_cuda_flash_decode(
     float* output,
     const float* q,
     const float* k_cache,
     const float* v_cache,
     int num_heads,
+    int num_kv_heads,
     int head_dim,
     int num_kv_tokens,
     float sm_scale,
@@ -366,7 +478,7 @@ int launch_cuda_flash_decode(
     int block_size = 128;
     if (head_dim < 128) block_size = head_dim;
     flash_decode_paged_kernel<<<num_heads, block_size, 0, stream>>>(
-        output, q, k_cache, v_cache, num_heads, head_dim, num_kv_tokens, sm_scale
+        output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim, num_kv_tokens, sm_scale
     );
     return cudaGetLastError();
 }

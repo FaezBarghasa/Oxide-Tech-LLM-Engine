@@ -1389,6 +1389,7 @@ dependencies = [
  "oxide-models",
  "oxide-quant",
  "oxide-server",
+ "rayon",
  "serde_json",
  "tokio",
  "tracing",

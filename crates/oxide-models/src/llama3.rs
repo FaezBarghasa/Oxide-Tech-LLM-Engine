@@ -1604,6 +1604,7 @@ impl Llama3Model {
             &self.output_norm,
             &mut scratch.final_norm[..h],
             eps,
+            self.config.is_gemma,
         );
 
         // 4. LM Head projection to vocabulary logits
@@ -1661,6 +1662,7 @@ impl Llama3Model {
                 &layer.attn_norm,
                 &mut scratch.norm_hidden[..h],
                 eps,
+                self.config.is_gemma,
             );
 
             // Fused Q, K, V Projections via SIMD GEMV
@@ -1684,7 +1686,7 @@ impl Llama3Model {
                         let end = start + hd;
                         if end <= scratch.q.len() {
                             tmp[..hd].copy_from_slice(&scratch.q[start..end]);
-                            Self::rms_norm(&tmp[..hd], &layer.attn_q_norm[..hd], &mut scratch.q[start..end], eps);
+                            Self::rms_norm(&tmp[..hd], &layer.attn_q_norm[..hd], &mut scratch.q[start..end], eps, false);
                         }
                     }
                 }
@@ -1697,7 +1699,7 @@ impl Llama3Model {
                         let end = start + hd;
                         if end <= scratch.k.len() {
                             tmp[..hd].copy_from_slice(&scratch.k[start..end]);
-                            Self::rms_norm(&tmp[..hd], &layer.attn_k_norm[..hd], &mut scratch.k[start..end], eps);
+                            Self::rms_norm(&tmp[..hd], &layer.attn_k_norm[..hd], &mut scratch.k[start..end], eps, false);
                         }
                     }
                 }
@@ -1762,7 +1764,7 @@ impl Llama3Model {
                 let mut tmp = [0.0f32; 4096];
                 if h <= tmp.len() {
                     tmp[..h].copy_from_slice(&scratch.o_proj_out[..h]);
-                    Self::rms_norm(&tmp[..h], &layer.post_attn_norm[..h], &mut scratch.o_proj_out[..h], eps);
+                    Self::rms_norm(&tmp[..h], &layer.post_attn_norm[..h], &mut scratch.o_proj_out[..h], eps, self.config.is_gemma);
                 }
             }
 
@@ -1780,6 +1782,7 @@ impl Llama3Model {
                 &layer.ffn_norm,
                 &mut scratch.ffn_norm_hidden[..h],
                 eps,
+                self.config.is_gemma,
             );
 
             QuantizedTensor::fused_gemv_2way(
@@ -1818,7 +1821,7 @@ impl Llama3Model {
                 let mut tmp = [0.0f32; 4096];
                 if h <= tmp.len() {
                     tmp[..h].copy_from_slice(&scratch.mlp_out[..h]);
-                    Self::rms_norm(&tmp[..h], &layer.post_ffn_norm[..h], &mut scratch.mlp_out[..h], eps);
+                    Self::rms_norm(&tmp[..h], &layer.post_ffn_norm[..h], &mut scratch.mlp_out[..h], eps, self.config.is_gemma);
                 }
             }
 
@@ -1853,6 +1856,7 @@ impl Llama3Model {
             &layer.attn_norm,
             &mut scratch.norm_hidden,
             eps,
+            self.config.is_gemma,
         );
 
         // Fused Q, K, V Projections via SIMD GEMV
@@ -1926,6 +1930,7 @@ impl Llama3Model {
             &layer.ffn_norm,
             &mut scratch.ffn_norm_hidden,
             eps,
+            self.config.is_gemma,
         );
 
         let inter_dim = self.config.intermediate_dim;
@@ -2006,6 +2011,7 @@ impl Llama3Model {
             &self.output_norm,
             &mut scratch.final_norm,
             eps,
+            self.config.is_gemma,
         );
 
         // 4. LM Head projection to vocabulary logits
@@ -2074,8 +2080,12 @@ impl Llama3Model {
     }
 
     #[inline(always)]
-    fn rms_norm(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32) {
-        oxide_quant::simd::rmsnorm_f32(input, weight, output, eps);
+    fn rms_norm(input: &[f32], weight: &[f32], output: &mut [f32], eps: f32, is_gemma: bool) {
+        if is_gemma {
+            oxide_quant::simd::rmsnorm_f32_offset(input, weight, output, eps);
+        } else {
+            oxide_quant::simd::rmsnorm_f32(input, weight, output, eps);
+        }
     }
 }
 
