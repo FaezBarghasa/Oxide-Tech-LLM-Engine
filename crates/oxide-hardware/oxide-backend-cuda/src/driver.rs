@@ -222,6 +222,9 @@ impl CudaDeviceBuffer {
         stream: cudaStream_t,
     ) -> Result<(), String> {
         let bytes = std::mem::size_of_val(src);
+        if bytes == 0 {
+            return Ok(());
+        }
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer capacity".to_string());
         }
@@ -244,6 +247,9 @@ impl CudaDeviceBuffer {
     /// Asynchronously copies memory from device buffer into host mutable slice.
     pub fn copy_to_host_async<T>(&self, dst: &mut [T], stream: cudaStream_t) -> Result<(), String> {
         let bytes = std::mem::size_of_val(dst);
+        if bytes == 0 {
+            return Ok(());
+        }
         if bytes > self.size_bytes {
             return Err("Destination slice exceeds device buffer size".to_string());
         }
