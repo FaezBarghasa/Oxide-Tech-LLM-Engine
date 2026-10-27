@@ -635,7 +635,7 @@ int launch_cuda_gemv_q4_k(
     cudaStream_t stream
 ) {
     gemv_q4_k_cuda_kernel<<<m, 256, 0, stream>>>(
-        y, raw_blocks, x, m, k
+        y, (const uint8_t*)raw_blocks, x, m, k
     );
     return cudaGetLastError();
 }

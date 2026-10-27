@@ -132,6 +132,7 @@ pub struct CudaBackend {
     pub embedding_lookup: Option<Box<dyn Fn(usize, &mut [f32]) + Send + Sync>>,
     pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
     pub lm_head_quant_type: u32,
+    pub rope_theta: f32,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -206,6 +207,7 @@ impl CudaBackend {
             embedding_lookup: None,
             mmap_handle: None,
             lm_head_quant_type: 1,
+            rope_theta: 10_000.0,
         }
     }
 
@@ -610,7 +612,7 @@ impl HardwareBackend for CudaBackend {
                                 self.num_heads as i32,
                                 self.num_kv_heads as i32,
                                 self.head_dim as i32,
-                                10000.0,
+                                self.rope_theta,
                                 s,
                             );
                         }
@@ -821,8 +823,12 @@ impl HardwareBackend for CudaBackend {
                 let mut best_tok = 1u32;
                 let mut max_val = f32::NEG_INFINITY;
                 for (idx, &v) in host_logits.iter().enumerate() {
-                    if v > max_val {
-                        max_val = v;
+                    let mut score = v;
+                    if cmd.input_token == idx as u32 {
+                        score = if score > 0.0 { score / 1.15 } else { score * 1.15 };
+                    }
+                    if score > max_val {
+                        max_val = score;
                         best_tok = idx as u32;
                     }
                 }

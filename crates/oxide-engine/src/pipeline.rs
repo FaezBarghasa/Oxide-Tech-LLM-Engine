@@ -424,6 +424,10 @@ impl SpecializedPipeline {
                         token_embd_bytes,
                         model.lm_head.quant_type(),
                     )?;
+                    let theta = f32::from_bits(model.config.rope_theta);
+                    if theta > 0.0 {
+                        backend.rope_theta = theta;
+                    }
                     if let Some(mmap) = model.mmap_handle.clone() {
                         backend.set_mmap_handle(mmap);
                     }
@@ -487,7 +491,15 @@ impl SpecializedPipeline {
                             layer.k_proj.cols(),
                             layer.gate_proj.rows(),
                             layer.gate_proj.cols(),
-                            layer.q_proj.quant_type(),
+                            [
+                                layer.q_proj.quant_type(),
+                                layer.k_proj.quant_type(),
+                                layer.v_proj.quant_type(),
+                                layer.o_proj.quant_type(),
+                                layer.gate_proj.quant_type(),
+                                layer.up_proj.quant_type(),
+                                layer.down_proj.quant_type(),
+                            ],
                         )?;
                     }
                     if backend.layers.is_empty() {
@@ -683,7 +695,15 @@ impl SpecializedPipeline {
                         layer.k_proj.cols(),
                         layer.gate_proj.rows(),
                         layer.gate_proj.cols(),
-                        layer.q_proj.quant_type(),
+                        [
+                            layer.q_proj.quant_type(),
+                            layer.k_proj.quant_type(),
+                            layer.v_proj.quant_type(),
+                            layer.o_proj.quant_type(),
+                            layer.gate_proj.quant_type(),
+                            layer.up_proj.quant_type(),
+                            layer.down_proj.quant_type(),
+                        ],
                     );
                 }
                 return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
