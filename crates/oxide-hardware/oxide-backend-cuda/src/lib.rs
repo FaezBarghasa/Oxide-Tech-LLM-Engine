@@ -260,6 +260,15 @@ impl CudaBackend {
                     k as i32,
                     stream,
                 );
+            } else if quant_type == 4 {
+                driver::launch_cuda_gemv_ptq1_0(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
             } else {
                 driver::launch_cuda_gemv_q8_0(
                     d_y,

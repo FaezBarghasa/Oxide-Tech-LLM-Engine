@@ -179,6 +179,93 @@ struct __attribute__((packed)) BlockQ6_K_Gpu {
     uint16_t d;
 };
 
+struct __attribute__((packed)) BlockPTQ1_0_Gpu {
+    uint8_t qs[24];
+    uint8_t qh[2];
+    uint16_t d;
+};
+
+static __device__ __forceinline__ int ptq1_0_trit_gpu(const BlockPTQ1_0_Gpu* blk, int e) {
+    uint8_t b; int n;
+    if (e < 80) {
+        b = blk->qs[e & 15];
+        n = e >> 4;
+    } else if (e < 120) {
+        int t = e - 80;
+        b = blk->qs[16 + (t & 7)];
+        n = t >> 3;
+    } else {
+        int t = e - 120;
+        b = blk->qh[t & 1];
+        n = t >> 1;
+    }
+    uint32_t v = b;
+    for (int i = 0; i < n; ++i) {
+        v = (v * 3) & 0xFF;
+    }
+    return (int)((v * 3) >> 8) - 1;
+}
+
+/**
+ * Custom CUDA Kernel: Quantized PTQ1_0 (Ternary 1.58-bit / 1.75-bit) Matrix-Vector GEMV
+ * (28-byte block: 128 elements packed in base-3 x FP32 Activations).
+ */
+__global__ void gemv_ptq1_0_cuda_kernel(
+    float* __restrict__ y,
+    const void* __restrict__ raw_blocks,
+    const float* __restrict__ x,
+    int m,
+    int k
+) {
+    int row = blockIdx.x;
+    if (row >= m) return;
+
+    int tid = threadIdx.x;
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+    int num_warps = blockDim.x / 32;
+    int num_blocks_per_row = k / 128;
+
+    const BlockPTQ1_0_Gpu* row_blocks = (const BlockPTQ1_0_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 28);
+
+    float warp_dot = 0.0f;
+
+    for (int b = warp_id; b < num_blocks_per_row; b += num_warps) {
+        const BlockPTQ1_0_Gpu* blk = &row_blocks[b];
+        float d = __half2float(*((const half*)&blk->d));
+        float sum_e = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            int e = lane_id + i * 32;
+            int t = ptq1_0_trit_gpu(blk, e);
+            float x_val = x[b * 128 + e];
+            sum_e += (float)t * x_val;
+        }
+        warp_dot += d * sum_e;
+    }
+
+    // Warp reduction across the 32 lanes
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        warp_dot += __shfl_down_sync(0xFFFFFFFF, warp_dot, offset);
+    }
+
+    __shared__ float s_warp_acc[32];
+    if (lane_id == 0) {
+        s_warp_acc[warp_id] = warp_dot;
+    }
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float block_acc = (lane_id < num_warps) ? s_warp_acc[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            block_acc += __shfl_down_sync(0xFFFFFFFF, block_acc, offset);
+        }
+        if (lane_id == 0) {
+            y[row] = block_acc;
+        }
+    }
+}
+
 /**
  * Custom CUDA Kernel: Quantized Q8_0 Matrix-Vector GEMV (34-byte Interleaved Block x FP32 Activations).
  */
@@ -657,6 +744,21 @@ int launch_cuda_gemv_q4_k(
     cudaStream_t stream
 ) {
     gemv_q4_k_cuda_kernel<<<m, 256, 0, stream>>>(
+        y, (const uint8_t*)raw_blocks, x, m, k
+    );
+    return cudaGetLastError();
+}
+
+int launch_cuda_gemv_ptq1_0(
+    float* y,
+    const void* raw_blocks,
+    const float* x,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0) return 0;
+    gemv_ptq1_0_cuda_kernel<<<m, 256, 0, stream>>>(
         y, (const uint8_t*)raw_blocks, x, m, k
     );
     return cudaGetLastError();

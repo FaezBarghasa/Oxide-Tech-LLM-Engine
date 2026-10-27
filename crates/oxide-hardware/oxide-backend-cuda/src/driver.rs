@@ -118,6 +118,15 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_gemv_ptq1_0(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const f32,
+        m: i32,
+        k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_vector_add(a: *mut f32, b: *const f32, n: i32, stream: cudaStream_t) -> i32;
 
     pub fn launch_cuda_swiglu(
