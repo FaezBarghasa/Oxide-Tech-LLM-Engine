@@ -125,6 +125,7 @@ pub struct CudaBackend {
     pub seq_pos: usize,
     pub embedding_lookup: Option<Box<dyn Fn(usize, &mut [f32]) + Send + Sync>>,
     pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
+    pub lm_head_quant_type: u32,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -198,6 +199,34 @@ impl CudaBackend {
             seq_pos: 0,
             embedding_lookup: None,
             mmap_handle: None,
+            lm_head_quant_type: 1,
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn dispatch_gemv(
+        d_y: *mut f32,
+        d_w: &CudaDeviceBuffer,
+        d_x: *const f32,
+        m: usize,
+        k: usize,
+        quant_type: u32,
+        stream: driver::cudaStream_t,
+    ) {
+        unsafe {
+            if quant_type == 1 {
+                driver::launch_cuda_gemv_q4_k(d_y, d_w.as_raw_ptr(), d_x, m as i32, k as i32, stream);
+            } else {
+                driver::launch_cuda_gemv_q8_0(
+                    d_y,
+                    d_w.as_typed_ptr::<i8>(),
+                    d_x,
+                    d_w.as_typed_ptr::<u16>(),
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            }
         }
     }
 
@@ -318,6 +347,8 @@ impl CudaBackend {
         self.d_output_norm = Some(d_out_norm);
 
         if !lm_head_bytes.is_empty() {
+            let is_q4_k = lm_head_bytes.len() == (vocab_size * hidden_dim / 256) * 144;
+            self.lm_head_quant_type = if is_q4_k { 1 } else { 3 };
             let mut d_lm = CudaDeviceBuffer::allocate(lm_head_bytes.len())
                 .map_err(EngineError::BackendError)?;
             d_lm.copy_from_host_async(lm_head_bytes, s)
@@ -516,13 +547,13 @@ impl HardwareBackend for CudaBackend {
                     // Q Projection
                     if let Some(d_q) = &mut self.d_scratch_q {
                         unsafe {
-                            driver::launch_cuda_gemv_q8_0(
+                            Self::dispatch_gemv(
                                 d_q.as_typed_ptr::<f32>(),
-                                layer.d_wq.as_typed_ptr::<i8>(),
+                                &layer.d_wq,
                                 d_norm.as_typed_ptr::<f32>(),
-                                layer.d_wq.as_typed_ptr::<u16>(),
-                                layer.q_m as i32,
-                                layer.q_k as i32,
+                                layer.q_m,
+                                layer.q_k,
+                                layer.quant_type,
                                 s,
                             );
                         }
@@ -531,13 +562,13 @@ impl HardwareBackend for CudaBackend {
                     // K Projection
                     if let Some(d_k) = &mut self.d_scratch_k {
                         unsafe {
-                            driver::launch_cuda_gemv_q8_0(
+                            Self::dispatch_gemv(
                                 d_k.as_typed_ptr::<f32>(),
-                                layer.d_wk.as_typed_ptr::<i8>(),
+                                &layer.d_wk,
                                 d_norm.as_typed_ptr::<f32>(),
-                                layer.d_wk.as_typed_ptr::<u16>(),
-                                layer.kv_m as i32,
-                                layer.kv_k as i32,
+                                layer.kv_m,
+                                layer.kv_k,
+                                layer.quant_type,
                                 s,
                             );
                         }
@@ -546,13 +577,13 @@ impl HardwareBackend for CudaBackend {
                     // V Projection
                     if let Some(d_v) = &mut self.d_scratch_v {
                         unsafe {
-                            driver::launch_cuda_gemv_q8_0(
+                            Self::dispatch_gemv(
                                 d_v.as_typed_ptr::<f32>(),
-                                layer.d_wv.as_typed_ptr::<i8>(),
+                                &layer.d_wv,
                                 d_norm.as_typed_ptr::<f32>(),
-                                layer.d_wv.as_typed_ptr::<u16>(),
-                                layer.kv_m as i32,
-                                layer.kv_k as i32,
+                                layer.kv_m,
+                                layer.kv_k,
+                                layer.quant_type,
                                 s,
                             );
                         }
@@ -637,13 +668,13 @@ impl HardwareBackend for CudaBackend {
                         (&self.d_scratch_attn_out, &mut self.d_scratch_act)
                     {
                         unsafe {
-                            driver::launch_cuda_gemv_q8_0(
+                            Self::dispatch_gemv(
                                 d_act.as_typed_ptr::<f32>(),
-                                layer.d_wo.as_typed_ptr::<i8>(),
+                                &layer.d_wo,
                                 d_out.as_typed_ptr::<f32>(),
-                                layer.d_wo.as_typed_ptr::<u16>(),
-                                h as i32,
-                                layer.q_m as i32,
+                                h,
+                                layer.q_m,
+                                layer.quant_type,
                                 s,
                             );
                         }
@@ -679,22 +710,22 @@ impl HardwareBackend for CudaBackend {
                         (&mut self.d_scratch_gate, &mut self.d_scratch_up)
                     {
                         unsafe {
-                            driver::launch_cuda_gemv_q8_0(
+                            Self::dispatch_gemv(
                                 d_gate.as_typed_ptr::<f32>(),
-                                layer.d_w1.as_typed_ptr::<i8>(),
+                                &layer.d_w1,
                                 d_norm.as_typed_ptr::<f32>(),
-                                layer.d_w1.as_typed_ptr::<u16>(),
-                                layer.inter_m as i32,
-                                h as i32,
+                                layer.inter_m,
+                                h,
+                                layer.quant_type,
                                 s,
                             );
-                            driver::launch_cuda_gemv_q8_0(
+                            Self::dispatch_gemv(
                                 d_up.as_typed_ptr::<f32>(),
-                                layer.d_w3.as_typed_ptr::<i8>(),
+                                &layer.d_w3,
                                 d_norm.as_typed_ptr::<f32>(),
-                                layer.d_w3.as_typed_ptr::<u16>(),
-                                layer.inter_m as i32,
-                                h as i32,
+                                layer.inter_m,
+                                h,
+                                layer.quant_type,
                                 s,
                             );
                             driver::launch_cuda_swiglu(
@@ -712,13 +743,13 @@ impl HardwareBackend for CudaBackend {
                         (&self.d_scratch_gate, &mut self.d_scratch_act)
                     {
                         unsafe {
-                            driver::launch_cuda_gemv_q8_0(
+                            Self::dispatch_gemv(
                                 d_act.as_typed_ptr::<f32>(),
-                                layer.d_w2.as_typed_ptr::<i8>(),
+                                &layer.d_w2,
                                 d_gate.as_typed_ptr::<f32>(),
-                                layer.d_w2.as_typed_ptr::<u16>(),
-                                h as i32,
-                                layer.inter_m as i32,
+                                h,
+                                layer.inter_m,
+                                layer.quant_type,
                                 s,
                             );
                         }
@@ -762,13 +793,13 @@ impl HardwareBackend for CudaBackend {
                 (&self.d_scratch_norm, &self.d_lm_head, &mut self.d_logits)
             {
                 unsafe {
-                    driver::launch_cuda_gemv_q8_0(
+                    Self::dispatch_gemv(
                         d_logits.as_typed_ptr::<f32>(),
-                        d_lm.as_typed_ptr::<i8>(),
+                        d_lm,
                         d_norm.as_typed_ptr::<f32>(),
-                        d_lm.as_typed_ptr::<u16>(),
-                        self.vocab_size as i32,
-                        h as i32,
+                        self.vocab_size,
+                        h,
+                        self.lm_head_quant_type,
                         s,
                     );
                 }
