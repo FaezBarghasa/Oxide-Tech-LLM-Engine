@@ -278,6 +278,33 @@ impl CudaBackend {
                     k as i32,
                     stream,
                 );
+            } else if quant_type == 5 {
+                driver::launch_cuda_gemv_q3_k(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else if quant_type == 6 {
+                driver::launch_cuda_gemv_q2_k(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else if quant_type == 7 {
+                driver::launch_cuda_gemv_q5_k(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
             } else {
                 driver::launch_cuda_gemv_q8_0(
                     d_y,

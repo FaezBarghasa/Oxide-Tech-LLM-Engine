@@ -469,8 +469,8 @@ impl BlockQ8_1 {
 // ============================================================================
 
 /// Q2_K: 256 weights per super-block (2-bit weights, 16 scales per super-block).
-#[repr(C, align(32))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockQ2_K {
     pub scales: [u8; 16],
     pub qs: [u8; 64], // 256 elements packed at 2 bits each = 64 bytes
@@ -535,8 +535,8 @@ impl BlockQ2_K {
 }
 
 /// Q3_K: 256 weights per super-block (3-bit weights).
-#[repr(C, align(32))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockQ3_K {
     pub hmask: [u8; 32], // High bits for 256 values (1 bit each = 32 bytes)
     pub qs: [u8; 64],    // Low 2 bits for 256 values = 64 bytes
