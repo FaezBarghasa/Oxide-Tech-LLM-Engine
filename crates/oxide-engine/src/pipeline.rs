@@ -422,6 +422,7 @@ impl SpecializedPipeline {
                         &model.output_norm,
                         model.lm_head.as_raw_bytes(),
                         token_embd_bytes,
+                        model.lm_head.quant_type(),
                     )?;
                     if let Some(mmap) = model.mmap_handle.clone() {
                         backend.set_mmap_handle(mmap);
@@ -617,6 +618,7 @@ impl SpecializedPipeline {
                     &model.output_norm,
                     model.lm_head.as_raw_bytes(),
                     token_embd_bytes,
+                    model.lm_head.quant_type(),
                 );
                 if let Some(mmap) = model.mmap_handle.clone() {
                     backend.set_mmap_handle(mmap);

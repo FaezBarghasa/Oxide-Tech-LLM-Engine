@@ -81,7 +81,13 @@ pub struct CudaLayerWeights {
     pub kv_k: usize,
     pub inter_m: usize,
     pub inter_k: usize,
-    pub quant_type: u32,
+    pub q_quant: u32,
+    pub k_quant: u32,
+    pub v_quant: u32,
+    pub o_quant: u32,
+    pub gate_quant: u32,
+    pub up_quant: u32,
+    pub down_quant: u32,
 }
 
 impl fmt::Debug for CudaLayerWeights {
@@ -216,16 +222,10 @@ impl CudaBackend {
         unsafe {
             if quant_type == 1 {
                 driver::launch_cuda_gemv_q4_k(d_y, d_w.as_raw_ptr(), d_x, m as i32, k as i32, stream);
+            } else if quant_type == 2 {
+                driver::launch_cuda_gemv_q6_k(d_y, d_w.as_raw_ptr(), d_x, m as i32, k as i32, stream);
             } else {
-                driver::launch_cuda_gemv_q8_0(
-                    d_y,
-                    d_w.as_typed_ptr::<i8>(),
-                    d_x,
-                    d_w.as_typed_ptr::<u16>(),
-                    m as i32,
-                    k as i32,
-                    stream,
-                );
+                driver::launch_cuda_gemv_q8_0(d_y, d_w.as_raw_ptr(), d_x, m as i32, k as i32, stream);
             }
         }
     }
@@ -274,6 +274,7 @@ impl CudaBackend {
         output_norm: &[f32],
         lm_head_bytes: &[u8],
         token_embd_bytes: &[u8],
+        lm_head_quant_type: u32,
     ) -> Result<()> {
         let stream = self.stream.as_ref().ok_or_else(|| {
             oxide_core::error::EngineError::BackendError("No active CUDA stream".to_string())
@@ -285,6 +286,12 @@ impl CudaBackend {
         self.num_heads = num_heads;
         self.num_kv_heads = num_kv_heads;
         self.head_dim = head_dim;
+        self.lm_head_quant_type = lm_head_quant_type;
+
+        tracing::info!(
+            "CUDA configure_model: hidden={}, vocab={}, heads={}/{}, head_dim={}, lm_head_quant={}, lm_head_bytes={}",
+            hidden_dim, vocab_size, num_heads, num_kv_heads, head_dim, lm_head_quant_type, lm_head_bytes.len()
+        );
 
         let mut d_hidden = CudaDeviceBuffer::allocate(hidden_dim * std::mem::size_of::<f32>())
             .map_err(EngineError::BackendError)?;
@@ -347,8 +354,6 @@ impl CudaBackend {
         self.d_output_norm = Some(d_out_norm);
 
         if !lm_head_bytes.is_empty() {
-            let is_q4_k = lm_head_bytes.len() == (vocab_size * hidden_dim / 256) * 144;
-            self.lm_head_quant_type = if is_q4_k { 1 } else { 3 };
             let mut d_lm = CudaDeviceBuffer::allocate(lm_head_bytes.len())
                 .map_err(EngineError::BackendError)?;
             d_lm.copy_from_host_async(lm_head_bytes, s)
@@ -388,7 +393,7 @@ impl CudaBackend {
         kv_k: usize,
         inter_m: usize,
         inter_k: usize,
-        quant_type: u32,
+        quant_types: [u32; 7],
     ) -> Result<()> {
         let stream = self
             .stream
@@ -470,7 +475,13 @@ impl CudaBackend {
             kv_k,
             inter_m,
             inter_k,
-            quant_type,
+            q_quant: quant_types[0],
+            k_quant: quant_types[1],
+            v_quant: quant_types[2],
+            o_quant: quant_types[3],
+            gate_quant: quant_types[4],
+            up_quant: quant_types[5],
+            down_quant: quant_types[6],
         });
 
         stream.synchronize().map_err(EngineError::BackendError)?;
@@ -553,7 +564,7 @@ impl HardwareBackend for CudaBackend {
                                 d_norm.as_typed_ptr::<f32>(),
                                 layer.q_m,
                                 layer.q_k,
-                                layer.quant_type,
+                                layer.q_quant,
                                 s,
                             );
                         }
@@ -568,7 +579,7 @@ impl HardwareBackend for CudaBackend {
                                 d_norm.as_typed_ptr::<f32>(),
                                 layer.kv_m,
                                 layer.kv_k,
-                                layer.quant_type,
+                                layer.k_quant,
                                 s,
                             );
                         }
@@ -583,7 +594,7 @@ impl HardwareBackend for CudaBackend {
                                 d_norm.as_typed_ptr::<f32>(),
                                 layer.kv_m,
                                 layer.kv_k,
-                                layer.quant_type,
+                                layer.v_quant,
                                 s,
                             );
                         }
@@ -674,7 +685,7 @@ impl HardwareBackend for CudaBackend {
                                 d_out.as_typed_ptr::<f32>(),
                                 h,
                                 layer.q_m,
-                                layer.quant_type,
+                                layer.o_quant,
                                 s,
                             );
                         }
@@ -716,7 +727,7 @@ impl HardwareBackend for CudaBackend {
                                 d_norm.as_typed_ptr::<f32>(),
                                 layer.inter_m,
                                 h,
-                                layer.quant_type,
+                                layer.gate_quant,
                                 s,
                             );
                             Self::dispatch_gemv(
@@ -725,7 +736,7 @@ impl HardwareBackend for CudaBackend {
                                 d_norm.as_typed_ptr::<f32>(),
                                 layer.inter_m,
                                 h,
-                                layer.quant_type,
+                                layer.up_quant,
                                 s,
                             );
                             driver::launch_cuda_swiglu(
@@ -749,7 +760,7 @@ impl HardwareBackend for CudaBackend {
                                 d_gate.as_typed_ptr::<f32>(),
                                 h,
                                 layer.inter_m,
-                                layer.quant_type,
+                                layer.down_quant,
                                 s,
                             );
                         }
@@ -814,6 +825,12 @@ impl HardwareBackend for CudaBackend {
                         max_val = v;
                         best_tok = idx as u32;
                     }
+                }
+                if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
+                    tracing::info!(
+                        "CUDA pos {}: best_tok={}, max_val={}, logits[0..5]={:?}",
+                        pos, best_tok, max_val, &host_logits[0..5.min(host_logits.len())]
+                    );
                 }
                 if slot < self.host_token_buffer.len() {
                     self.host_token_buffer[slot] = best_tok;

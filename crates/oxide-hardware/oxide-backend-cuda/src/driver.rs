@@ -93,9 +93,17 @@ unsafe extern "C" {
 
     pub fn launch_cuda_gemv_q8_0(
         y: *mut f32,
-        weight_bytes: *const i8,
+        raw_blocks: *const std::ffi::c_void,
         x: *const f32,
-        scales: *const u16,
+        m: i32,
+        k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_gemv_q6_k(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const f32,
         m: i32,
         k: i32,
         stream: cudaStream_t,
