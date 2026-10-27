@@ -77,7 +77,9 @@ impl Llama3Config {
 
     #[must_use]
     pub fn max_head_dim(&self) -> usize {
-        self.head_dim_full.unwrap_or(self.head_dim).max(self.head_dim)
+        self.head_dim_full
+            .unwrap_or(self.head_dim)
+            .max(self.head_dim)
     }
 
     #[must_use]
@@ -164,14 +166,20 @@ impl Llama3Config {
         };
 
         // Determine accurate intermediate_dim from ffn tensor shapes
-        let intermediate_dim = if let Some(t) = gguf.tensors.get("blk.0.ffn_gate.weight").or_else(|| gguf.tensors.get("blk.0.ffn_up.weight")) {
+        let intermediate_dim = if let Some(t) = gguf
+            .tensors
+            .get("blk.0.ffn_gate.weight")
+            .or_else(|| gguf.tensors.get("blk.0.ffn_up.weight"))
+        {
             if t.dimensions.len() >= 2 {
                 t.dimensions[1] as usize
             } else {
-                gguf.get_u64(&format!("{arch}.feed_forward_length")).unwrap_or((hidden_dim * 4) as u64) as usize
+                gguf.get_u64(&format!("{arch}.feed_forward_length"))
+                    .unwrap_or((hidden_dim * 4) as u64) as usize
             }
         } else {
-            gguf.get_u64(&format!("{arch}.feed_forward_length")).unwrap_or((hidden_dim * 4) as u64) as usize
+            gguf.get_u64(&format!("{arch}.feed_forward_length"))
+                .unwrap_or((hidden_dim * 4) as u64) as usize
         };
 
         let max_seq_len = gguf
@@ -187,7 +195,9 @@ impl Llama3Config {
             .unwrap_or(128_256) as usize;
         let eos_token_id = gguf.get_u32("tokenizer.ggml.eos_token_id");
 
-        let rope_theta = gguf.get_f32(&format!("{arch}.rope.freq_base")).unwrap_or(500_000.0);
+        let rope_theta = gguf
+            .get_f32(&format!("{arch}.rope.freq_base"))
+            .unwrap_or(500_000.0);
         let key_len = gguf
             .get_u64(&format!("{arch}.attention.key_length"))
             .map(|v| v as usize);
@@ -205,7 +215,9 @@ impl Llama3Config {
 
         let is_gemma = arch.contains("gemma");
         let is_qwen = arch.contains("qwen");
-        let final_logit_softcapping = gguf.get_f32(&format!("{arch}.final_logit_softcapping")).map(|f| f.to_bits());
+        let final_logit_softcapping = gguf
+            .get_f32(&format!("{arch}.final_logit_softcapping"))
+            .map(|f| f.to_bits());
 
         Self {
             hidden_dim,
@@ -405,20 +417,16 @@ impl QuantizedTensor {
                 let end = start + num_rows * n;
                 if end <= data.len() {
                     match data {
-                        std::borrow::Cow::Borrowed(s) => {
-                            Some(Self::F32 {
-                                data: std::borrow::Cow::Borrowed(&s[start..end]),
-                                m: num_rows,
-                                n,
-                            })
-                        }
-                        std::borrow::Cow::Owned(v) => {
-                            Some(Self::F32 {
-                                data: std::borrow::Cow::Owned(v[start..end].to_vec()),
-                                m: num_rows,
-                                n,
-                            })
-                        }
+                        std::borrow::Cow::Borrowed(s) => Some(Self::F32 {
+                            data: std::borrow::Cow::Borrowed(&s[start..end]),
+                            m: num_rows,
+                            n,
+                        }),
+                        std::borrow::Cow::Owned(v) => Some(Self::F32 {
+                            data: std::borrow::Cow::Owned(v[start..end].to_vec()),
+                            m: num_rows,
+                            n,
+                        }),
                     }
                 } else {
                     None
@@ -433,20 +441,16 @@ impl QuantizedTensor {
                 let end_b = start_b + num_rows * bpr;
                 if end_b <= blocks.len() {
                     match blocks {
-                        std::borrow::Cow::Borrowed(s) => {
-                            Some(Self::Q4_K {
-                                blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
-                                m: num_rows,
-                                n,
-                            })
-                        }
-                        std::borrow::Cow::Owned(v) => {
-                            Some(Self::Q4_K {
-                                blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
-                                m: num_rows,
-                                n,
-                            })
-                        }
+                        std::borrow::Cow::Borrowed(s) => Some(Self::Q4_K {
+                            blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
+                            m: num_rows,
+                            n,
+                        }),
+                        std::borrow::Cow::Owned(v) => Some(Self::Q4_K {
+                            blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
+                            m: num_rows,
+                            n,
+                        }),
                     }
                 } else {
                     None
@@ -461,20 +465,16 @@ impl QuantizedTensor {
                 let end_b = start_b + num_rows * bpr;
                 if end_b <= blocks.len() {
                     match blocks {
-                        std::borrow::Cow::Borrowed(s) => {
-                            Some(Self::Q6_K {
-                                blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
-                                m: num_rows,
-                                n,
-                            })
-                        }
-                        std::borrow::Cow::Owned(v) => {
-                            Some(Self::Q6_K {
-                                blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
-                                m: num_rows,
-                                n,
-                            })
-                        }
+                        std::borrow::Cow::Borrowed(s) => Some(Self::Q6_K {
+                            blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
+                            m: num_rows,
+                            n,
+                        }),
+                        std::borrow::Cow::Owned(v) => Some(Self::Q6_K {
+                            blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
+                            m: num_rows,
+                            n,
+                        }),
                     }
                 } else {
                     None
@@ -489,20 +489,16 @@ impl QuantizedTensor {
                 let end_b = start_b + num_rows * bpr;
                 if end_b <= blocks.len() {
                     match blocks {
-                        std::borrow::Cow::Borrowed(s) => {
-                            Some(Self::Q8_0 {
-                                blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
-                                m: num_rows,
-                                n,
-                            })
-                        }
-                        std::borrow::Cow::Owned(v) => {
-                            Some(Self::Q8_0 {
-                                blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
-                                m: num_rows,
-                                n,
-                            })
-                        }
+                        std::borrow::Cow::Borrowed(s) => Some(Self::Q8_0 {
+                            blocks: std::borrow::Cow::Borrowed(&s[start_b..end_b]),
+                            m: num_rows,
+                            n,
+                        }),
+                        std::borrow::Cow::Owned(v) => Some(Self::Q8_0 {
+                            blocks: std::borrow::Cow::Owned(v[start_b..end_b].to_vec()),
+                            m: num_rows,
+                            n,
+                        }),
                     }
                 } else {
                     None
@@ -572,8 +568,20 @@ impl QuantizedTensor {
                 oxide_quant::simd::gemv_q6_k(blocks.as_ref(), vector, *m, *n, output);
             }
             Self::Q8_0 { blocks, m, n } => {
-                assert!(vector.len() >= *n, "Q8_0 gemv: vector.len() ({}) < n ({}) for m={}", vector.len(), *n, *m);
-                assert!(output.len() >= *m, "Q8_0 gemv: output.len() ({}) < m ({}) for n={}", output.len(), *m, *n);
+                assert!(
+                    vector.len() >= *n,
+                    "Q8_0 gemv: vector.len() ({}) < n ({}) for m={}",
+                    vector.len(),
+                    *n,
+                    *m
+                );
+                assert!(
+                    output.len() >= *m,
+                    "Q8_0 gemv: output.len() ({}) < m ({}) for n={}",
+                    output.len(),
+                    *m,
+                    *n
+                );
                 oxide_quant::simd::gemv_q8_0(blocks.as_ref(), vector, *m, *n, output);
             }
         }
@@ -1386,7 +1394,13 @@ impl Llama3Model {
                 // Handle fused QKV for models where Q, K, V are combined in blk.{i}.attn_qkv.weight
                 if layer.q_proj.rows() == 0 {
                     let qkv_name = format!("blk.{i}.attn_qkv.weight");
-                    if let Some(qkv) = Self::extract_gguf_tensor(gguf, &qkv_name, data_slice, q_dim + 2 * kv_dim, h) {
+                    if let Some(qkv) = Self::extract_gguf_tensor(
+                        gguf,
+                        &qkv_name,
+                        data_slice,
+                        q_dim + 2 * kv_dim,
+                        h,
+                    ) {
                         if let Some(q) = qkv.slice_rows(0, q_dim) {
                             layer.q_proj = q;
                         }
@@ -1434,22 +1448,42 @@ impl Llama3Model {
                 if let Some(t) = gguf.tensors.get(&q_norm_name) {
                     let len = t.dimensions[0] as usize;
                     layer.attn_q_norm.resize(len, 1.0);
-                    Self::extract_gguf_tensor_to_buffer(gguf, &q_norm_name, data_slice, &mut layer.attn_q_norm);
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &q_norm_name,
+                        data_slice,
+                        &mut layer.attn_q_norm,
+                    );
                 }
                 if let Some(t) = gguf.tensors.get(&k_norm_name) {
                     let len = t.dimensions[0] as usize;
                     layer.attn_k_norm.resize(len, 1.0);
-                    Self::extract_gguf_tensor_to_buffer(gguf, &k_norm_name, data_slice, &mut layer.attn_k_norm);
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &k_norm_name,
+                        data_slice,
+                        &mut layer.attn_k_norm,
+                    );
                 }
                 if let Some(t) = gguf.tensors.get(&post_attn_norm_name) {
                     let len = t.dimensions[0] as usize;
                     layer.post_attn_norm.resize(len, 1.0);
-                    Self::extract_gguf_tensor_to_buffer(gguf, &post_attn_norm_name, data_slice, &mut layer.post_attn_norm);
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &post_attn_norm_name,
+                        data_slice,
+                        &mut layer.post_attn_norm,
+                    );
                 }
                 if let Some(t) = gguf.tensors.get(&post_ffw_norm_name) {
                     let len = t.dimensions[0] as usize;
                     layer.post_ffn_norm.resize(len, 1.0);
-                    Self::extract_gguf_tensor_to_buffer(gguf, &post_ffw_norm_name, data_slice, &mut layer.post_ffn_norm);
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &post_ffw_norm_name,
+                        data_slice,
+                        &mut layer.post_ffn_norm,
+                    );
                 }
             });
 
@@ -1543,7 +1577,11 @@ impl Llama3Model {
                 scratch.k.resize(k_dim, 0.0);
                 scratch.v.resize(k_dim, 0.0);
             }
-            let inter = layer.gate_proj.rows().max(layer.up_proj.rows()).max(layer.down_proj.cols());
+            let inter = layer
+                .gate_proj
+                .rows()
+                .max(layer.up_proj.rows())
+                .max(layer.down_proj.cols());
             if inter > scratch.gate.len() {
                 scratch.gate.resize(inter, 0.0);
                 scratch.up.resize(inter, 0.0);
@@ -1608,7 +1646,8 @@ impl Llama3Model {
         );
 
         // 4. LM Head projection to vocabulary logits
-        self.lm_head.gemv(&scratch.final_norm[..h], &mut scratch.logits);
+        self.lm_head
+            .gemv(&scratch.final_norm[..h], &mut scratch.logits);
 
         if let Some(cap) = self.config.final_logit_softcapping_f32() {
             if cap > 0.0 {
@@ -1649,8 +1688,13 @@ impl Llama3Model {
                 self.config.head_dim
             };
 
-            let is_swa = cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
-            let sliding_window = if is_swa { self.config.sliding_window } else { None };
+            let is_swa =
+                cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
+            let sliding_window = if is_swa {
+                self.config.sliding_window
+            } else {
+                None
+            };
             let rope_engine = if cur_head_dim <= self.config.head_dim && self.rope_swa.is_some() {
                 self.rope_swa.as_ref().unwrap()
             } else {
@@ -1686,7 +1730,13 @@ impl Llama3Model {
                         let end = start + hd;
                         if end <= scratch.q.len() {
                             tmp[..hd].copy_from_slice(&scratch.q[start..end]);
-                            Self::rms_norm(&tmp[..hd], &layer.attn_q_norm[..hd], &mut scratch.q[start..end], eps, false);
+                            Self::rms_norm(
+                                &tmp[..hd],
+                                &layer.attn_q_norm[..hd],
+                                &mut scratch.q[start..end],
+                                eps,
+                                false,
+                            );
                         }
                     }
                 }
@@ -1699,7 +1749,13 @@ impl Llama3Model {
                         let end = start + hd;
                         if end <= scratch.k.len() {
                             tmp[..hd].copy_from_slice(&scratch.k[start..end]);
-                            Self::rms_norm(&tmp[..hd], &layer.attn_k_norm[..hd], &mut scratch.k[start..end], eps, false);
+                            Self::rms_norm(
+                                &tmp[..hd],
+                                &layer.attn_k_norm[..hd],
+                                &mut scratch.k[start..end],
+                                eps,
+                                false,
+                            );
                         }
                     }
                 }
@@ -1764,7 +1820,13 @@ impl Llama3Model {
                 let mut tmp = [0.0f32; 4096];
                 if h <= tmp.len() {
                     tmp[..h].copy_from_slice(&scratch.o_proj_out[..h]);
-                    Self::rms_norm(&tmp[..h], &layer.post_attn_norm[..h], &mut scratch.o_proj_out[..h], eps, self.config.is_gemma);
+                    Self::rms_norm(
+                        &tmp[..h],
+                        &layer.post_attn_norm[..h],
+                        &mut scratch.o_proj_out[..h],
+                        eps,
+                        self.config.is_gemma,
+                    );
                 }
             }
 
@@ -1821,7 +1883,13 @@ impl Llama3Model {
                 let mut tmp = [0.0f32; 4096];
                 if h <= tmp.len() {
                     tmp[..h].copy_from_slice(&scratch.mlp_out[..h]);
-                    Self::rms_norm(&tmp[..h], &layer.post_ffn_norm[..h], &mut scratch.mlp_out[..h], eps, self.config.is_gemma);
+                    Self::rms_norm(
+                        &tmp[..h],
+                        &layer.post_ffn_norm[..h],
+                        &mut scratch.mlp_out[..h],
+                        eps,
+                        self.config.is_gemma,
+                    );
                 }
             }
 

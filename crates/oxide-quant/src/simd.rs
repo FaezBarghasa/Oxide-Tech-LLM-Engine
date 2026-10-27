@@ -519,13 +519,7 @@ unsafe fn dot_q4_0_avx2(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
 /// Compute dot product between a Q4_K super-block (128 bytes = 256 weights) and 256 f32 activations.
 #[inline]
 #[must_use]
-pub fn dot_q4_k(
-    qs: &[u8; 128],
-    scales: &[u8; 12],
-    act: &[f32; 256],
-    d: f32,
-    dmin: f32,
-) -> f32 {
+pub fn dot_q4_k(qs: &[u8; 128], scales: &[u8; 12], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
@@ -808,9 +802,9 @@ unsafe fn dot_q4_k_avx2(
     dmin: f32,
 ) -> f32 {
     use core::arch::x86_64::{
-        _mm_and_si128, _mm_loadl_epi64, _mm_set1_epi8, _mm_srli_epi16,
-        _mm256_cvtepi32_ps, _mm256_cvtepu8_epi32, _mm256_fmadd_ps, _mm256_fmsub_ps,
-        _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+        _mm_and_si128, _mm_loadl_epi64, _mm_set1_epi8, _mm_srli_epi16, _mm256_cvtepi32_ps,
+        _mm256_cvtepu8_epi32, _mm256_fmadd_ps, _mm256_fmsub_ps, _mm256_loadu_ps, _mm256_set1_ps,
+        _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
     unsafe {
@@ -860,13 +854,7 @@ unsafe fn dot_q4_k_avx2(
 /// Compute dot product between a Q6_K super-block (210 bytes = 256 weights) and 256 f32 activations.
 #[inline]
 #[must_use]
-pub fn dot_q6_k(
-    ql: &[u8; 128],
-    qh: &[u8; 64],
-    scales: &[i8; 16],
-    act: &[f32; 256],
-    d: f32,
-) -> f32 {
+pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], scales: &[i8; 16], act: &[f32; 256], d: f32) -> f32 {
     dot_q6_k_portable(ql, qh, scales, act, d)
 }
 
@@ -1398,7 +1386,13 @@ pub fn gemv_q4_k(
             let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
                 .try_into()
                 .expect("slice length 256");
-            acc += dot_q4_k(&blk.qs, &blk.scales, act_chunk, blk.d.to_f32(), blk.dmin.to_f32());
+            acc += dot_q4_k(
+                &blk.qs,
+                &blk.scales,
+                act_chunk,
+                blk.d.to_f32(),
+                blk.dmin.to_f32(),
+            );
         }
         acc
     };
@@ -1459,10 +1453,34 @@ pub fn gemv_q4_k(
                         let blk2 = &matrix[off2 + b];
                         let blk3 = &matrix[off3 + b];
 
-                        acc0 += dot_q4_k(&blk0.qs, &blk0.scales, act_chunk, blk0.d.to_f32(), blk0.dmin.to_f32());
-                        acc1 += dot_q4_k(&blk1.qs, &blk1.scales, act_chunk, blk1.d.to_f32(), blk1.dmin.to_f32());
-                        acc2 += dot_q4_k(&blk2.qs, &blk2.scales, act_chunk, blk2.d.to_f32(), blk2.dmin.to_f32());
-                        acc3 += dot_q4_k(&blk3.qs, &blk3.scales, act_chunk, blk3.d.to_f32(), blk3.dmin.to_f32());
+                        acc0 += dot_q4_k(
+                            &blk0.qs,
+                            &blk0.scales,
+                            act_chunk,
+                            blk0.d.to_f32(),
+                            blk0.dmin.to_f32(),
+                        );
+                        acc1 += dot_q4_k(
+                            &blk1.qs,
+                            &blk1.scales,
+                            act_chunk,
+                            blk1.d.to_f32(),
+                            blk1.dmin.to_f32(),
+                        );
+                        acc2 += dot_q4_k(
+                            &blk2.qs,
+                            &blk2.scales,
+                            act_chunk,
+                            blk2.d.to_f32(),
+                            blk2.dmin.to_f32(),
+                        );
+                        acc3 += dot_q4_k(
+                            &blk3.qs,
+                            &blk3.scales,
+                            act_chunk,
+                            blk3.d.to_f32(),
+                            blk3.dmin.to_f32(),
+                        );
                     }
 
                     out_chunk[i] = acc0;

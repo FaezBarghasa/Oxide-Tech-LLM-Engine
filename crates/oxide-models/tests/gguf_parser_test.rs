@@ -77,10 +77,14 @@ fn test_real_gguf_models_in_home_dir() {
         if candidate.exists() {
             println!("\n=== Inspecting: {} ===", name);
             let file = std::fs::File::open(&candidate).expect("Failed to open real GGUF model");
-            let mmap = unsafe { memmap2::Mmap::map(&file).expect("Failed to mmap real GGUF model") };
+            let mmap =
+                unsafe { memmap2::Mmap::map(&file).expect("Failed to mmap real GGUF model") };
             let parsed = GgufFile::parse(&mmap).expect("Failed to parse real GGUF model");
             let arch = parsed.architecture();
-            println!("  Architecture: {arch}, tensor count: {}", parsed.tensors.len());
+            println!(
+                "  Architecture: {arch}, tensor count: {}",
+                parsed.tensors.len()
+            );
             if let Some(m) = parsed.get_string("tokenizer.ggml.model") {
                 println!("  Tokenizer model: {m}");
             }
@@ -94,22 +98,40 @@ fn test_real_gguf_models_in_home_dir() {
                 for t_name in parsed.tensors.keys() {
                     if t_name.starts_with("blk.0.") || t_name.starts_with("blk.1.") {
                         let t = &parsed.tensors[t_name];
-                        println!("    {}: dims={:?}, quant={:?}", t_name, t.dimensions, t.quant_type);
+                        println!(
+                            "    {}: dims={:?}, quant={:?}",
+                            t_name, t.dimensions, t.quant_type
+                        );
                     }
                 }
             }
             let cfg = oxide_models::llama3::Llama3Config::from_gguf(&parsed);
-            println!("  Llama3Config: hidden={}, layers={}, heads={}, kv_heads={}, head_dim={}, inter={}, vocab={}, eps={:?}",
-                cfg.hidden_dim, cfg.num_layers, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, cfg.intermediate_dim, cfg.vocab_size, cfg.rms_norm_eps_f32());
+            println!(
+                "  Llama3Config: hidden={}, layers={}, heads={}, kv_heads={}, head_dim={}, inter={}, vocab={}, eps={:?}",
+                cfg.hidden_dim,
+                cfg.num_layers,
+                cfg.num_heads,
+                cfg.num_kv_heads,
+                cfg.head_dim,
+                cfg.intermediate_dim,
+                cfg.vocab_size,
+                cfg.rms_norm_eps_f32()
+            );
             for (k, v) in &parsed.metadata {
-                if k.starts_with(arch) || k.contains("rope") || k.contains("head") || k.contains("norm") {
+                if k.starts_with(arch)
+                    || k.contains("rope")
+                    || k.contains("head")
+                    || k.contains("norm")
+                {
                     println!("    meta: {k} = {:?}", v);
                 }
             }
-            println!("  qwen35 heads: head_count={:?}, head_count_kv={:?}, key_length={:?}",
+            println!(
+                "  qwen35 heads: head_count={:?}, head_count_kv={:?}, key_length={:?}",
                 parsed.get_u32(&format!("{arch}.attention.head_count")),
                 parsed.get_u32(&format!("{arch}.attention.head_count_kv")),
-                parsed.get_u32(&format!("{arch}.attention.key_length")));
+                parsed.get_u32(&format!("{arch}.attention.key_length"))
+            );
             for layer_idx in [0, 5, 14, 15, 20, 30] {
                 for tname in &[
                     format!("blk.{layer_idx}.attn_q.weight"),
@@ -118,31 +140,43 @@ fn test_real_gguf_models_in_home_dir() {
                     format!("blk.{layer_idx}.ffn_down.weight"),
                 ] {
                     if let Some(t) = parsed.tensors.get(tname.as_str()) {
-                        println!("    tensor {tname}: shape={:?}, type={:?}", t.dimensions, t.quant_type);
+                        println!(
+                            "    tensor {tname}: shape={:?}, type={:?}",
+                            t.dimensions, t.quant_type
+                        );
                     }
                 }
             }
             if name == &"gemma-4-e2b-it.Q8_0.gguf" {
                 println!("--- Testing Llama3Model forward step on {} ---", name);
                 let mut model = oxide_models::llama3::Llama3Model::new_empty(cfg);
-                let static_slice: &'static [u8] = unsafe {
-                    std::slice::from_raw_parts(mmap.as_ptr(), mmap.len())
-                };
-                model.load_from_gguf(&parsed, static_slice).expect("load_from_gguf");
+                let static_slice: &'static [u8] =
+                    unsafe { std::slice::from_raw_parts(mmap.as_ptr(), mmap.len()) };
+                model
+                    .load_from_gguf(&parsed, static_slice)
+                    .expect("load_from_gguf");
                 let mut kv_cache = (0..model.config.num_layers)
                     .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
                     .collect::<Vec<_>>();
                 let mut scratch = model.create_scratch();
                 let chat_prompt = "<bos><|turn>system\n<|think|><turn|>\n<|turn>user\nWhat is 2 + 2? Answer concisely.<turn|>\n<|turn>model\n";
                 let prompt_tokens = tok.encode(chat_prompt);
-                println!("Full chat prompt tokens (len={}): {:?}", prompt_tokens.len(), prompt_tokens);
+                println!(
+                    "Full chat prompt tokens (len={}): {:?}",
+                    prompt_tokens.len(),
+                    prompt_tokens
+                );
                 for (pos, &t) in prompt_tokens.iter().enumerate() {
-                    model.forward_step_with_scratch(t, pos, &mut kv_cache, &mut scratch).expect("forward_step");
+                    model
+                        .forward_step_with_scratch(t, pos, &mut kv_cache, &mut scratch)
+                        .expect("forward_step");
                     let norm = oxide_quant::simd::dot_f32(&scratch.hidden, &scratch.hidden).sqrt();
                     println!("  pos {pos} (token {t}): hidden norm = {norm:.4}");
                 }
-                let mut indexed_logits: Vec<_> = scratch.logits.iter().copied().enumerate().collect();
-                indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                let mut indexed_logits: Vec<_> =
+                    scratch.logits.iter().copied().enumerate().collect();
+                indexed_logits
+                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 println!("Top 10 logits after prompt:");
                 for (rank, (idx, val)) in indexed_logits.iter().take(10).enumerate() {
                     let text = tok.decode_token(*idx as u32);

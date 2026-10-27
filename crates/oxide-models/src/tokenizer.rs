@@ -231,11 +231,17 @@ impl GgufTokenizer {
                 let hex_tok = format!("<0x{b:02X}>");
                 if let Some(&id) = self.token_to_id.get(&hex_tok) {
                     tokens.push(id);
-                } else if b == b' ' && let Some(&id) = self.token_to_id.get("\u{2581}") {
+                } else if b == b' '
+                    && let Some(&id) = self.token_to_id.get("\u{2581}")
+                {
                     tokens.push(id);
-                } else if b == b' ' && let Some(&id) = self.token_to_id.get("\u{0120}") {
+                } else if b == b' '
+                    && let Some(&id) = self.token_to_id.get("\u{0120}")
+                {
                     tokens.push(id);
-                } else if b == b'\n' && let Some(&id) = self.token_to_id.get("\u{010A}") {
+                } else if b == b'\n'
+                    && let Some(&id) = self.token_to_id.get("\u{010A}")
+                {
                     tokens.push(id);
                 } else if let Some(&id) = self.token_to_id.get(&(b as char).to_string()) {
                     tokens.push(id);

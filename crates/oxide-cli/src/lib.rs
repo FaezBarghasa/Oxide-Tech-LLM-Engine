@@ -366,7 +366,12 @@ pub struct ChatArgs {
     pub ctx_size: usize,
 
     /// Maximum tokens to generate (-n / --max-tokens / --n-predict)
-    #[arg(short = 'n', long = "max-tokens", alias = "n-predict", default_value_t = 512)]
+    #[arg(
+        short = 'n',
+        long = "max-tokens",
+        alias = "n-predict",
+        default_value_t = 512
+    )]
     pub max_tokens: usize,
 
     /// Number of CPU threads to utilize (-t / --threads, defaults to 8)
@@ -519,7 +524,12 @@ pub struct Cli {
     pub prompt: Option<String>,
 
     /// Maximum tokens to generate (-n / --max-tokens / --n-predict)
-    #[arg(short = 'n', long = "max-tokens", alias = "n-predict", default_value_t = 512)]
+    #[arg(
+        short = 'n',
+        long = "max-tokens",
+        alias = "n-predict",
+        default_value_t = 512
+    )]
     pub max_tokens: usize,
 
     /// Number of CPU threads to utilize (-t / --threads, defaults to 8)
@@ -585,7 +595,9 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         _ => cli.threads,
     };
     if threads > 0 {
-        let _ = rayon::ThreadPoolBuilder::new().num_threads(threads).build_global();
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global();
         // SAFETY: Executed at CLI entry before other runtime threads are spawned
         unsafe {
             std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
@@ -703,7 +715,9 @@ fn run_chat_session(
     threads: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if threads > 0 {
-        let _ = rayon::ThreadPoolBuilder::new().num_threads(threads).build_global();
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global();
         // SAFETY: Executed at chat initialization
         unsafe {
             std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
@@ -720,7 +734,9 @@ fn run_chat_session(
     let mut pipeline =
         SpecializedPipeline::from_model_or_path(&current_model, backend_str, gpu, 1, weights)?;
 
-    println!("Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens}");
+    println!(
+        "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens}"
+    );
 
     let tokenizer = {
         let p = std::path::Path::new(&current_model);
@@ -753,7 +769,9 @@ fn run_chat_session(
         } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
             format!("<start_of_turn>user\n{p}<end_of_turn>\n<start_of_turn>model\n")
         } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
-            format!("<|start_header_id|>user<|end_header_id|>\n\n{p}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n")
+            format!(
+                "<|start_header_id|>user<|end_header_id|>\n\n{p}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+            )
         } else {
             p.to_string()
         };
@@ -793,11 +811,17 @@ fn run_chat_session(
             let step_res = pipeline.step(&cmd)?;
             gen_count += 1;
             cur_token = step_res.sampled_token;
-            if stop_tokens.contains(&cur_token) || Some(cur_token) == tokenizer.eos_id || step_res.is_terminal {
+            if stop_tokens.contains(&cur_token)
+                || Some(cur_token) == tokenizer.eos_id
+                || step_res.is_terminal
+            {
                 break;
             }
             let text = tokenizer.decode_token(cur_token);
-            if text.contains("<|im_end|>") || text.contains("<end_of_turn>") || text.contains("<|eot_id|>") {
+            if text.contains("<|im_end|>")
+                || text.contains("<end_of_turn>")
+                || text.contains("<|eot_id|>")
+            {
                 break;
             }
             print!("{text}");
@@ -914,7 +938,9 @@ fn run_chat_session(
         } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
             format!("<start_of_turn>user\n{trimmed}<end_of_turn>\n<start_of_turn>model\n")
         } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
-            format!("<|start_header_id|>user<|end_header_id|>\n\n{trimmed}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n")
+            format!(
+                "<|start_header_id|>user<|end_header_id|>\n\n{trimmed}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+            )
         } else {
             trimmed.to_string()
         };
@@ -932,14 +958,25 @@ fn run_chat_session(
         let _ = std::io::Write::flush(&mut std::io::stdout());
 
         // Reverse prompt stop markers (e.g. User:, \n\nUser, <|eot_id|>)
-        let reverse_prompts = ["User:", "User", "Human:", "\n\nUser", "<|eot_id|>", "<|im_end|>", "<end_of_turn>"];
+        let reverse_prompts = [
+            "User:",
+            "User",
+            "Human:",
+            "\n\nUser",
+            "<|eot_id|>",
+            "<|im_end|>",
+            "<end_of_turn>",
+        ];
         let mut generated_accum = String::from(&first_text);
 
         for _ in 0..max_tokens {
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
             cur_token = step_res.sampled_token;
-            if stop_tokens.contains(&cur_token) || Some(cur_token) == tokenizer.eos_id || step_res.is_terminal {
+            if stop_tokens.contains(&cur_token)
+                || Some(cur_token) == tokenizer.eos_id
+                || step_res.is_terminal
+            {
                 break;
             }
             let text = tokenizer.decode_token(cur_token);

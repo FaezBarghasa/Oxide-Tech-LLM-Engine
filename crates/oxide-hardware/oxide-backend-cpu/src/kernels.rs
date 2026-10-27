@@ -134,7 +134,6 @@ impl CpuLlmKernels {
             out,
         );
     }
-
 }
 
 #[cfg(test)]
@@ -148,4 +147,3 @@ mod tests {
         let _ = pool.pin_current_thread(0);
     }
 }
-

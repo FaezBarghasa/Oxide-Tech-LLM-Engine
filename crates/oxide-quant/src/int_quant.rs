@@ -643,10 +643,22 @@ impl BlockQ6_K {
             let y_offset = half * 128;
 
             for l in 0..32 {
-                let v1 = ((values[y_offset + l + 0] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
-                let v2 = ((values[y_offset + l + 32] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
-                let v3 = ((values[y_offset + l + 64] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
-                let v4 = ((values[y_offset + l + 96] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
+                let v1 = ((values[y_offset + l + 0] * inv_d)
+                    .round()
+                    .clamp(-32.0, 31.0) as i8
+                    + 32) as u8;
+                let v2 = ((values[y_offset + l + 32] * inv_d)
+                    .round()
+                    .clamp(-32.0, 31.0) as i8
+                    + 32) as u8;
+                let v3 = ((values[y_offset + l + 64] * inv_d)
+                    .round()
+                    .clamp(-32.0, 31.0) as i8
+                    + 32) as u8;
+                let v4 = ((values[y_offset + l + 96] * inv_d)
+                    .round()
+                    .clamp(-32.0, 31.0) as i8
+                    + 32) as u8;
 
                 ql[ql_offset + l] = (v1 & 0x0F) | ((v3 & 0x0F) << 4);
                 ql[ql_offset + l + 32] = (v2 & 0x0F) | ((v4 & 0x0F) << 4);

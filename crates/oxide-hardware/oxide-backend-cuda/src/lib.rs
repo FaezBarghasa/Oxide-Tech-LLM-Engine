@@ -243,11 +243,32 @@ impl CudaBackend {
     ) {
         unsafe {
             if quant_type == 1 {
-                driver::launch_cuda_gemv_q4_k(d_y, d_w.as_raw_ptr(), d_x, m as i32, k as i32, stream);
+                driver::launch_cuda_gemv_q4_k(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
             } else if quant_type == 2 {
-                driver::launch_cuda_gemv_q6_k(d_y, d_w.as_raw_ptr(), d_x, m as i32, k as i32, stream);
+                driver::launch_cuda_gemv_q6_k(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
             } else {
-                driver::launch_cuda_gemv_q8_0(d_y, d_w.as_raw_ptr(), d_x, m as i32, k as i32, stream);
+                driver::launch_cuda_gemv_q8_0(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
             }
         }
     }
@@ -312,7 +333,13 @@ impl CudaBackend {
 
         tracing::info!(
             "CUDA configure_model: hidden={}, vocab={}, heads={}/{}, head_dim={}, lm_head_quant={}, lm_head_bytes={}",
-            hidden_dim, vocab_size, num_heads, num_kv_heads, head_dim, lm_head_quant_type, lm_head_bytes.len()
+            hidden_dim,
+            vocab_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            lm_head_quant_type,
+            lm_head_bytes.len()
         );
 
         let mut d_hidden = CudaDeviceBuffer::allocate(hidden_dim * std::mem::size_of::<f32>())
@@ -468,8 +495,9 @@ impl CudaBackend {
             .map_err(EngineError::BackendError)?;
 
         let d_attn_q_norm = if !attn_q_norm.is_empty() {
-            let mut buf = CudaDeviceBuffer::allocate(attn_q_norm.len() * std::mem::size_of::<f32>())
-                .map_err(EngineError::BackendError)?;
+            let mut buf =
+                CudaDeviceBuffer::allocate(attn_q_norm.len() * std::mem::size_of::<f32>())
+                    .map_err(EngineError::BackendError)?;
             buf.copy_from_host_async(attn_q_norm, s)
                 .map_err(EngineError::BackendError)?;
             Some(buf)
@@ -478,8 +506,9 @@ impl CudaBackend {
         };
 
         let d_attn_k_norm = if !attn_k_norm.is_empty() {
-            let mut buf = CudaDeviceBuffer::allocate(attn_k_norm.len() * std::mem::size_of::<f32>())
-                .map_err(EngineError::BackendError)?;
+            let mut buf =
+                CudaDeviceBuffer::allocate(attn_k_norm.len() * std::mem::size_of::<f32>())
+                    .map_err(EngineError::BackendError)?;
             buf.copy_from_host_async(attn_k_norm, s)
                 .map_err(EngineError::BackendError)?;
             Some(buf)
@@ -647,7 +676,9 @@ impl HardwareBackend for CudaBackend {
                     }
 
                     // QK-Norm (applied per-head before RoPE if present)
-                    if let (Some(d_q), Some(d_q_norm)) = (&mut self.d_scratch_q, &layer.d_attn_q_norm) {
+                    if let (Some(d_q), Some(d_q_norm)) =
+                        (&mut self.d_scratch_q, &layer.d_attn_q_norm)
+                    {
                         unsafe {
                             driver::launch_cuda_qk_norm(
                                 d_q.as_typed_ptr::<f32>(),
@@ -659,7 +690,9 @@ impl HardwareBackend for CudaBackend {
                             );
                         }
                     }
-                    if let (Some(d_k), Some(d_k_norm)) = (&mut self.d_scratch_k, &layer.d_attn_k_norm) {
+                    if let (Some(d_k), Some(d_k_norm)) =
+                        (&mut self.d_scratch_k, &layer.d_attn_k_norm)
+                    {
                         unsafe {
                             driver::launch_cuda_qk_norm(
                                 d_k.as_typed_ptr::<f32>(),
@@ -898,9 +931,10 @@ impl HardwareBackend for CudaBackend {
                         best_tok = idx as u32;
                     }
                 }
-                
+
                 // Sample token using AcademicSamplerEngine (temperature, top-p, min-p, DRY repetition penalty)
-                let sampled_tok = self.sampler
+                let sampled_tok = self
+                    .sampler
                     .sample_token(&mut host_logits, &mut self.sampler_state, 198)
                     .unwrap_or(best_tok);
 
@@ -909,7 +943,11 @@ impl HardwareBackend for CudaBackend {
                 if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
                     tracing::info!(
                         "CUDA pos {}: greedy_top={}, sampled_tok={}, max_val={}, logits[0..5]={:?}",
-                        pos, best_tok, selected_token, max_val, &host_logits[0..5.min(host_logits.len())]
+                        pos,
+                        best_tok,
+                        selected_token,
+                        max_val,
+                        &host_logits[0..5.min(host_logits.len())]
                     );
                 }
                 if slot < self.host_token_buffer.len() {
@@ -918,7 +956,8 @@ impl HardwareBackend for CudaBackend {
             }
         } else {
             return Err(oxide_core::error::EngineError::BackendError(
-                "Physical CUDA transformer layers not loaded into GPU VRAM for execution".to_string(),
+                "Physical CUDA transformer layers not loaded into GPU VRAM for execution"
+                    .to_string(),
             ));
         }
 

@@ -153,7 +153,11 @@ impl SpecializedPipeline {
                 for (i, &l) in scratch.logits.iter().enumerate() {
                     let mut score = l;
                     if cmd.input_token == i as u32 {
-                        score = if score > 0.0 { score / 1.15 } else { score * 1.15 };
+                        score = if score > 0.0 {
+                            score / 1.15
+                        } else {
+                            score * 1.15
+                        };
                     }
                     if score > max_val {
                         max_val = score;
@@ -267,7 +271,11 @@ impl SpecializedPipeline {
                 for (i, &l) in scratch.logits.iter().enumerate() {
                     let mut score = l;
                     if cmd.input_token == i as u32 {
-                        score = if score > 0.0 { score / 1.15 } else { score * 1.15 };
+                        score = if score > 0.0 {
+                            score / 1.15
+                        } else {
+                            score * 1.15
+                        };
                     }
                     if score > max_val {
                         max_val = score;

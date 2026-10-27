@@ -118,12 +118,7 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
-    pub fn launch_cuda_vector_add(
-        a: *mut f32,
-        b: *const f32,
-        n: i32,
-        stream: cudaStream_t,
-    ) -> i32;
+    pub fn launch_cuda_vector_add(a: *mut f32, b: *const f32, n: i32, stream: cudaStream_t) -> i32;
 
     pub fn launch_cuda_swiglu(
         out: *mut f32,

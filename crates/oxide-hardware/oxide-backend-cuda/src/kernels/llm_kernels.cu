@@ -501,31 +501,49 @@ __global__ void flash_decode_paged_kernel(
 
     float max_score = -1e20f;
     float sum_exp = 0.0f;
+    float acc_v = 0.0f;
+
+    __shared__ float s_warp_scores[32];
+    __shared__ float s_score;
+
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
 
     // Grid-stride over past KV cached tokens
     for (int t = 0; t < num_kv_tokens; t++) {
         const float* k_tok = k_cache + (t * kv_heads + kv_head_idx) * head_dim;
 
-        // Compute Q . K dot product for this head
+        // Compute Q . K dot product for this head across all warps
         float score = 0.0f;
         for (int d = tid; d < head_dim; d += blockDim.x) {
             score += q_ptr[d] * k_tok[d];
         }
 
+        // Warp reduction across the 32 lanes of this warp
         for (int offset = 16; offset > 0; offset >>= 1) {
             score += __shfl_down_sync(0xFFFFFFFF, score, offset);
         }
 
-        __shared__ float s_score;
+        if (lane_id == 0) {
+            s_warp_scores[warp_id] = score;
+        }
+        __syncthreads();
+
+        // Reduce across warps
         if (tid == 0) {
-            s_score = score * sm_scale;
+            int num_warps = blockDim.x / 32;
+            float total_score = 0.0f;
+            for (int w = 0; w < num_warps; w++) {
+                total_score += s_warp_scores[w];
+            }
+            s_score = total_score * sm_scale;
         }
         __syncthreads();
 
         // Online Softmax update
         float cur_score = s_score;
         float new_max = fmaxf(max_score, cur_score);
-        float alpha = expf(max_score - new_max);
+        float alpha = (t == 0) ? 0.0f : expf(max_score - new_max);
         float beta = expf(cur_score - new_max);
 
         max_score = new_max;
@@ -533,7 +551,7 @@ __global__ void flash_decode_paged_kernel(
 
         const float* v_tok = v_cache + (t * kv_heads + kv_head_idx) * head_dim;
         for (int d = tid; d < head_dim; d += blockDim.x) {
-            out_ptr[d] = out_ptr[d] * alpha + beta * v_tok[d];
+            acc_v = acc_v * alpha + beta * v_tok[d];
         }
         __syncthreads();
     }
@@ -542,7 +560,11 @@ __global__ void flash_decode_paged_kernel(
     if (sum_exp > 0.0f) {
         float inv_sum = 1.0f / sum_exp;
         for (int d = tid; d < head_dim; d += blockDim.x) {
-            out_ptr[d] *= inv_sum;
+            out_ptr[d] = acc_v * inv_sum;
+        }
+    } else {
+        for (int d = tid; d < head_dim; d += blockDim.x) {
+            out_ptr[d] = 0.0f;
         }
     }
 }
