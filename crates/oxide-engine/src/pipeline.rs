@@ -423,6 +423,52 @@ impl SpecializedPipeline {
                         model.lm_head.as_raw_bytes(),
                         token_embd_bytes,
                     )?;
+                    if let Some(mmap) = model.mmap_handle.clone() {
+                        backend.set_mmap_handle(mmap);
+                    }
+                    let is_gemma = model.config.is_gemma;
+                    let h = model.config.hidden_dim;
+                    let keep_mmap = model.mmap_handle.clone();
+                    if let Some(emb_tensor) = model.token_embd_tensor.clone() {
+                        let m = keep_mmap.clone();
+                        backend.set_embedding_lookup(move |tok_idx, out| {
+                            let _ = &m;
+                            emb_tensor.extract_row(tok_idx, out);
+                            if is_gemma {
+                                let scale = (h as f32).sqrt();
+                                for x in out.iter_mut() {
+                                    *x *= scale;
+                                }
+                            }
+                        });
+                    } else if !model.token_embedding.is_empty() {
+                        let emb = model.token_embedding.clone();
+                        backend.set_embedding_lookup(move |tok_idx, out| {
+                            let offset = tok_idx * h;
+                            if offset + h <= emb.len() {
+                                out.copy_from_slice(&emb[offset..offset + h]);
+                            } else {
+                                out.fill(0.0);
+                            }
+                            if is_gemma {
+                                let scale = (h as f32).sqrt();
+                                for x in out.iter_mut() {
+                                    *x *= scale;
+                                }
+                            }
+                        });
+                    } else {
+                        let lm = model.lm_head.clone();
+                        backend.set_embedding_lookup(move |tok_idx, out| {
+                            lm.extract_row(tok_idx, out);
+                            if is_gemma {
+                                let scale = (h as f32).sqrt();
+                                for x in out.iter_mut() {
+                                    *x *= scale;
+                                }
+                            }
+                        });
+                    }
                     for layer in &model.layers {
                         backend.add_layer_weights(
                             layer.q_proj.as_raw_bytes(),
@@ -572,6 +618,52 @@ impl SpecializedPipeline {
                     model.lm_head.as_raw_bytes(),
                     token_embd_bytes,
                 );
+                if let Some(mmap) = model.mmap_handle.clone() {
+                    backend.set_mmap_handle(mmap);
+                }
+                let is_gemma = model.config.is_gemma;
+                let h = model.config.hidden_dim;
+                let keep_mmap = model.mmap_handle.clone();
+                if let Some(emb_tensor) = model.token_embd_tensor.clone() {
+                    let m = keep_mmap.clone();
+                    backend.set_embedding_lookup(move |tok_idx, out| {
+                        let _ = &m;
+                        emb_tensor.extract_row(tok_idx, out);
+                        if is_gemma {
+                            let scale = (h as f32).sqrt();
+                            for x in out.iter_mut() {
+                                *x *= scale;
+                            }
+                        }
+                    });
+                } else if !model.token_embedding.is_empty() {
+                    let emb = model.token_embedding.clone();
+                    backend.set_embedding_lookup(move |tok_idx, out| {
+                        let offset = tok_idx * h;
+                        if offset + h <= emb.len() {
+                            out.copy_from_slice(&emb[offset..offset + h]);
+                        } else {
+                            out.fill(0.0);
+                        }
+                        if is_gemma {
+                            let scale = (h as f32).sqrt();
+                            for x in out.iter_mut() {
+                                *x *= scale;
+                            }
+                        }
+                    });
+                } else {
+                    let lm = model.lm_head.clone();
+                    backend.set_embedding_lookup(move |tok_idx, out| {
+                        lm.extract_row(tok_idx, out);
+                        if is_gemma {
+                            let scale = (h as f32).sqrt();
+                            for x in out.iter_mut() {
+                                *x *= scale;
+                            }
+                        }
+                    });
+                }
                 for layer in &model.layers {
                     let _ = backend.add_layer_weights(
                         layer.q_proj.as_raw_bytes(),

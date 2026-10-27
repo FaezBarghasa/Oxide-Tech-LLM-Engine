@@ -124,6 +124,7 @@ pub struct CudaBackend {
     pub head_dim: usize,
     pub seq_pos: usize,
     pub embedding_lookup: Option<Box<dyn Fn(usize, &mut [f32]) + Send + Sync>>,
+    pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -196,7 +197,13 @@ impl CudaBackend {
             head_dim: 0,
             seq_pos: 0,
             embedding_lookup: None,
+            mmap_handle: None,
         }
+    }
+
+    /// Retains strong reference to memory-mapped model file to prevent premature unmapping.
+    pub fn set_mmap_handle(&mut self, mmap: std::sync::Arc<memmap2::Mmap>) {
+        self.mmap_handle = Some(mmap);
     }
 
     /// Configures a host-side token embedding row dequantization callback.
@@ -469,6 +476,7 @@ impl HardwareBackend for CudaBackend {
                 lookup(tok_idx, &mut host_emb);
                 if let Some(d_hid) = &mut self.d_hidden {
                     let _ = d_hid.copy_from_host_async(&host_emb, s);
+                    let _ = stream.synchronize();
                 }
             } else if let Some(d_emb) = &self.d_token_embd {
                 let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);

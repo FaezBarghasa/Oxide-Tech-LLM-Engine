@@ -769,8 +769,15 @@ fn run_chat_session(
         // 1. Prefill prompt tokens through transformer forward pass
         for &tok in &prompt_tokens {
             let cmd = StepCommand::new(1, tok, 0, false);
-            let step_res = pipeline.step(&cmd)?;
-            cur_token = step_res.sampled_token;
+            match pipeline.step(&cmd) {
+                Ok(res) => {
+                    cur_token = res.sampled_token;
+                }
+                Err(err) => {
+                    eprintln!("[ERROR] pipeline.step failed on token {tok}: {err:?}");
+                    return Err(Box::new(err));
+                }
+            }
         }
         let ttft = Some(t_start.elapsed());
 
