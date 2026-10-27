@@ -157,6 +157,15 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_qk_norm(
+        qk: *mut f32,
+        weight: *const f32,
+        num_heads: i32,
+        head_dim: i32,
+        eps: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn fwht_kernel_128(d_out: *mut f32, d_in: *const f32, num_blocks: i32);
 }
 

@@ -703,4 +703,79 @@ int launch_cuda_flash_decode(
     return cudaGetLastError();
 }
 
+/**
+ * Custom CUDA Kernel: Per-head QK-Norm (RMSNorm per head across head_dim).
+ * Applied to Q and K separately before RoPE embedding.
+ */
+__global__ void qk_norm_f32_kernel(
+    float* __restrict__ qk,
+    const float* __restrict__ weight,
+    int num_heads,
+    int head_dim,
+    float eps
+) {
+    int head_idx = blockIdx.x;
+    if (head_idx >= num_heads) return;
+
+    int tid = threadIdx.x;
+    float* head_vec = qk + head_idx * head_dim;
+
+    float sum_sq = 0.0f;
+    for (int i = tid; i < head_dim; i += blockDim.x) {
+        float val = head_vec[i];
+        sum_sq += val * val;
+    }
+
+    // Warp reduction
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
+    }
+
+    __shared__ float s_inv_rms;
+    __shared__ float warp_sums[32];
+
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+
+    if (lane_id == 0) {
+        warp_sums[warp_id] = sum_sq;
+    }
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float b_sum = (lane_id < (blockDim.x / 32)) ? warp_sums[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            b_sum += __shfl_down_sync(0xFFFFFFFF, b_sum, offset);
+        }
+        if (lane_id == 0) {
+            s_inv_rms = rsqrtf((b_sum / (float)head_dim) + eps);
+        }
+    }
+    __syncthreads();
+
+    float inv_rms = s_inv_rms;
+    for (int i = tid; i < head_dim; i += blockDim.x) {
+        head_vec[i] = head_vec[i] * inv_rms * weight[i];
+    }
 }
+
+int launch_cuda_qk_norm(
+    float* qk,
+    const float* weight,
+    int num_heads,
+    int head_dim,
+    float eps,
+    cudaStream_t stream
+) {
+    if (!qk || !weight || num_heads <= 0 || head_dim <= 0) return 0;
+    int block_size = 128;
+    if (head_dim > 128) block_size = 256;
+    if (head_dim < 128) block_size = head_dim;
+    qk_norm_f32_kernel<<<num_heads, block_size, 0, stream>>>(
+        qk, weight, num_heads, head_dim, eps
+    );
+    return cudaGetLastError();
+}
+
+}
+

@@ -75,6 +75,8 @@ pub struct CudaLayerWeights {
     pub d_w2: CudaDeviceBuffer,
     pub d_attn_norm: CudaDeviceBuffer,
     pub d_ffn_norm: CudaDeviceBuffer,
+    pub d_attn_q_norm: Option<CudaDeviceBuffer>,
+    pub d_attn_k_norm: Option<CudaDeviceBuffer>,
     pub q_m: usize,
     pub q_k: usize,
     pub kv_m: usize,
@@ -133,6 +135,8 @@ pub struct CudaBackend {
     pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
     pub lm_head_quant_type: u32,
     pub rope_theta: f32,
+    pub sampler: oxide_core::sampler::AcademicSamplerEngine,
+    pub sampler_state: oxide_core::sampler::SamplerState,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -208,6 +212,22 @@ impl CudaBackend {
             mmap_handle: None,
             lm_head_quant_type: 1,
             rope_theta: 10_000.0,
+            sampler: {
+                let mut sampling_config = oxide_core::sampler::SamplingConfig::default();
+                sampling_config.temperature = 0.7;
+                sampling_config.top_p = 0.95;
+                sampling_config.min_p = 0.05;
+                sampling_config.dry_multiplier = 0.8;
+                oxide_core::sampler::AcademicSamplerEngine::new(sampling_config)
+            },
+            sampler_state: {
+                let mut sampling_config = oxide_core::sampler::SamplingConfig::default();
+                sampling_config.temperature = 0.7;
+                sampling_config.top_p = 0.95;
+                sampling_config.min_p = 0.05;
+                sampling_config.dry_multiplier = 0.8;
+                oxide_core::sampler::SamplerState::from_config(&sampling_config)
+            },
         }
     }
 
@@ -389,6 +409,8 @@ impl CudaBackend {
         w2: &[u8],
         attn_norm: &[f32],
         ffn_norm: &[f32],
+        attn_q_norm: &[f32],
+        attn_k_norm: &[f32],
         q_m: usize,
         q_k: usize,
         kv_m: usize,
@@ -445,6 +467,26 @@ impl CudaBackend {
             .copy_from_host_async(ffn_norm, s)
             .map_err(EngineError::BackendError)?;
 
+        let d_attn_q_norm = if !attn_q_norm.is_empty() {
+            let mut buf = CudaDeviceBuffer::allocate(attn_q_norm.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
+            buf.copy_from_host_async(attn_q_norm, s)
+                .map_err(EngineError::BackendError)?;
+            Some(buf)
+        } else {
+            None
+        };
+
+        let d_attn_k_norm = if !attn_k_norm.is_empty() {
+            let mut buf = CudaDeviceBuffer::allocate(attn_k_norm.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
+            buf.copy_from_host_async(attn_k_norm, s)
+                .map_err(EngineError::BackendError)?;
+            Some(buf)
+        } else {
+            None
+        };
+
         let kv_bytes =
             2048 * self.num_kv_heads.max(1) * self.head_dim.max(64) * std::mem::size_of::<f32>();
         let mut kv_k_buf =
@@ -471,6 +513,8 @@ impl CudaBackend {
             d_w2,
             d_attn_norm,
             d_ffn_norm,
+            d_attn_q_norm,
+            d_attn_k_norm,
             q_m,
             q_k,
             kv_m,
@@ -597,6 +641,32 @@ impl HardwareBackend for CudaBackend {
                                 layer.kv_m,
                                 layer.kv_k,
                                 layer.v_quant,
+                                s,
+                            );
+                        }
+                    }
+
+                    // QK-Norm (applied per-head before RoPE if present)
+                    if let (Some(d_q), Some(d_q_norm)) = (&mut self.d_scratch_q, &layer.d_attn_q_norm) {
+                        unsafe {
+                            driver::launch_cuda_qk_norm(
+                                d_q.as_typed_ptr::<f32>(),
+                                d_q_norm.as_typed_ptr::<f32>(),
+                                self.num_heads as i32,
+                                self.head_dim as i32,
+                                1e-6,
+                                s,
+                            );
+                        }
+                    }
+                    if let (Some(d_k), Some(d_k_norm)) = (&mut self.d_scratch_k, &layer.d_attn_k_norm) {
+                        unsafe {
+                            driver::launch_cuda_qk_norm(
+                                d_k.as_typed_ptr::<f32>(),
+                                d_k_norm.as_typed_ptr::<f32>(),
+                                self.num_kv_heads as i32,
+                                self.head_dim as i32,
+                                1e-6,
                                 s,
                             );
                         }
@@ -823,23 +893,27 @@ impl HardwareBackend for CudaBackend {
                 let mut best_tok = 1u32;
                 let mut max_val = f32::NEG_INFINITY;
                 for (idx, &v) in host_logits.iter().enumerate() {
-                    let mut score = v;
-                    if cmd.input_token == idx as u32 {
-                        score = if score > 0.0 { score / 1.15 } else { score * 1.15 };
-                    }
-                    if score > max_val {
-                        max_val = score;
+                    if v > max_val {
+                        max_val = v;
                         best_tok = idx as u32;
                     }
                 }
+                
+                // Sample token using AcademicSamplerEngine (temperature, top-p, min-p, DRY repetition penalty)
+                let sampled_tok = self.sampler
+                    .sample_token(&mut host_logits, &mut self.sampler_state, 198)
+                    .unwrap_or(best_tok);
+
+                let selected_token = sampled_tok;
+
                 if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
                     tracing::info!(
-                        "CUDA pos {}: best_tok={}, max_val={}, logits[0..5]={:?}",
-                        pos, best_tok, max_val, &host_logits[0..5.min(host_logits.len())]
+                        "CUDA pos {}: greedy_top={}, sampled_tok={}, max_val={}, logits[0..5]={:?}",
+                        pos, best_tok, selected_token, max_val, &host_logits[0..5.min(host_logits.len())]
                     );
                 }
                 if slot < self.host_token_buffer.len() {
-                    self.host_token_buffer[slot] = best_tok;
+                    self.host_token_buffer[slot] = selected_token;
                 }
             }
         } else {
