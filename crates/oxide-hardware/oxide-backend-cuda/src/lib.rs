@@ -96,6 +96,11 @@ pub struct CudaLayerWeights {
     pub gate_quant: u32,
     pub up_quant: u32,
     pub down_quant: u32,
+    pub d_inp_gate: Option<CudaDeviceBuffer>,
+    pub d_proj: Option<CudaDeviceBuffer>,
+    pub d_post_norm: Option<CudaDeviceBuffer>,
+    pub inp_gate_quant: u32,
+    pub proj_quant: u32,
 }
 
 impl fmt::Debug for CudaLayerWeights {
@@ -147,6 +152,12 @@ pub struct CudaBackend {
     pub sampler: oxide_core::sampler::AcademicSamplerEngine,
     pub sampler_state: oxide_core::sampler::SamplerState,
     pub kv_capacity: usize,
+    pub d_per_layer_emb: Option<CudaDeviceBuffer>,
+    pub d_scratch_gate256: Option<CudaDeviceBuffer>,
+    pub d_scratch_ple256: Option<CudaDeviceBuffer>,
+    pub host_ple_buffer: Vec<f32>,
+    pub host_emb_buffer: Vec<f32>,
+    pub per_layer_embedding_lookup: Option<Box<dyn Fn(usize, &mut [f32]) + Send + Sync>>,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -242,10 +253,23 @@ impl CudaBackend {
                 oxide_core::sampler::SamplerState::from_config(&sampling_config)
             },
             kv_capacity: 256,
+            d_per_layer_emb: None,
+            d_scratch_gate256: None,
+            d_scratch_ple256: None,
+            host_ple_buffer: Vec::new(),
+            host_emb_buffer: Vec::new(),
+            per_layer_embedding_lookup: None,
         }
     }
 
-    pub fn configure_sampling(&mut self, temp: f32, top_p: f32, top_k: usize, seed: u64, greedy: bool) {
+    pub fn configure_sampling(
+        &mut self,
+        temp: f32,
+        top_p: f32,
+        top_k: usize,
+        seed: u64,
+        greedy: bool,
+    ) {
         let mut sampling_config = oxide_core::sampler::SamplingConfig::default();
         if greedy || temp <= 0.0 {
             sampling_config.temperature = 0.0;
@@ -417,6 +441,25 @@ impl CudaBackend {
         self.embedding_lookup = Some(Box::new(f));
     }
 
+    /// Configures a host-side token per-layer embedding (PLE) row dequantization callback.
+    pub fn set_per_layer_embedding_lookup<F>(&mut self, ple_len: usize, f: F)
+    where
+        F: Fn(usize, &mut [f32]) + Send + Sync + 'static,
+    {
+        self.per_layer_embedding_lookup = Some(Box::new(f));
+        let buf_bytes = ple_len * std::mem::size_of::<f32>();
+        if self
+            .d_per_layer_emb
+            .as_ref()
+            .map_or(true, |b| b.size_bytes() < buf_bytes)
+        {
+            if let Ok(buf) = CudaDeviceBuffer::allocate(buf_bytes) {
+                self.d_per_layer_emb = Some(buf);
+            }
+        }
+        self.host_ple_buffer = vec![0.0f32; ple_len];
+    }
+
     #[must_use]
     pub fn new(device_id: usize, max_slots: usize) -> Self {
         Self::new_with_profile(device_id, max_slots, None)
@@ -524,8 +567,14 @@ impl CudaBackend {
             CudaDeviceBuffer::allocate(vocab_size * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?,
         );
-        self.d_sampled_token = Some(
-            CudaDeviceBuffer::allocate(8)
+        self.d_sampled_token =
+            Some(CudaDeviceBuffer::allocate(8).map_err(EngineError::BackendError)?);
+        self.d_scratch_gate256 = Some(
+            CudaDeviceBuffer::allocate(256 * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?,
+        );
+        self.d_scratch_ple256 = Some(
+            CudaDeviceBuffer::allocate(256 * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?,
         );
 
@@ -740,8 +789,58 @@ impl CudaBackend {
             gate_quant: quant_types[4],
             up_quant: quant_types[5],
             down_quant: quant_types[6],
+            d_inp_gate: None,
+            d_proj: None,
+            d_post_norm: None,
+            inp_gate_quant: 0,
+            proj_quant: 0,
         });
 
+        stream.synchronize().map_err(EngineError::BackendError)?;
+        Ok(())
+    }
+
+    /// Configures Per-Layer Embedding (PLE) gating, projection, and normalization weights for a layer.
+    pub fn add_layer_ple_weights(
+        &mut self,
+        layer_idx: usize,
+        inp_gate: Option<(&[u8], u32)>,
+        proj: Option<(&[u8], u32)>,
+        post_norm: &[f32],
+    ) -> Result<()> {
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| EngineError::BackendError("No active CUDA stream".to_string()))?;
+        let s = stream.raw();
+
+        if let Some(layer) = self.layers.get_mut(layer_idx) {
+            if let Some((bytes, qtype)) = inp_gate {
+                let mut d_inp =
+                    CudaDeviceBuffer::allocate(bytes.len()).map_err(EngineError::BackendError)?;
+                d_inp
+                    .copy_from_host_async(bytes, s)
+                    .map_err(EngineError::BackendError)?;
+                layer.d_inp_gate = Some(d_inp);
+                layer.inp_gate_quant = qtype;
+            }
+            if let Some((bytes, qtype)) = proj {
+                let mut d_p =
+                    CudaDeviceBuffer::allocate(bytes.len()).map_err(EngineError::BackendError)?;
+                d_p.copy_from_host_async(bytes, s)
+                    .map_err(EngineError::BackendError)?;
+                layer.d_proj = Some(d_p);
+                layer.proj_quant = qtype;
+            }
+            if !post_norm.is_empty() {
+                let mut d_pn =
+                    CudaDeviceBuffer::allocate(post_norm.len() * std::mem::size_of::<f32>())
+                        .map_err(EngineError::BackendError)?;
+                d_pn.copy_from_host_async(post_norm, s)
+                    .map_err(EngineError::BackendError)?;
+                layer.d_post_norm = Some(d_pn);
+            }
+        }
         stream.synchronize().map_err(EngineError::BackendError)?;
         Ok(())
     }
@@ -772,17 +871,12 @@ impl HardwareBackend for CudaBackend {
             // 1. Initial embedding lookup on GPU (or dequantized from host)
             if let Some(lookup) = &self.embedding_lookup {
                 let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
-                let mut host_emb = vec![0.0f32; h];
-                lookup(tok_idx, &mut host_emb);
-                tracing::info!(
-                    "CUDA pos {}: tok_idx={}, host_emb[0..5]={:?}",
-                    pos,
-                    tok_idx,
-                    &host_emb[0..5.min(host_emb.len())]
-                );
+                if self.host_emb_buffer.len() != h {
+                    self.host_emb_buffer.resize(h, 0.0f32);
+                }
+                lookup(tok_idx, &mut self.host_emb_buffer);
                 if let Some(d_hid) = &mut self.d_hidden {
-                    let _ = d_hid.copy_from_host_async(&host_emb, s);
-                    let _ = stream.synchronize();
+                    let _ = d_hid.copy_from_host_async(&self.host_emb_buffer, s);
                 }
             } else if let Some(d_emb) = &self.d_token_embd {
                 let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
@@ -803,25 +897,130 @@ impl HardwareBackend for CudaBackend {
                 }
             }
 
+            let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
+            if let (Some(d_ple), Some(ple_fn)) =
+                (&mut self.d_per_layer_emb, &self.per_layer_embedding_lookup)
+            {
+                ple_fn(tok_idx, &mut self.host_ple_buffer);
+                let _ = unsafe {
+                    driver::cudaMemcpyAsync(
+                        d_ple.as_raw_ptr(),
+                        self.host_ple_buffer.as_ptr() as *const std::ffi::c_void,
+                        self.host_ple_buffer.len() * std::mem::size_of::<f32>(),
+                        driver::CUDA_MEMCPY_HOST_TO_DEVICE,
+                        s,
+                    )
+                };
+            }
+
             let weight_offset = if self.is_gemma { 1.0f32 } else { 0.0f32 };
             let check_cuda = |name: &str, l_idx: usize| -> Result<()> {
-                if pos == 0 {
-                    let err = unsafe { driver::cudaStreamSynchronize(s) };
+                #[cfg(debug_assertions)]
+                {
+                    let err = unsafe { driver::cudaGetLastError() };
                     if err != 0 {
                         tracing::error!("CUDA error at step {} (layer {}): {}", name, l_idx, err);
-                        return Err(EngineError::BackendError(format!("CUDA error at {} (layer {}): {}", name, l_idx, err)));
+                        return Err(EngineError::BackendError(format!(
+                            "CUDA error at {} (layer {}): {}",
+                            name, l_idx, err
+                        )));
                     }
                 }
+                let _ = (name, l_idx);
                 Ok(())
             };
 
             // 2. Multi-layer forward pass on physical GPU
             for (layer_idx, layer) in self.layers.iter().enumerate() {
                 if let (Some(d_hid), Some(d_norm)) = (&self.d_hidden, &mut self.d_scratch_norm) {
+                    // 0. PLE (Per-Layer Embeddings) Block (Gemma 4)
+                    if let (Some(d_inp_gate), Some(d_proj), Some(d_ple_all)) =
+                        (&layer.d_inp_gate, &layer.d_proj, &self.d_per_layer_emb)
+                    {
+                        if let (Some(d_gate256), Some(d_ple256), Some(d_act)) = (
+                            &mut self.d_scratch_gate256,
+                            &mut self.d_scratch_ple256,
+                            &mut self.d_scratch_act,
+                        ) {
+                            let ple_offset = layer_idx * 256;
+                            let ple_ptr =
+                                unsafe { (d_ple_all.as_raw_ptr() as *const f32).add(ple_offset) };
+
+                            // 1. inp_gate GEMV: [256, h] * hidden -> gate256
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_gate256.as_typed_ptr::<f32>(),
+                                    d_inp_gate,
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    256,
+                                    h,
+                                    layer.inp_gate_quant,
+                                    s,
+                                );
+                            }
+                            check_cuda("ple_inp_gate", layer_idx)?;
+
+                            // 2. Elementwise GeLU(gate256) * ple256 -> ple256
+                            unsafe {
+                                driver::launch_cuda_gelu(
+                                    d_ple256.as_typed_ptr::<f32>(),
+                                    d_gate256.as_typed_ptr::<f32>(),
+                                    ple_ptr,
+                                    256,
+                                    s,
+                                );
+                            }
+                            check_cuda("ple_gelu", layer_idx)?;
+
+                            // 3. proj GEMV: [h, 256] * ple256 -> act (dim h)
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_act.as_typed_ptr::<f32>(),
+                                    d_proj,
+                                    d_ple256.as_typed_ptr::<f32>(),
+                                    h,
+                                    256,
+                                    layer.proj_quant,
+                                    s,
+                                );
+                            }
+                            check_cuda("ple_proj", layer_idx)?;
+
+                            // 4. Residual add to hidden
+                            unsafe {
+                                driver::launch_cuda_vector_add(
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    d_act.as_typed_ptr::<f32>(),
+                                    h as i32,
+                                    s,
+                                );
+                            }
+                            check_cuda("ple_residual", layer_idx)?;
+
+                            // 5. Post-PLE RMSNorm (post_per_layer_input_norm)
+                            if let Some(d_post_norm) = &layer.d_post_norm {
+                                if d_post_norm.size_bytes() > 0 {
+                                    unsafe {
+                                        driver::launch_cuda_rmsnorm(
+                                            d_hid.as_typed_ptr::<f32>(),
+                                            d_hid.as_typed_ptr::<f32>(),
+                                            d_post_norm.as_typed_ptr::<f32>(),
+                                            1,
+                                            h as i32,
+                                            1e-6,
+                                            weight_offset,
+                                            s,
+                                        );
+                                    }
+                                    check_cuda("ple_post_norm", layer_idx)?;
+                                }
+                            }
+                        }
+                    }
+
                     // Attention Block
-                    let has_attn = layer.d_wq.size_bytes() > 0
-                        && layer.d_wo.size_bytes() > 0
-                        && layer.q_m > 0;
+                    let has_attn =
+                        layer.d_wq.size_bytes() > 0 && layer.d_wo.size_bytes() > 0 && layer.q_m > 0;
                     if has_attn {
                         // Attention RMSNorm
                         if layer.d_attn_norm.size_bytes() > 0 {
@@ -949,7 +1148,9 @@ impl HardwareBackend for CudaBackend {
                         } else {
                             self.rope_theta
                         };
-                        if let (Some(d_q), Some(d_k)) = (&mut self.d_scratch_q, &mut self.d_scratch_k) {
+                        if let (Some(d_q), Some(d_k)) =
+                            (&mut self.d_scratch_q, &mut self.d_scratch_k)
+                        {
                             unsafe {
                                 driver::launch_cuda_rope_single(
                                     d_q.as_typed_ptr::<f32>(),
@@ -1035,7 +1236,11 @@ impl HardwareBackend for CudaBackend {
                             (&self.d_scratch_attn_out, &mut self.d_scratch_act)
                         {
                             let o_m = if layer.o_m > 0 { layer.o_m } else { h };
-                            let o_k = if layer.o_k > 0 { layer.o_k } else { cur_num_heads * cur_head_dim };
+                            let o_k = if layer.o_k > 0 {
+                                layer.o_k
+                            } else {
+                                cur_num_heads * cur_head_dim
+                            };
                             unsafe {
                                 Self::dispatch_gemv(
                                     d_act.as_typed_ptr::<f32>(),
@@ -1243,16 +1448,16 @@ impl HardwareBackend for CudaBackend {
             }
 
             // 4. LM Head Logit Projection (full vocabulary)
+            if cmd.is_prefill_chunk {
+                if slot < self.host_token_buffer.len() {
+                    self.host_token_buffer[slot] = cmd.input_token;
+                }
+                return Ok(event);
+            }
+
             if let (Some(d_norm), Some(d_lm), Some(d_logits)) =
                 (&self.d_scratch_norm, &self.d_lm_head, &mut self.d_logits)
             {
-                if pos <= 5 {
-                    let mut norm_check = vec![0.0f32; 5];
-                    let _ = d_norm.copy_to_host_async(&mut norm_check, s);
-                    let _ = stream.synchronize();
-                    tracing::info!("CUDA pos {}: norm_before_lmhead[0..5]={:?}", pos, norm_check);
-                }
-
                 unsafe {
                     Self::dispatch_gemv(
                         d_logits.as_typed_ptr::<f32>(),
@@ -1283,7 +1488,9 @@ impl HardwareBackend for CudaBackend {
                 }
 
                 // On-device argmax when greedy, avoiding 1MB host-device memory transfers per token
-                let selected_token = if self.sampler.config.temperature <= 0.0 && self.d_sampled_token.is_some() {
+                let selected_token = if self.sampler.config.temperature <= 0.0
+                    && self.d_sampled_token.is_some()
+                {
                     let d_sampled = self.d_sampled_token.as_mut().unwrap();
                     let d_tok_ptr = d_sampled.as_raw_ptr() as *mut u32;
                     let d_val_ptr = unsafe { (d_tok_ptr as *mut u8).add(4) as *mut f32 };
@@ -1303,14 +1510,12 @@ impl HardwareBackend for CudaBackend {
                     }
                     let best_tok = sampled_res[0];
                     let max_val = f32::from_bits(sampled_res[1]);
-                    if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
-                        tracing::info!(
-                            "CUDA on-device argmax pos {}: sampled_tok={}, max_val={}",
-                            pos,
-                            best_tok,
-                            max_val
-                        );
-                    }
+                    tracing::debug!(
+                        "CUDA on-device argmax pos {}: sampled_tok={}, max_val={}",
+                        pos,
+                        best_tok,
+                        max_val
+                    );
                     best_tok
                 } else {
                     let mut host_logits = vec![0.0f32; self.vocab_size];
@@ -1329,20 +1534,18 @@ impl HardwareBackend for CudaBackend {
                     }
 
                     // Sample token using AcademicSamplerEngine (temperature, top-p, min-p, DRY repetition penalty)
-                    let tok = self.sampler
+                    let tok = self
+                        .sampler
                         .sample_token(&mut host_logits, &mut self.sampler_state, 198)
                         .unwrap_or(best_tok);
 
-                    if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
-                        tracing::info!(
-                            "CUDA host sampled pos {}: greedy_top={}, sampled_tok={}, max_val={}, logits[0..5]={:?}",
-                            pos,
-                            best_tok,
-                            tok,
-                            max_val,
-                            &host_logits[0..5.min(host_logits.len())]
-                        );
-                    }
+                    tracing::debug!(
+                        "CUDA host sampled pos {}: greedy_top={}, sampled_tok={}, max_val={}",
+                        pos,
+                        best_tok,
+                        tok,
+                        max_val
+                    );
                     tok
                 };
 

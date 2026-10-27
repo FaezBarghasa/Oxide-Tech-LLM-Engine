@@ -257,8 +257,7 @@ impl Default for BlockIQ4_NL {
 }
 
 pub const KVALUES_IQ4NL: [f32; 16] = [
-    -34.0, -21.0, -13.0, -7.0, -3.0, -1.0, 0.0, 1.0,
-    3.0, 6.0, 10.0, 15.0, 21.0, 29.0, 39.0, 53.0,
+    -34.0, -21.0, -13.0, -7.0, -3.0, -1.0, 0.0, 1.0, 3.0, 6.0, 10.0, 15.0, 21.0, 29.0, 39.0, 53.0,
 ];
 
 impl BlockIQ4_NL {
@@ -274,7 +273,6 @@ impl BlockIQ4_NL {
         }
     }
 }
-
 
 /// IQ3_XXS: Importance-matrix 3-bit quantization (3.06 bpw).
 #[repr(C)]

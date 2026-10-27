@@ -5,6 +5,8 @@
 //! unified kernel launching, fused activations (SwiGLU, GeGLU), RMSNorm, and on-device
 //! argmax reduction directly on NVIDIA dGPU streams.
 
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use crate::driver::{self, cudaStream_t};
 use oxide_core::error::{EngineError, Result};
 use std::marker::PhantomData;
@@ -64,13 +66,16 @@ impl<'a, T> DisjointSlice<'a, T> {
     /// Panics if `mid > len`.
     #[must_use]
     pub fn split_at_mut(self, mid: usize) -> (DisjointSlice<'a, T>, DisjointSlice<'a, T>) {
-        assert!(mid <= self.len, "split index {mid} out of bounds for slice of len {}", self.len);
+        assert!(
+            mid <= self.len,
+            "split index {mid} out of bounds for slice of len {}",
+            self.len
+        );
         let right_ptr = unsafe { self.ptr.add(mid) };
         let right_len = self.len - mid;
-        (
-            unsafe { DisjointSlice::new(self.ptr, mid) },
-            unsafe { DisjointSlice::new(right_ptr, right_len) },
-        )
+        (unsafe { DisjointSlice::new(self.ptr, mid) }, unsafe {
+            DisjointSlice::new(right_ptr, right_len)
+        })
     }
 }
 
@@ -95,7 +100,9 @@ pub fn launch_fused_swiglu(
         )
     };
     if ret != 0 {
-        Err(EngineError::BackendError(format!("CUDA fused SwiGLU kernel failed with code {ret}")))
+        Err(EngineError::BackendError(format!(
+            "CUDA fused SwiGLU kernel failed with code {ret}"
+        )))
     } else {
         Ok(())
     }
@@ -122,7 +129,9 @@ pub fn launch_fused_geglu(
         )
     };
     if ret != 0 {
-        Err(EngineError::BackendError(format!("CUDA fused GeGLU kernel failed with code {ret}")))
+        Err(EngineError::BackendError(format!(
+            "CUDA fused GeGLU kernel failed with code {ret}"
+        )))
     } else {
         Ok(())
     }
@@ -156,7 +165,9 @@ pub fn launch_fused_rmsnorm(
         )
     };
     if ret != 0 {
-        Err(EngineError::BackendError(format!("CUDA fused RMSNorm kernel failed with code {ret}")))
+        Err(EngineError::BackendError(format!(
+            "CUDA fused RMSNorm kernel failed with code {ret}"
+        )))
     } else {
         Ok(())
     }
@@ -170,7 +181,9 @@ pub fn launch_on_device_argmax(
     stream: cudaStream_t,
 ) -> Result<()> {
     if logits.is_empty() || out_token_val.len() < 2 {
-        return Err(EngineError::BackendError("Invalid buffer dimensions for on-device argmax".to_string()));
+        return Err(EngineError::BackendError(
+            "Invalid buffer dimensions for on-device argmax".to_string(),
+        ));
     }
     let d_tok_ptr = out_token_val.as_mut_ptr();
     let d_val_ptr = unsafe { (d_tok_ptr as *mut u8).add(4) as *mut f32 };
@@ -184,7 +197,9 @@ pub fn launch_on_device_argmax(
         )
     };
     if ret != 0 {
-        Err(EngineError::BackendError(format!("CUDA on-device argmax failed with code {ret}")))
+        Err(EngineError::BackendError(format!(
+            "CUDA on-device argmax failed with code {ret}"
+        )))
     } else {
         Ok(())
     }

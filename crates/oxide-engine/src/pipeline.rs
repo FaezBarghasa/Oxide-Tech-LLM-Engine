@@ -365,16 +365,29 @@ impl SpecializedPipeline {
     }
 
     /// Configures sampling parameters (temperature, top_p, top_k, seed, greedy) on the underlying backend.
-    pub fn configure_sampling(&mut self, temp: f32, top_p: f32, top_k: usize, seed: u64, greedy: bool) {
+    pub fn configure_sampling(
+        &mut self,
+        temp: f32,
+        top_p: f32,
+        top_k: usize,
+        seed: u64,
+        greedy: bool,
+    ) {
         match self {
             Self::Llama3Cuda(engine) => {
-                engine.backend.configure_sampling(temp, top_p, top_k, seed, greedy);
+                engine
+                    .backend
+                    .configure_sampling(temp, top_p, top_k, seed, greedy);
             }
             Self::Needle3Cuda(engine) => {
-                engine.backend.configure_sampling(temp, top_p, top_k, seed, greedy);
+                engine
+                    .backend
+                    .configure_sampling(temp, top_p, top_k, seed, greedy);
             }
             Self::Bonsai2Cuda(engine) => {
-                engine.backend.configure_sampling(temp, top_p, top_k, seed, greedy);
+                engine
+                    .backend
+                    .configure_sampling(temp, top_p, top_k, seed, greedy);
             }
             _ => {}
         }
@@ -492,8 +505,25 @@ impl SpecializedPipeline {
                             }
                         });
                     }
-                    backend.set_model_architecture_options(is_gemma, model.config.final_logit_softcapping_f32());
-                    for layer in &model.layers {
+                    backend.set_model_architecture_options(
+                        is_gemma,
+                        model.config.final_logit_softcapping_f32(),
+                    );
+                    if let Some(ref ple_tensor) = model.per_layer_token_embd {
+                        let ple = ple_tensor.clone();
+                        let ple_len = ple.cols();
+                        backend.set_per_layer_embedding_lookup(
+                            ple_len,
+                            move |tok_idx, out: &mut [f32]| {
+                                ple.extract_row(tok_idx, &mut out[..ple_len]);
+                                let scale = (256.0f32).sqrt();
+                                for x in out[..ple_len].iter_mut() {
+                                    *x *= scale;
+                                }
+                            },
+                        );
+                    }
+                    for (layer_idx, layer) in model.layers.iter().enumerate() {
                         backend.add_layer_weights(
                             layer.q_proj.as_raw_bytes(),
                             layer.k_proj.as_raw_bytes(),
@@ -527,6 +557,23 @@ impl SpecializedPipeline {
                                 layer.down_proj.quant_type(),
                             ],
                         )?;
+                        if layer.inp_gate.is_some()
+                            || layer.proj.is_some()
+                            || !layer.post_norm.is_empty()
+                        {
+                            backend.add_layer_ple_weights(
+                                layer_idx,
+                                layer
+                                    .inp_gate
+                                    .as_ref()
+                                    .map(|t| (t.as_raw_bytes(), t.quant_type())),
+                                layer
+                                    .proj
+                                    .as_ref()
+                                    .map(|t| (t.as_raw_bytes(), t.quant_type())),
+                                &layer.post_norm,
+                            )?;
+                        }
                     }
                     if backend.layers.is_empty() {
                         return Err(oxide_core::error::EngineError::BackendError(
@@ -699,8 +746,25 @@ impl SpecializedPipeline {
                         }
                     });
                 }
-                backend.set_model_architecture_options(model.config.is_gemma, model.config.final_logit_softcapping_f32());
-                for layer in &model.layers {
+                backend.set_model_architecture_options(
+                    model.config.is_gemma,
+                    model.config.final_logit_softcapping_f32(),
+                );
+                if let Some(ref ple_tensor) = model.per_layer_token_embd {
+                    let ple = ple_tensor.clone();
+                    let ple_len = ple.cols();
+                    backend.set_per_layer_embedding_lookup(
+                        ple_len,
+                        move |tok_idx, out: &mut [f32]| {
+                            ple.extract_row(tok_idx, &mut out[..ple_len]);
+                            let scale = (256.0f32).sqrt();
+                            for x in out[..ple_len].iter_mut() {
+                                *x *= scale;
+                            }
+                        },
+                    );
+                }
+                for (layer_idx, layer) in model.layers.iter().enumerate() {
                     let _ = backend.add_layer_weights(
                         layer.q_proj.as_raw_bytes(),
                         layer.k_proj.as_raw_bytes(),
@@ -734,6 +798,23 @@ impl SpecializedPipeline {
                             layer.down_proj.quant_type(),
                         ],
                     );
+                    if layer.inp_gate.is_some()
+                        || layer.proj.is_some()
+                        || !layer.post_norm.is_empty()
+                    {
+                        let _ = backend.add_layer_ple_weights(
+                            layer_idx,
+                            layer
+                                .inp_gate
+                                .as_ref()
+                                .map(|t| (t.as_raw_bytes(), t.quant_type())),
+                            layer
+                                .proj
+                                .as_ref()
+                                .map(|t| (t.as_raw_bytes(), t.quant_type())),
+                            &layer.post_norm,
+                        );
+                    }
                 }
                 return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
             }

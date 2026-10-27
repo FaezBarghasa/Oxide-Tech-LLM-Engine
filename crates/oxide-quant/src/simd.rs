@@ -580,6 +580,7 @@ unsafe fn dot_q4_k_avx512(
     d: f32,
     dmin: f32,
 ) -> f32 {
+    // SAFETY: caller guarantees AVX2 and FMA are supported on target machine and inputs are valid slices.
     unsafe { dot_q4_k_avx2(qs, scales, act, d, dmin) }
 }
 
@@ -807,6 +808,7 @@ unsafe fn dot_q4_k_avx2(
         _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
+    // SAFETY: caller guarantees target features avx2 and fma are enabled and references are valid.
     unsafe {
         let mask_0f = _mm_set1_epi8(0x0F);
         let mut acc_vec = _mm256_setzero_ps();

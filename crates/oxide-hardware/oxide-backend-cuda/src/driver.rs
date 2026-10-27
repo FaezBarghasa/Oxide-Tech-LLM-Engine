@@ -303,7 +303,10 @@ impl CudaDeviceBuffer {
         // SAFETY: Calling cudaMalloc with valid pointer and size.
         let status = unsafe { cudaMalloc(&raw mut d_ptr, size_bytes) };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaMalloc failed with status code {status} (requested {size_bytes} bytes = {:.2} MB)", size_bytes as f64 / 1_048_576.0));
+            return Err(format!(
+                "cudaMalloc failed with status code {status} (requested {size_bytes} bytes = {:.2} MB)",
+                size_bytes as f64 / 1_048_576.0
+            ));
         }
         Ok(Self {
             ptr: d_ptr,

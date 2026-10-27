@@ -852,8 +852,9 @@ fn run_chat_session(
         let mut cur_token = 1u32;
 
         // 1. Prefill prompt tokens through transformer forward pass
-        for &tok in &prompt_tokens {
-            let cmd = StepCommand::new(1, tok, 0, false);
+        for (i, &tok) in prompt_tokens.iter().enumerate() {
+            let is_prefill = i + 1 < prompt_tokens.len();
+            let cmd = StepCommand::new(1, tok, 0, is_prefill);
             match pipeline.step(&cmd) {
                 Ok(res) => {
                     cur_token = res.sampled_token;
@@ -899,18 +900,32 @@ fn run_chat_session(
         println!();
         if let Some(first_tok_time) = ttft {
             let gen_u32 = u32::try_from(gen_count).unwrap_or(u32::MAX);
-            let tps = if elapsed.as_secs_f64() > 0.0 {
+            let total_tps = if elapsed.as_secs_f64() > 0.0 {
                 f64::from(gen_u32) / elapsed.as_secs_f64()
+            } else {
+                0.0
+            };
+            let decode_duration = elapsed.saturating_sub(first_tok_time);
+            let decode_tokens = gen_count.saturating_sub(1);
+            let decode_tps = if decode_duration.as_secs_f64() > 0.0 {
+                decode_tokens as f64 / decode_duration.as_secs_f64()
+            } else {
+                0.0
+            };
+            let prompt_len = prompt_tokens.len();
+            let prefill_tps = if first_tok_time.as_secs_f64() > 0.0 {
+                prompt_len as f64 / first_tok_time.as_secs_f64()
             } else {
                 0.0
             };
             println!(
                 "--------------------------------------------------\n\
                  [Benchmark Metrics]\n\
+                 Prompt Tokens    : {prompt_len}\n\
                  Generated Tokens : {gen_count}\n\
-                 Total Time       : {elapsed:.2?}\n\
-                 TTFT             : {first_tok_time:.2?}\n\
-                 Throughput       : {tps:.2} tokens/sec\n\
+                 TTFT             : {first_tok_time:.2?} ({prefill_tps:.2} tok/s)\n\
+                 Decode Speed     : {decode_tps:.2} tokens/sec ({decode_duration:.2?})\n\
+                 Overall Speed    : {total_tps:.2} tokens/sec ({elapsed:.2?})\n\
                  --------------------------------------------------"
             );
         }
