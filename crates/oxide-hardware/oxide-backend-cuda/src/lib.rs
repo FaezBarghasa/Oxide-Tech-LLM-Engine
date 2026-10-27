@@ -77,6 +77,8 @@ pub struct CudaLayerWeights {
     pub d_ffn_norm: CudaDeviceBuffer,
     pub d_attn_q_norm: Option<CudaDeviceBuffer>,
     pub d_attn_k_norm: Option<CudaDeviceBuffer>,
+    pub d_post_attn_norm: Option<CudaDeviceBuffer>,
+    pub d_post_ffn_norm: Option<CudaDeviceBuffer>,
     pub q_m: usize,
     pub q_k: usize,
     pub kv_m: usize,
@@ -135,6 +137,8 @@ pub struct CudaBackend {
     pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
     pub lm_head_quant_type: u32,
     pub rope_theta: f32,
+    pub is_gemma: bool,
+    pub final_logit_softcapping: Option<f32>,
     pub sampler: oxide_core::sampler::AcademicSamplerEngine,
     pub sampler_state: oxide_core::sampler::SamplerState,
 }
@@ -212,6 +216,8 @@ impl CudaBackend {
             mmap_handle: None,
             lm_head_quant_type: 1,
             rope_theta: 10_000.0,
+            is_gemma: false,
+            final_logit_softcapping: None,
             sampler: {
                 let mut sampling_config = oxide_core::sampler::SamplingConfig::default();
                 sampling_config.temperature = 0.7;
@@ -241,6 +247,9 @@ impl CudaBackend {
         quant_type: u32,
         stream: driver::cudaStream_t,
     ) {
+        if d_w.size_bytes() == 0 || m == 0 || k == 0 || d_w.as_raw_ptr().is_null() {
+            return;
+        }
         unsafe {
             if quant_type == 1 {
                 driver::launch_cuda_gemv_q4_k(
@@ -285,6 +294,16 @@ impl CudaBackend {
     /// Retains strong reference to memory-mapped model file to prevent premature unmapping.
     pub fn set_mmap_handle(&mut self, mmap: std::sync::Arc<memmap2::Mmap>) {
         self.mmap_handle = Some(mmap);
+    }
+
+    /// Configures model architecture options such as Gemma-style offset norms and logit softcapping.
+    pub fn set_model_architecture_options(
+        &mut self,
+        is_gemma: bool,
+        final_logit_softcapping: Option<f32>,
+    ) {
+        self.is_gemma = is_gemma;
+        self.final_logit_softcapping = final_logit_softcapping;
     }
 
     /// Configures a host-side token embedding row dequantization callback.
@@ -447,6 +466,8 @@ impl CudaBackend {
         ffn_norm: &[f32],
         attn_q_norm: &[f32],
         attn_k_norm: &[f32],
+        post_attn_norm: &[f32],
+        post_ffn_norm: &[f32],
         q_m: usize,
         q_k: usize,
         kv_m: usize,
@@ -525,6 +546,28 @@ impl CudaBackend {
             None
         };
 
+        let d_post_attn_norm = if !post_attn_norm.is_empty() {
+            let mut buf =
+                CudaDeviceBuffer::allocate(post_attn_norm.len() * std::mem::size_of::<f32>())
+                    .map_err(EngineError::BackendError)?;
+            buf.copy_from_host_async(post_attn_norm, s)
+                .map_err(EngineError::BackendError)?;
+            Some(buf)
+        } else {
+            None
+        };
+
+        let d_post_ffn_norm = if !post_ffn_norm.is_empty() {
+            let mut buf =
+                CudaDeviceBuffer::allocate(post_ffn_norm.len() * std::mem::size_of::<f32>())
+                    .map_err(EngineError::BackendError)?;
+            buf.copy_from_host_async(post_ffn_norm, s)
+                .map_err(EngineError::BackendError)?;
+            Some(buf)
+        } else {
+            None
+        };
+
         let kv_bytes =
             2048 * self.num_kv_heads.max(1) * self.head_dim.max(64) * std::mem::size_of::<f32>();
         let mut kv_k_buf =
@@ -553,6 +596,8 @@ impl CudaBackend {
             d_ffn_norm,
             d_attn_q_norm,
             d_attn_k_norm,
+            d_post_attn_norm,
+            d_post_ffn_norm,
             q_m,
             q_k,
             kv_m,
@@ -600,6 +645,12 @@ impl HardwareBackend for CudaBackend {
                 let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
                 let mut host_emb = vec![0.0f32; h];
                 lookup(tok_idx, &mut host_emb);
+                tracing::info!(
+                    "CUDA pos {}: tok_idx={}, host_emb[0..5]={:?}",
+                    pos,
+                    tok_idx,
+                    &host_emb[0..5.min(host_emb.len())]
+                );
                 if let Some(d_hid) = &mut self.d_hidden {
                     let _ = d_hid.copy_from_host_async(&host_emb, s);
                     let _ = stream.synchronize();
@@ -623,260 +674,342 @@ impl HardwareBackend for CudaBackend {
                 }
             }
 
+            let weight_offset = if self.is_gemma { 1.0f32 } else { 0.0f32 };
+
             // 2. Multi-layer forward pass on physical GPU
             for (layer_idx, layer) in self.layers.iter().enumerate() {
                 if let (Some(d_hid), Some(d_norm)) = (&self.d_hidden, &mut self.d_scratch_norm) {
-                    // Attention RMSNorm
-                    unsafe {
-                        driver::launch_cuda_rmsnorm(
-                            d_norm.as_typed_ptr::<f32>(),
-                            d_hid.as_typed_ptr::<f32>(),
-                            layer.d_attn_norm.as_typed_ptr::<f32>(),
-                            1,
-                            h as i32,
-                            1e-5,
-                            s,
-                        );
-                    }
-
-                    // Q Projection
-                    if let Some(d_q) = &mut self.d_scratch_q {
-                        unsafe {
-                            Self::dispatch_gemv(
-                                d_q.as_typed_ptr::<f32>(),
-                                &layer.d_wq,
-                                d_norm.as_typed_ptr::<f32>(),
-                                layer.q_m,
-                                layer.q_k,
-                                layer.q_quant,
-                                s,
-                            );
-                        }
-                    }
-
-                    // K Projection
-                    if let Some(d_k) = &mut self.d_scratch_k {
-                        unsafe {
-                            Self::dispatch_gemv(
-                                d_k.as_typed_ptr::<f32>(),
-                                &layer.d_wk,
-                                d_norm.as_typed_ptr::<f32>(),
-                                layer.kv_m,
-                                layer.kv_k,
-                                layer.k_quant,
-                                s,
-                            );
-                        }
-                    }
-
-                    // V Projection
-                    if let Some(d_v) = &mut self.d_scratch_v {
-                        unsafe {
-                            Self::dispatch_gemv(
-                                d_v.as_typed_ptr::<f32>(),
-                                &layer.d_wv,
-                                d_norm.as_typed_ptr::<f32>(),
-                                layer.kv_m,
-                                layer.kv_k,
-                                layer.v_quant,
-                                s,
-                            );
-                        }
-                    }
-
-                    // QK-Norm (applied per-head before RoPE if present)
-                    if let (Some(d_q), Some(d_q_norm)) =
-                        (&mut self.d_scratch_q, &layer.d_attn_q_norm)
-                    {
-                        unsafe {
-                            driver::launch_cuda_qk_norm(
-                                d_q.as_typed_ptr::<f32>(),
-                                d_q_norm.as_typed_ptr::<f32>(),
-                                self.num_heads as i32,
-                                self.head_dim as i32,
-                                1e-6,
-                                s,
-                            );
-                        }
-                    }
-                    if let (Some(d_k), Some(d_k_norm)) =
-                        (&mut self.d_scratch_k, &layer.d_attn_k_norm)
-                    {
-                        unsafe {
-                            driver::launch_cuda_qk_norm(
-                                d_k.as_typed_ptr::<f32>(),
-                                d_k_norm.as_typed_ptr::<f32>(),
-                                self.num_kv_heads as i32,
-                                self.head_dim as i32,
-                                1e-6,
-                                s,
-                            );
-                        }
-                    }
-
-                    // Rotary Position Embedding (RoPE) on Q and K
-                    if let (Some(d_q), Some(d_k)) = (&mut self.d_scratch_q, &mut self.d_scratch_k) {
-                        unsafe {
-                            driver::launch_cuda_rope_single(
-                                d_q.as_typed_ptr::<f32>(),
-                                d_k.as_typed_ptr::<f32>(),
-                                pos as i32,
-                                self.num_heads as i32,
-                                self.num_kv_heads as i32,
-                                self.head_dim as i32,
-                                self.rope_theta,
-                                s,
-                            );
-                        }
-                    }
-
-                    // KV Cache update: copy current token's K and V into KV cache ring buffer at `pos`
-                    let kv_dim = self.num_kv_heads * self.head_dim;
-                    let kv_bytes = kv_dim * std::mem::size_of::<f32>();
-                    let kv_offset = (pos % 2048) * kv_bytes;
-                    if let (Some(d_k), Some(d_v)) = (&self.d_scratch_k, &self.d_scratch_v) {
-                        if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
-                            let k_dst = unsafe {
-                                (self.kv_k[layer_idx].as_raw_ptr() as *mut u8).add(kv_offset)
-                                    as *mut std::ffi::c_void
-                            };
-                            let v_dst = unsafe {
-                                (self.kv_v[layer_idx].as_raw_ptr() as *mut u8).add(kv_offset)
-                                    as *mut std::ffi::c_void
-                            };
-                            let _ = unsafe {
-                                driver::cudaMemcpyAsync(
-                                    k_dst,
-                                    d_k.as_raw_ptr(),
-                                    kv_bytes,
-                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
-                                    s,
-                                )
-                            };
-                            let _ = unsafe {
-                                driver::cudaMemcpyAsync(
-                                    v_dst,
-                                    d_v.as_raw_ptr(),
-                                    kv_bytes,
-                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
-                                    s,
-                                )
-                            };
-                        }
-                    }
-
-                    // Attention Flash Decode (with GQA)
-                    if let (Some(d_q), Some(d_out)) =
-                        (&self.d_scratch_q, &mut self.d_scratch_attn_out)
-                    {
-                        if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
-                            let sm_scale = 1.0 / (self.head_dim.max(1) as f32).sqrt();
+                    // Attention Block
+                    let has_attn = layer.d_wq.size_bytes() > 0
+                        && layer.d_wo.size_bytes() > 0
+                        && layer.q_m > 0;
+                    if has_attn {
+                        // Attention RMSNorm
+                        if layer.d_attn_norm.size_bytes() > 0 {
                             unsafe {
-                                driver::launch_cuda_flash_decode(
-                                    d_out.as_typed_ptr::<f32>(),
+                                driver::launch_cuda_rmsnorm(
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    layer.d_attn_norm.as_typed_ptr::<f32>(),
+                                    1,
+                                    h as i32,
+                                    1e-5,
+                                    weight_offset,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // Q Projection
+                        if let Some(d_q) = &mut self.d_scratch_q {
+                            unsafe {
+                                Self::dispatch_gemv(
                                     d_q.as_typed_ptr::<f32>(),
-                                    self.kv_k[layer_idx].as_typed_ptr::<f32>(),
-                                    self.kv_v[layer_idx].as_typed_ptr::<f32>(),
+                                    &layer.d_wq,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    layer.q_m,
+                                    layer.q_k,
+                                    layer.q_quant,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // K Projection
+                        if let Some(d_k) = &mut self.d_scratch_k {
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    &layer.d_wk,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.k_quant,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // V Projection
+                        if let Some(d_v) = &mut self.d_scratch_v {
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_v.as_typed_ptr::<f32>(),
+                                    &layer.d_wv,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.v_quant,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // QK-Norm (applied per-head before RoPE if present)
+                        if let (Some(d_q), Some(d_q_norm)) =
+                            (&mut self.d_scratch_q, &layer.d_attn_q_norm)
+                        {
+                            unsafe {
+                                driver::launch_cuda_qk_norm(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_q_norm.as_typed_ptr::<f32>(),
+                                    self.num_heads as i32,
+                                    self.head_dim as i32,
+                                    1e-6,
+                                    s,
+                                );
+                            }
+                        }
+                        if let (Some(d_k), Some(d_k_norm)) =
+                            (&mut self.d_scratch_k, &layer.d_attn_k_norm)
+                        {
+                            unsafe {
+                                driver::launch_cuda_qk_norm(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    d_k_norm.as_typed_ptr::<f32>(),
+                                    self.num_kv_heads as i32,
+                                    self.head_dim as i32,
+                                    1e-6,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // Rotary Position Embedding (RoPE) on Q and K
+                        if let (Some(d_q), Some(d_k)) = (&mut self.d_scratch_q, &mut self.d_scratch_k) {
+                            unsafe {
+                                driver::launch_cuda_rope_single(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_k.as_typed_ptr::<f32>(),
+                                    pos as i32,
                                     self.num_heads as i32,
                                     self.num_kv_heads as i32,
                                     self.head_dim as i32,
-                                    (pos + 1).min(2048) as i32,
-                                    sm_scale,
+                                    self.rope_theta,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // KV Cache update: copy current token's K and V into KV cache ring buffer at `pos`
+                        let kv_dim = self.num_kv_heads * self.head_dim;
+                        let kv_bytes = kv_dim * std::mem::size_of::<f32>();
+                        let kv_offset = (pos % 2048) * kv_bytes;
+                        if let (Some(d_k), Some(d_v)) = (&self.d_scratch_k, &self.d_scratch_v) {
+                            if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
+                                let k_dst = unsafe {
+                                    (self.kv_k[layer_idx].as_raw_ptr() as *mut u8).add(kv_offset)
+                                        as *mut std::ffi::c_void
+                                };
+                                let v_dst = unsafe {
+                                    (self.kv_v[layer_idx].as_raw_ptr() as *mut u8).add(kv_offset)
+                                        as *mut std::ffi::c_void
+                                };
+                                let _ = unsafe {
+                                    driver::cudaMemcpyAsync(
+                                        k_dst,
+                                        d_k.as_raw_ptr(),
+                                        kv_bytes,
+                                        driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                        s,
+                                    )
+                                };
+                                let _ = unsafe {
+                                    driver::cudaMemcpyAsync(
+                                        v_dst,
+                                        d_v.as_raw_ptr(),
+                                        kv_bytes,
+                                        driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                        s,
+                                    )
+                                };
+                            }
+                        }
+
+                        // Attention Flash Decode (with GQA)
+                        if let (Some(d_q), Some(d_out)) =
+                            (&self.d_scratch_q, &mut self.d_scratch_attn_out)
+                        {
+                            if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
+                                let sm_scale = 1.0 / (self.head_dim.max(1) as f32).sqrt();
+                                unsafe {
+                                    driver::launch_cuda_flash_decode(
+                                        d_out.as_typed_ptr::<f32>(),
+                                        d_q.as_typed_ptr::<f32>(),
+                                        self.kv_k[layer_idx].as_typed_ptr::<f32>(),
+                                        self.kv_v[layer_idx].as_typed_ptr::<f32>(),
+                                        self.num_heads as i32,
+                                        self.num_kv_heads as i32,
+                                        self.head_dim as i32,
+                                        (pos + 1).min(2048) as i32,
+                                        sm_scale,
+                                        s,
+                                    );
+                                }
+                            }
+                        }
+
+                        // Output Projection: wo x attn_out -> d_act
+                        if let (Some(d_out), Some(d_act)) =
+                            (&self.d_scratch_attn_out, &mut self.d_scratch_act)
+                        {
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_act.as_typed_ptr::<f32>(),
+                                    &layer.d_wo,
+                                    d_out.as_typed_ptr::<f32>(),
+                                    h,
+                                    layer.q_m,
+                                    layer.o_quant,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // Post-attention norm (Gemma 2 / Gemma 4 / Nemotron)
+                        if let (Some(d_post_attn), Some(d_act)) =
+                            (&layer.d_post_attn_norm, &mut self.d_scratch_act)
+                        {
+                            if d_post_attn.size_bytes() > 0 {
+                                unsafe {
+                                    driver::launch_cuda_rmsnorm(
+                                        d_act.as_typed_ptr::<f32>(),
+                                        d_act.as_typed_ptr::<f32>(),
+                                        d_post_attn.as_typed_ptr::<f32>(),
+                                        1,
+                                        h as i32,
+                                        1e-5,
+                                        weight_offset,
+                                        s,
+                                    );
+                                }
+                            }
+                        }
+
+                        // Residual 1: hidden += attn_out
+                        if let Some(d_act) = &self.d_scratch_act {
+                            unsafe {
+                                driver::launch_cuda_vector_add(
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    d_act.as_typed_ptr::<f32>(),
+                                    h as i32,
                                     s,
                                 );
                             }
                         }
                     }
 
-                    // Output Projection: wo x attn_out -> d_act
-                    if let (Some(d_out), Some(d_act)) =
-                        (&self.d_scratch_attn_out, &mut self.d_scratch_act)
-                    {
-                        unsafe {
-                            Self::dispatch_gemv(
-                                d_act.as_typed_ptr::<f32>(),
-                                &layer.d_wo,
-                                d_out.as_typed_ptr::<f32>(),
-                                h,
-                                layer.q_m,
-                                layer.o_quant,
-                                s,
-                            );
+                    // FFN Block
+                    let has_ffn = layer.d_w1.size_bytes() > 0
+                        && layer.d_w2.size_bytes() > 0
+                        && layer.inter_m > 0;
+                    if has_ffn {
+                        // FFN RMSNorm
+                        if layer.d_ffn_norm.size_bytes() > 0 {
+                            unsafe {
+                                driver::launch_cuda_rmsnorm(
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    layer.d_ffn_norm.as_typed_ptr::<f32>(),
+                                    1,
+                                    h as i32,
+                                    1e-5,
+                                    weight_offset,
+                                    s,
+                                );
+                            }
                         }
-                    }
 
-                    // Residual 1: hidden += attn_out
-                    if let Some(d_act) = &self.d_scratch_act {
-                        unsafe {
-                            driver::launch_cuda_vector_add(
-                                d_hid.as_typed_ptr::<f32>(),
-                                d_act.as_typed_ptr::<f32>(),
-                                h as i32,
-                                s,
-                            );
+                        // FFN Gate and Up projections
+                        if let (Some(d_gate), Some(d_up)) =
+                            (&mut self.d_scratch_gate, &mut self.d_scratch_up)
+                        {
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_gate.as_typed_ptr::<f32>(),
+                                    &layer.d_w1,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    layer.inter_m,
+                                    h,
+                                    layer.gate_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_up.as_typed_ptr::<f32>(),
+                                    &layer.d_w3,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    layer.inter_m,
+                                    h,
+                                    layer.up_quant,
+                                    s,
+                                );
+                                if self.is_gemma {
+                                    driver::launch_cuda_gelu(
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        d_up.as_typed_ptr::<f32>(),
+                                        layer.inter_m as i32,
+                                        s,
+                                    );
+                                } else {
+                                    driver::launch_cuda_swiglu(
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        d_up.as_typed_ptr::<f32>(),
+                                        layer.inter_m as i32,
+                                        s,
+                                    );
+                                }
+                            }
                         }
-                    }
 
-                    // FFN RMSNorm
-                    unsafe {
-                        driver::launch_cuda_rmsnorm(
-                            d_norm.as_typed_ptr::<f32>(),
-                            d_hid.as_typed_ptr::<f32>(),
-                            layer.d_ffn_norm.as_typed_ptr::<f32>(),
-                            1,
-                            h as i32,
-                            1e-5,
-                            s,
-                        );
-                    }
-
-                    // FFN Gate and Up projections
-                    if let (Some(d_gate), Some(d_up)) =
-                        (&mut self.d_scratch_gate, &mut self.d_scratch_up)
-                    {
-                        unsafe {
-                            Self::dispatch_gemv(
-                                d_gate.as_typed_ptr::<f32>(),
-                                &layer.d_w1,
-                                d_norm.as_typed_ptr::<f32>(),
-                                layer.inter_m,
-                                h,
-                                layer.gate_quant,
-                                s,
-                            );
-                            Self::dispatch_gemv(
-                                d_up.as_typed_ptr::<f32>(),
-                                &layer.d_w3,
-                                d_norm.as_typed_ptr::<f32>(),
-                                layer.inter_m,
-                                h,
-                                layer.up_quant,
-                                s,
-                            );
-                            driver::launch_cuda_swiglu(
-                                d_gate.as_typed_ptr::<f32>(),
-                                d_gate.as_typed_ptr::<f32>(),
-                                d_up.as_typed_ptr::<f32>(),
-                                layer.inter_m as i32,
-                                s,
-                            );
+                        // FFN Down Projection: w2 x gate -> d_act
+                        if let (Some(d_gate), Some(d_act)) =
+                            (&self.d_scratch_gate, &mut self.d_scratch_act)
+                        {
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_act.as_typed_ptr::<f32>(),
+                                    &layer.d_w2,
+                                    d_gate.as_typed_ptr::<f32>(),
+                                    h,
+                                    layer.inter_m,
+                                    layer.down_quant,
+                                    s,
+                                );
+                            }
                         }
-                    }
 
-                    // FFN Down Projection: w2 x gate -> d_act
-                    if let (Some(d_gate), Some(d_act)) =
-                        (&self.d_scratch_gate, &mut self.d_scratch_act)
-                    {
-                        unsafe {
-                            Self::dispatch_gemv(
-                                d_act.as_typed_ptr::<f32>(),
-                                &layer.d_w2,
-                                d_gate.as_typed_ptr::<f32>(),
-                                h,
-                                layer.inter_m,
-                                layer.down_quant,
-                                s,
-                            );
+                        // Post-FFN norm (Gemma 2 / Gemma 4 / Nemotron)
+                        if let (Some(d_post_ffn), Some(d_act)) =
+                            (&layer.d_post_ffn_norm, &mut self.d_scratch_act)
+                        {
+                            if d_post_ffn.size_bytes() > 0 {
+                                unsafe {
+                                    driver::launch_cuda_rmsnorm(
+                                        d_act.as_typed_ptr::<f32>(),
+                                        d_act.as_typed_ptr::<f32>(),
+                                        d_post_ffn.as_typed_ptr::<f32>(),
+                                        1,
+                                        h as i32,
+                                        1e-5,
+                                        weight_offset,
+                                        s,
+                                    );
+                                }
+                            }
+                        }
+
+                        // Residual 2: hidden += ffn_out
+                        if let Some(d_act) = &self.d_scratch_act {
+                            unsafe {
+                                driver::launch_cuda_vector_add(
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    d_act.as_typed_ptr::<f32>(),
+                                    h as i32,
+                                    s,
+                                );
+                            }
                         }
                     }
 
@@ -900,16 +1033,19 @@ impl HardwareBackend for CudaBackend {
                 &mut self.d_scratch_norm,
                 &self.d_output_norm,
             ) {
-                unsafe {
-                    driver::launch_cuda_rmsnorm(
-                        d_norm.as_typed_ptr::<f32>(),
-                        d_hid.as_typed_ptr::<f32>(),
-                        d_out_norm.as_typed_ptr::<f32>(),
-                        1,
-                        h as i32,
-                        1e-5,
-                        s,
-                    );
+                if d_out_norm.size_bytes() > 0 {
+                    unsafe {
+                        driver::launch_cuda_rmsnorm(
+                            d_norm.as_typed_ptr::<f32>(),
+                            d_hid.as_typed_ptr::<f32>(),
+                            d_out_norm.as_typed_ptr::<f32>(),
+                            1,
+                            h as i32,
+                            1e-5,
+                            weight_offset,
+                            s,
+                        );
+                    }
                 }
             }
 
@@ -917,6 +1053,11 @@ impl HardwareBackend for CudaBackend {
             if let (Some(d_norm), Some(d_lm), Some(d_logits)) =
                 (&self.d_scratch_norm, &self.d_lm_head, &mut self.d_logits)
             {
+                let mut norm_check = vec![0.0f32; 5];
+                let _ = d_norm.copy_to_host_async(&mut norm_check, s);
+                let _ = stream.synchronize();
+                tracing::info!("CUDA pos {}: norm_before_lmhead[0..5]={:?}", pos, norm_check);
+
                 unsafe {
                     Self::dispatch_gemv(
                         d_logits.as_typed_ptr::<f32>(),
@@ -928,9 +1069,29 @@ impl HardwareBackend for CudaBackend {
                         s,
                     );
                 }
+                let err = unsafe { driver::cudaGetLastError() };
+                if err != 0 {
+                    tracing::error!("CUDA error after LM Head launch: {}", err);
+                }
+
+                if let Some(cap) = self.final_logit_softcapping {
+                    if cap > 0.0 {
+                        unsafe {
+                            driver::launch_cuda_logit_softcap(
+                                d_logits.as_typed_ptr::<f32>(),
+                                self.vocab_size as i32,
+                                cap,
+                                s,
+                            );
+                        }
+                    }
+                }
+
                 let mut host_logits = vec![0.0f32; self.vocab_size];
                 let _ = d_logits.copy_to_host_async(&mut host_logits, s);
-                let _ = stream.synchronize();
+                if let Err(e) = stream.synchronize() {
+                    tracing::error!("stream.synchronize failed after LM Head: {}", e);
+                }
 
                 let mut best_tok = 1u32;
                 let mut max_val = f32::NEG_INFINITY;

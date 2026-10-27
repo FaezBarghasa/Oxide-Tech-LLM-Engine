@@ -67,6 +67,7 @@ unsafe extern "C" {
         num_tokens: i32,
         hidden_dim: i32,
         eps: f32,
+        weight_offset: f32,
         stream: cudaStream_t,
     ) -> i32;
 
@@ -167,6 +168,21 @@ unsafe extern "C" {
         num_heads: i32,
         head_dim: i32,
         eps: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_gelu(
+        out: *mut f32,
+        gate: *const f32,
+        up: *const f32,
+        n: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_logit_softcap(
+        logits: *mut f32,
+        vocab_size: i32,
+        cap: f32,
         stream: cudaStream_t,
     ) -> i32;
 

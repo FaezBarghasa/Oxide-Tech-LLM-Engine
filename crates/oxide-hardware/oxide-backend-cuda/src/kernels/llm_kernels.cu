@@ -14,7 +14,8 @@ __global__ void rms_norm_f32_kernel(
     const float* __restrict__ input,
     const float* __restrict__ weight,
     int hidden_dim,
-    float eps
+    float eps,
+    float weight_offset
 ) {
     int tid = threadIdx.x;
     int bid = blockIdx.x;
@@ -58,9 +59,10 @@ __global__ void rms_norm_f32_kernel(
     __syncthreads();
 
     float inv_rms = s_mean;
-    // Apply scale and weights
+    // Apply scale and weights with offset (e.g. 1.0 for Gemma)
     for (int i = tid; i < hidden_dim; i += blockDim.x) {
-        out_row[i] = in_row[i] * inv_rms * weight[i];
+        float w = weight != nullptr ? (weight[i] + weight_offset) : 1.0f;
+        out_row[i] = in_row[i] * inv_rms * w;
     }
 }
 
@@ -527,6 +529,34 @@ __global__ void swiglu_f32_kernel(
     }
 }
 
+__global__ void gelu_f32_kernel(
+    float* __restrict__ out,
+    const float* __restrict__ gate,
+    const float* __restrict__ up,
+    int n
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        float g = gate[idx];
+        const float SQRT_2_OVER_PI = 0.7978845608f;
+        float inner = SQRT_2_OVER_PI * (g + 0.044715f * g * g * g);
+        float gelu = 0.5f * g * (1.0f + tanhf(inner));
+        out[idx] = gelu * up[idx];
+    }
+}
+
+__global__ void logit_softcap_f32_kernel(
+    float* __restrict__ logits,
+    int vocab_size,
+    float cap
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < vocab_size) {
+        float l = logits[idx];
+        logits[idx] = cap * tanhf(l / cap);
+    }
+}
+
 __global__ void rope_single_token_kernel(
     float* __restrict__ q,
     float* __restrict__ k,
@@ -664,12 +694,13 @@ int launch_cuda_rmsnorm(
     int num_tokens,
     int hidden_dim,
     float eps,
+    float weight_offset,
     cudaStream_t stream
 ) {
     int block_size = 256;
     if (hidden_dim < 256) block_size = hidden_dim;
     rms_norm_f32_kernel<<<num_tokens, block_size, 0, stream>>>(
-        output, input, weight, hidden_dim, eps
+        output, input, weight, hidden_dim, eps, weight_offset
     );
     return cudaGetLastError();
 }
@@ -898,6 +929,33 @@ int launch_cuda_qk_norm(
     qk_norm_f32_kernel<<<num_heads, block_size, 0, stream>>>(
         qk, weight, num_heads, head_dim, eps
     );
+    return cudaGetLastError();
+}
+
+int launch_cuda_gelu(
+    float* out,
+    const float* gate,
+    const float* up,
+    int n,
+    cudaStream_t stream
+) {
+    if (!out || !gate || !up || n <= 0) return 0;
+    int block_size = 256;
+    int grid_size = (n + block_size - 1) / block_size;
+    gelu_f32_kernel<<<grid_size, block_size, 0, stream>>>(out, gate, up, n);
+    return cudaGetLastError();
+}
+
+int launch_cuda_logit_softcap(
+    float* logits,
+    int vocab_size,
+    float cap,
+    cudaStream_t stream
+) {
+    if (!logits || vocab_size <= 0 || cap <= 0.0f) return 0;
+    int block_size = 256;
+    int grid_size = (vocab_size + block_size - 1) / block_size;
+    logit_softcap_f32_kernel<<<grid_size, block_size, 0, stream>>>(logits, vocab_size, cap);
     return cudaGetLastError();
 }
 

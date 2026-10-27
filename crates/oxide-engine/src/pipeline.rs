@@ -482,6 +482,7 @@ impl SpecializedPipeline {
                             }
                         });
                     }
+                    backend.set_model_architecture_options(is_gemma, model.config.final_logit_softcapping_f32());
                     for layer in &model.layers {
                         backend.add_layer_weights(
                             layer.q_proj.as_raw_bytes(),
@@ -495,6 +496,8 @@ impl SpecializedPipeline {
                             &layer.ffn_norm,
                             &layer.attn_q_norm,
                             &layer.attn_k_norm,
+                            &layer.post_attn_norm,
+                            &layer.post_ffn_norm,
                             layer.q_proj.rows(),
                             layer.q_proj.cols(),
                             layer.k_proj.rows(),
@@ -677,6 +680,8 @@ impl SpecializedPipeline {
                         }
                     });
                 } else {
+                    let is_gemma = model.config.is_gemma;
+                    let h = model.config.hidden_dim;
                     let lm = model.lm_head.clone();
                     backend.set_embedding_lookup(move |tok_idx, out| {
                         lm.extract_row(tok_idx, out);
@@ -688,6 +693,7 @@ impl SpecializedPipeline {
                         }
                     });
                 }
+                backend.set_model_architecture_options(model.config.is_gemma, model.config.final_logit_softcapping_f32());
                 for layer in &model.layers {
                     let _ = backend.add_layer_weights(
                         layer.q_proj.as_raw_bytes(),
@@ -701,6 +707,8 @@ impl SpecializedPipeline {
                         &layer.ffn_norm,
                         &layer.attn_q_norm,
                         &layer.attn_k_norm,
+                        &layer.post_attn_norm,
+                        &layer.post_ffn_norm,
                         layer.q_proj.rows(),
                         layer.q_proj.cols(),
                         layer.k_proj.rows(),

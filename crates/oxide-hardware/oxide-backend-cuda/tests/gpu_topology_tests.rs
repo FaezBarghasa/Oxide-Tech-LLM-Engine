@@ -198,6 +198,7 @@ fn test_physical_cuda_device_allocation_and_kernel() {
                 1,
                 count as i32,
                 1e-5,
+                0.0,
                 stream.raw(),
             );
             assert_eq!(status, 0);

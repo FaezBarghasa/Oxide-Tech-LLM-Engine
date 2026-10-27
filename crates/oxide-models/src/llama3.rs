@@ -211,7 +211,7 @@ impl Llama3Config {
         let sliding_window = gguf
             .get_u64(&format!("{arch}.attention.sliding_window"))
             .map(|v| v as usize);
-        let head_dim = key_len_swa.unwrap_or(head_dim);
+        let head_dim = key_len.or(key_len_swa).unwrap_or(head_dim);
 
         let is_gemma = arch.contains("gemma");
         let is_qwen = arch.contains("qwen");
@@ -1526,14 +1526,16 @@ impl Llama3Model {
                         q_dim + 2 * kv_dim,
                         h,
                     ) {
-                        if let Some(q) = qkv.slice_rows(0, q_dim) {
-                            layer.q_proj = q;
-                        }
-                        if let Some(k) = qkv.slice_rows(q_dim, kv_dim) {
-                            layer.k_proj = k;
-                        }
-                        if let Some(v) = qkv.slice_rows(q_dim + kv_dim, kv_dim) {
-                            layer.v_proj = v;
+                        if qkv.rows() == q_dim + 2 * kv_dim {
+                            if let Some(q) = qkv.slice_rows(0, q_dim) {
+                                layer.q_proj = q;
+                            }
+                            if let Some(k) = qkv.slice_rows(q_dim, kv_dim) {
+                                layer.k_proj = k;
+                            }
+                            if let Some(v) = qkv.slice_rows(q_dim + kv_dim, kv_dim) {
+                                layer.v_proj = v;
+                            }
                         }
                     }
                 }
