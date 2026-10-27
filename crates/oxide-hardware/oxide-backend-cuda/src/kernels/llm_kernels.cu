@@ -158,6 +158,30 @@ struct __attribute__((packed)) BlockTQ2_0_Gpu {
     uint16_t d;
 };
 
+struct __attribute__((packed)) BlockQ4_1_Gpu {
+    uint16_t d;
+    uint16_t m;
+    uint8_t qs[16];
+};
+
+struct __attribute__((packed)) BlockQ5_1_Gpu {
+    uint16_t d;
+    uint16_t m;
+    uint8_t qh[4];
+    uint8_t qs[16];
+};
+
+struct __attribute__((packed)) BlockIQ4_NL_Gpu {
+    uint16_t d;
+    uint8_t qs[16];
+};
+
+__constant__ float c_kvalues_iq4nl[16] = {
+    -31.0f, -22.0f, -15.0f, -10.0f, -6.0f, -3.0f, -1.0f, 0.0f,
+      1.0f,   3.0f,   6.0f,  10.0f, 15.0f, 22.0f, 31.0f, 44.0f
+};
+
+
 struct __attribute__((packed)) BlockQ5_K_Gpu {
     uint16_t d;
     uint16_t dmin;
@@ -376,6 +400,200 @@ __global__ void gemv_tq2_0_cuda_kernel(
         }
     }
 }
+
+/**
+ * Custom CUDA Kernel: Quantized Q4_1 Matrix-Vector GEMV (20-byte Block x FP32 Activations).
+ */
+__global__ void gemv_q4_1_cuda_kernel(
+    float* __restrict__ y,
+    const void* __restrict__ raw_blocks,
+    const float* __restrict__ x,
+    int m,
+    int k
+) {
+    int row = blockIdx.x;
+    if (row >= m) return;
+
+    int tid = threadIdx.x;
+    int num_blocks_per_row = k / 32;
+
+    const BlockQ4_1_Gpu* row_blocks = (const BlockQ4_1_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 20);
+
+    float acc = 0.0f;
+    for (int b = tid; b < num_blocks_per_row; b += blockDim.x) {
+        const BlockQ4_1_Gpu* blk = &row_blocks[b];
+        float d = __half2float(*((const half*)&blk->d));
+        float min_val = __half2float(*((const half*)&blk->m));
+
+        #pragma unroll 16
+        for (int i = 0; i < 16; i++) {
+            uint8_t byte = blk->qs[i];
+            float q0 = (float)(byte & 0x0F);
+            float q1 = (float)((byte >> 4) & 0x0F);
+
+            float a0 = x[b * 32 + i];
+            float a1 = x[b * 32 + i + 16];
+
+            acc += (q0 * d + min_val) * a0 + (q1 * d + min_val) * a1;
+        }
+    }
+
+    // Warp reduction
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xFFFFFFFF, acc, offset);
+    }
+
+    __shared__ float s_warp_acc[32];
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+
+    if (lane_id == 0) {
+        s_warp_acc[warp_id] = acc;
+    }
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float block_acc = (lane_id < (blockDim.x / 32)) ? s_warp_acc[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            block_acc += __shfl_down_sync(0xFFFFFFFF, block_acc, offset);
+        }
+        if (lane_id == 0) {
+            y[row] = block_acc;
+        }
+    }
+}
+
+/**
+ * Custom CUDA Kernel: Quantized Q5_1 Matrix-Vector GEMV (24-byte Block x FP32 Activations).
+ */
+__global__ void gemv_q5_1_cuda_kernel(
+    float* __restrict__ y,
+    const void* __restrict__ raw_blocks,
+    const float* __restrict__ x,
+    int m,
+    int k
+) {
+    int row = blockIdx.x;
+    if (row >= m) return;
+
+    int tid = threadIdx.x;
+    int num_blocks_per_row = k / 32;
+
+    const BlockQ5_1_Gpu* row_blocks = (const BlockQ5_1_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 24);
+
+    float acc = 0.0f;
+    for (int b = tid; b < num_blocks_per_row; b += blockDim.x) {
+        const BlockQ5_1_Gpu* blk = &row_blocks[b];
+        float d = __half2float(*((const half*)&blk->d));
+        float min_val = __half2float(*((const half*)&blk->m));
+
+        uint32_t qh = *((const uint32_t*)blk->qh);
+
+        #pragma unroll 16
+        for (int i = 0; i < 16; i++) {
+            uint8_t byte = blk->qs[i];
+            uint8_t h0 = (qh >> i) & 1;
+            uint8_t h1 = (qh >> (i + 16)) & 1;
+
+            float q0 = (float)((byte & 0x0F) | (h0 << 4));
+            float q1 = (float)(((byte >> 4) & 0x0F) | (h1 << 4));
+
+            float a0 = x[b * 32 + i];
+            float a1 = x[b * 32 + i + 16];
+
+            acc += (q0 * d + min_val) * a0 + (q1 * d + min_val) * a1;
+        }
+    }
+
+    // Warp reduction
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xFFFFFFFF, acc, offset);
+    }
+
+    __shared__ float s_warp_acc[32];
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+
+    if (lane_id == 0) {
+        s_warp_acc[warp_id] = acc;
+    }
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float block_acc = (lane_id < (blockDim.x / 32)) ? s_warp_acc[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            block_acc += __shfl_down_sync(0xFFFFFFFF, block_acc, offset);
+        }
+        if (lane_id == 0) {
+            y[row] = block_acc;
+        }
+    }
+}
+
+/**
+ * Custom CUDA Kernel: Non-linear IQ4_NL Matrix-Vector GEMV (18-byte Block x FP32 Activations).
+ */
+__global__ void gemv_iq4_nl_cuda_kernel(
+    float* __restrict__ y,
+    const void* __restrict__ raw_blocks,
+    const float* __restrict__ x,
+    int m,
+    int k
+) {
+    int row = blockIdx.x;
+    if (row >= m) return;
+
+    int tid = threadIdx.x;
+    int num_blocks_per_row = k / 32;
+
+    const BlockIQ4_NL_Gpu* row_blocks = (const BlockIQ4_NL_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 18);
+
+    float acc = 0.0f;
+    for (int b = tid; b < num_blocks_per_row; b += blockDim.x) {
+        const BlockIQ4_NL_Gpu* blk = &row_blocks[b];
+        float d = __half2float(*((const half*)&blk->d));
+
+        #pragma unroll 16
+        for (int i = 0; i < 16; i++) {
+            uint8_t byte = blk->qs[i];
+            uint8_t q0 = byte & 0x0F;
+            uint8_t q1 = (byte >> 4) & 0x0F;
+
+            float w0 = d * c_kvalues_iq4nl[q0];
+            float w1 = d * c_kvalues_iq4nl[q1];
+
+            float a0 = x[b * 32 + i];
+            float a1 = x[b * 32 + i + 16];
+
+            acc += w0 * a0 + w1 * a1;
+        }
+    }
+
+    // Warp reduction
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xFFFFFFFF, acc, offset);
+    }
+
+    __shared__ float s_warp_acc[32];
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+
+    if (lane_id == 0) {
+        s_warp_acc[warp_id] = acc;
+    }
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float block_acc = (lane_id < (blockDim.x / 32)) ? s_warp_acc[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            block_acc += __shfl_down_sync(0xFFFFFFFF, block_acc, offset);
+        }
+        if (lane_id == 0) {
+            y[row] = block_acc;
+        }
+    }
+}
+
 
 /**
  * Custom CUDA Kernel: Quantized PTQ1_0 (Ternary 1.58-bit / 1.75-bit) Matrix-Vector GEMV
@@ -1247,6 +1465,45 @@ int launch_cuda_gemv_ptq1_0(
     return cudaGetLastError();
 }
 
+int launch_cuda_gemv_q4_1(
+    float* y,
+    const void* raw_blocks,
+    const float* x,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    if (!y || !raw_blocks || !x || m <= 0 || k <= 0) return 0;
+    gemv_q4_1_cuda_kernel<<<m, 256, 0, stream>>>(y, raw_blocks, x, m, k);
+    return cudaGetLastError();
+}
+
+int launch_cuda_gemv_q5_1(
+    float* y,
+    const void* raw_blocks,
+    const float* x,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    if (!y || !raw_blocks || !x || m <= 0 || k <= 0) return 0;
+    gemv_q5_1_cuda_kernel<<<m, 256, 0, stream>>>(y, raw_blocks, x, m, k);
+    return cudaGetLastError();
+}
+
+int launch_cuda_gemv_iq4_nl(
+    float* y,
+    const void* raw_blocks,
+    const float* x,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    if (!y || !raw_blocks || !x || m <= 0 || k <= 0) return 0;
+    gemv_iq4_nl_cuda_kernel<<<m, 256, 0, stream>>>(y, raw_blocks, x, m, k);
+    return cudaGetLastError();
+}
+
 int launch_cuda_gemv_q2_k(
     float* y,
     const void* raw_blocks,
@@ -1469,5 +1726,89 @@ int launch_cuda_logit_softcap(
     return cudaGetLastError();
 }
 
+/**
+ * Custom CUDA Kernel: Single-pass Vocab Argmax Reduction
+ * Computes argmax token index and maximum logit value directly on GPU.
+ * Bypasses 1MB host-device memory transfers on every decode step.
+ */
+__global__ void argmax_f32_kernel(
+    const float* __restrict__ logits,
+    int vocab_size,
+    uint32_t* __restrict__ out_token,
+    float* __restrict__ out_max_val
+) {
+    __shared__ float s_max_val[32];
+    __shared__ uint32_t s_max_idx[32];
+
+    int tid = threadIdx.x;
+    float max_v = -1e30f;
+    uint32_t max_i = 0;
+
+    // Thread stride across vocab
+    for (int i = tid; i < vocab_size; i += blockDim.x) {
+        float v = logits[i];
+        if (v > max_v) {
+            max_v = v;
+            max_i = (uint32_t)i;
+        }
+    }
+
+    // Warp-level reduction across 32 threads
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        float other_v = __shfl_down_sync(0xFFFFFFFF, max_v, offset);
+        uint32_t other_i = __shfl_down_sync(0xFFFFFFFF, max_i, offset);
+        if (other_v > max_v) {
+            max_v = other_v;
+            max_i = other_i;
+        }
+    }
+
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+
+    if (lane_id == 0) {
+        s_max_val[warp_id] = max_v;
+        s_max_idx[warp_id] = max_i;
+    }
+    __syncthreads();
+
+    // First warp reduces the 32 warp maximums
+    if (warp_id == 0) {
+        int num_warps = blockDim.x / 32;
+        float b_max_v = (lane_id < num_warps) ? s_max_val[lane_id] : -1e30f;
+        uint32_t b_max_i = (lane_id < num_warps) ? s_max_idx[lane_id] : 0;
+
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            float other_v = __shfl_down_sync(0xFFFFFFFF, b_max_v, offset);
+            uint32_t other_i = __shfl_down_sync(0xFFFFFFFF, b_max_i, offset);
+            if (other_v > b_max_v) {
+                b_max_v = other_v;
+                b_max_i = other_i;
+            }
+        }
+
+        if (lane_id == 0) {
+            if (out_token) *out_token = b_max_i;
+            if (out_max_val) *out_max_val = b_max_v;
+        }
+    }
 }
+
+int launch_cuda_argmax(
+    const float* logits,
+    int vocab_size,
+    uint32_t* out_token,
+    float* out_max_val,
+    cudaStream_t stream
+) {
+    if (!logits || vocab_size <= 0 || !out_token) return 0;
+    int block_size = 1024;
+    argmax_f32_kernel<<<1, block_size, 0, stream>>>(logits, vocab_size, out_token, out_max_val);
+    return cudaGetLastError();
+}
+
+}
+
 

@@ -30,6 +30,7 @@
 )]
 
 pub mod arch;
+pub mod cuda_oxide;
 pub mod driver;
 pub mod energy;
 pub mod gpu_unlock;
@@ -128,6 +129,7 @@ pub struct CudaBackend {
     pub d_scratch_gate: Option<CudaDeviceBuffer>,
     pub d_scratch_up: Option<CudaDeviceBuffer>,
     pub d_logits: Option<CudaDeviceBuffer>,
+    pub d_sampled_token: Option<CudaDeviceBuffer>,
     pub kv_k: Vec<CudaDeviceBuffer>,
     pub kv_v: Vec<CudaDeviceBuffer>,
     pub hidden_dim: usize,
@@ -208,6 +210,7 @@ impl CudaBackend {
             d_scratch_gate: None,
             d_scratch_up: None,
             d_logits: None,
+            d_sampled_token: None,
             kv_k: Vec::new(),
             kv_v: Vec::new(),
             hidden_dim: 0,
@@ -344,6 +347,33 @@ impl CudaBackend {
                 );
             } else if quant_type == 10 {
                 driver::launch_cuda_gemv_tq2_0(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else if quant_type == 11 {
+                driver::launch_cuda_gemv_q4_1(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else if quant_type == 12 {
+                driver::launch_cuda_gemv_q5_1(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else if quant_type == 13 {
+                driver::launch_cuda_gemv_iq4_nl(
                     d_y,
                     d_w.as_raw_ptr(),
                     d_x,
@@ -492,6 +522,10 @@ impl CudaBackend {
         );
         self.d_logits = Some(
             CudaDeviceBuffer::allocate(vocab_size * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?,
+        );
+        self.d_sampled_token = Some(
+            CudaDeviceBuffer::allocate(8)
                 .map_err(EngineError::BackendError)?,
         );
 
@@ -873,25 +907,6 @@ impl HardwareBackend for CudaBackend {
                             self.num_kv_heads
                         };
 
-                        // Gemma 4 Value RMSNorm
-                        if self.is_gemma {
-                            if let Some(d_v) = &mut self.d_scratch_v {
-                                unsafe {
-                                    driver::launch_cuda_rmsnorm(
-                                        d_v.as_typed_ptr::<f32>(),
-                                        d_v.as_typed_ptr::<f32>(),
-                                        std::ptr::null(),
-                                        cur_num_kv_heads as i32,
-                                        cur_head_dim as i32,
-                                        1e-6,
-                                        0.0,
-                                        s,
-                                    );
-                                }
-                                check_cuda("v_norm", layer_idx)?;
-                            }
-                        }
-
                         // QK-Norm (applied per-head before RoPE if present)
                         if let (Some(d_q), Some(d_q_norm)) =
                             (&mut self.d_scratch_q, &layer.d_attn_q_norm)
@@ -928,7 +943,12 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
 
-                        // Rotary Position Embedding (RoPE) on Q and K
+                        // Rotary Position Embedding (RoPE) on Q and K with multi-frequency SWA
+                        let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
+                            10_000.0f32
+                        } else {
+                            self.rope_theta
+                        };
                         if let (Some(d_q), Some(d_k)) = (&mut self.d_scratch_q, &mut self.d_scratch_k) {
                             unsafe {
                                 driver::launch_cuda_rope_single(
@@ -938,7 +958,7 @@ impl HardwareBackend for CudaBackend {
                                     cur_num_heads as i32,
                                     cur_num_kv_heads as i32,
                                     cur_head_dim as i32,
-                                    self.rope_theta,
+                                    layer_rope_theta,
                                     s,
                                 );
                             }
@@ -981,12 +1001,17 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
 
-                        // Attention Flash Decode (with GQA)
+                        // Attention Flash Decode (with GQA and Sliding Window Attention)
                         if let (Some(d_q), Some(d_out)) =
                             (&self.d_scratch_q, &mut self.d_scratch_attn_out)
                         {
                             if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
                                 let sm_scale = 1.0 / (cur_head_dim.max(1) as f32).sqrt();
+                                let num_tokens = if self.is_gemma && cur_head_dim <= 256 {
+                                    (pos + 1).min(512).min(kv_cap) as i32
+                                } else {
+                                    (pos + 1).min(kv_cap) as i32
+                                };
                                 unsafe {
                                     driver::launch_cuda_flash_decode(
                                         d_out.as_typed_ptr::<f32>(),
@@ -996,8 +1021,8 @@ impl HardwareBackend for CudaBackend {
                                         cur_num_heads as i32,
                                         cur_num_kv_heads as i32,
                                         cur_head_dim as i32,
-                                        (pos + 1).min(kv_cap) as i32,
-                                         sm_scale,
+                                        num_tokens,
+                                        sm_scale,
                                         s,
                                     );
                                 }
@@ -1257,40 +1282,70 @@ impl HardwareBackend for CudaBackend {
                     }
                 }
 
-                let mut host_logits = vec![0.0f32; self.vocab_size];
-                let _ = d_logits.copy_to_host_async(&mut host_logits, s);
-                if let Err(e) = stream.synchronize() {
-                    tracing::error!("stream.synchronize failed after LM Head: {}", e);
-                }
-
-                let mut best_tok = 1u32;
-                let mut max_val = f32::NEG_INFINITY;
-                for (idx, &v) in host_logits.iter().enumerate() {
-                    if v > max_val {
-                        max_val = v;
-                        best_tok = idx as u32;
+                // On-device argmax when greedy, avoiding 1MB host-device memory transfers per token
+                let selected_token = if self.sampler.config.temperature <= 0.0 && self.d_sampled_token.is_some() {
+                    let d_sampled = self.d_sampled_token.as_mut().unwrap();
+                    let d_tok_ptr = d_sampled.as_raw_ptr() as *mut u32;
+                    let d_val_ptr = unsafe { (d_tok_ptr as *mut u8).add(4) as *mut f32 };
+                    unsafe {
+                        driver::launch_cuda_argmax(
+                            d_logits.as_typed_ptr::<f32>(),
+                            self.vocab_size as i32,
+                            d_tok_ptr,
+                            d_val_ptr,
+                            s,
+                        );
                     }
-                }
-
-                // Sample token using AcademicSamplerEngine (temperature, top-p, min-p, DRY repetition penalty) or greedy argmax
-                let selected_token = if self.sampler.config.temperature <= 0.0 {
+                    let mut sampled_res = [0u32, 0u32];
+                    let _ = d_sampled.copy_to_host_async(&mut sampled_res, s);
+                    if let Err(e) = stream.synchronize() {
+                        tracing::error!("stream.synchronize failed after argmax: {}", e);
+                    }
+                    let best_tok = sampled_res[0];
+                    let max_val = f32::from_bits(sampled_res[1]);
+                    if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
+                        tracing::info!(
+                            "CUDA on-device argmax pos {}: sampled_tok={}, max_val={}",
+                            pos,
+                            best_tok,
+                            max_val
+                        );
+                    }
                     best_tok
                 } else {
-                    self.sampler
+                    let mut host_logits = vec![0.0f32; self.vocab_size];
+                    let _ = d_logits.copy_to_host_async(&mut host_logits, s);
+                    if let Err(e) = stream.synchronize() {
+                        tracing::error!("stream.synchronize failed after LM Head: {}", e);
+                    }
+
+                    let mut best_tok = 1u32;
+                    let mut max_val = f32::NEG_INFINITY;
+                    for (idx, &v) in host_logits.iter().enumerate() {
+                        if v > max_val {
+                            max_val = v;
+                            best_tok = idx as u32;
+                        }
+                    }
+
+                    // Sample token using AcademicSamplerEngine (temperature, top-p, min-p, DRY repetition penalty)
+                    let tok = self.sampler
                         .sample_token(&mut host_logits, &mut self.sampler_state, 198)
-                        .unwrap_or(best_tok)
+                        .unwrap_or(best_tok);
+
+                    if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
+                        tracing::info!(
+                            "CUDA host sampled pos {}: greedy_top={}, sampled_tok={}, max_val={}, logits[0..5]={:?}",
+                            pos,
+                            best_tok,
+                            tok,
+                            max_val,
+                            &host_logits[0..5.min(host_logits.len())]
+                        );
+                    }
+                    tok
                 };
 
-                if self.seq_pos <= 5 || self.seq_pos % 25 == 0 {
-                    tracing::info!(
-                        "CUDA pos {}: greedy_top={}, sampled_tok={}, max_val={}, logits[0..5]={:?}",
-                        pos,
-                        best_tok,
-                        selected_token,
-                        max_val,
-                        &host_logits[0..5.min(host_logits.len())]
-                    );
-                }
                 if slot < self.host_token_buffer.len() {
                     self.host_token_buffer[slot] = selected_token;
                 }

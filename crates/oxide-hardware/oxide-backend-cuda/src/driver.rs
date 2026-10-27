@@ -172,6 +172,33 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_gemv_q4_1(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const f32,
+        m: i32,
+        k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_gemv_q5_1(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const f32,
+        m: i32,
+        k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_gemv_iq4_nl(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const f32,
+        m: i32,
+        k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_vector_add(a: *mut f32, b: *const f32, n: i32, stream: cudaStream_t) -> i32;
     pub fn launch_cuda_vector_scale(x: *mut f32, scale: f32, n: i32, stream: cudaStream_t) -> i32;
 
@@ -228,6 +255,14 @@ unsafe extern "C" {
         logits: *mut f32,
         vocab_size: i32,
         cap: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_argmax(
+        logits: *const f32,
+        vocab_size: i32,
+        out_token: *mut u32,
+        out_max_val: *mut f32,
         stream: cudaStream_t,
     ) -> i32;
 

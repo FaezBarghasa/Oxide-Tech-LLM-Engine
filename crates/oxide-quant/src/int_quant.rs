@@ -57,7 +57,7 @@ impl BlockQ4_0 {
 }
 
 /// Q4_1: 32 weights per block. 1x FP16 scale + 1x FP16 min + 16 bytes (32 nibbles).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ4_1 {
     pub scale: f16,
@@ -108,7 +108,7 @@ impl BlockQ4_1 {
 }
 
 /// Q1_0: 32 weights per block. 1x FP16 scale + 4 bytes (32 1-bit weights).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ1_0 {
     pub scale: f16,
@@ -145,7 +145,7 @@ impl BlockQ1_0 {
 }
 
 /// Q2_0: 32 weights per block. 1x FP16 scale + 8 bytes (32 2-bit weights).
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ2_0 {
     pub scale: f16,
@@ -182,7 +182,7 @@ impl BlockQ2_0 {
 }
 
 /// Q4_2: Legacy 4-bit block quantization format.
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ4_2 {
     pub scale: f16,
@@ -203,7 +203,7 @@ impl BlockQ4_2 {
 }
 
 /// Q4_3: Legacy 4-bit block quantization format with scale and min.
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ4_3 {
     pub scale: f16,
@@ -294,7 +294,7 @@ impl BlockQ5_0 {
 }
 
 /// Q5_1: 32 weights per block. 1x FP16 scale + 1x FP16 min + 4 bytes high bits + 16 bytes low bits = 24 bytes.
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ5_1 {
     pub scale: f16,
@@ -414,7 +414,7 @@ impl BlockQ8_0 {
 }
 
 /// Q8_1: 32 weights per block. 1x FP16 scale + 1x FP16 sum (for dot product bias) + 32 signed int8 values = 36 bytes.
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BlockQ8_1 {
     pub scale: f16,
@@ -714,7 +714,7 @@ impl BlockQ6_K {
 }
 
 /// Q8_K: 256 weights per super-block (8-bit quantization with FP32/FP16 scale, 8.5 bpw).
-#[repr(C, align(32))]
+#[repr(C)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockQ8_K {
     pub d: f32,           // Super-block scale
