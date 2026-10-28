@@ -56,6 +56,26 @@ fn test_dry_repetition_penalty() {
 }
 
 #[test]
+fn test_sliding_window_repetition_penalty() {
+    let mut logits = vec![10.0, 5.0, 2.0];
+    let config = SamplingConfig {
+        repeat_penalty: 2.0,
+        repeat_last_n: 4,
+        temperature: 0.0, // greedy
+        ..Default::default()
+    };
+    let sampler = AcademicSamplerEngine::new(config);
+    let mut state = SamplerState::new(5.0);
+    state.generated_tokens = vec![0]; // token 0 was just generated
+
+    // Logit 0 starts at 10.0 -> divided by 2.0 -> 5.0
+    // Logit 1 is 5.0
+    // With repetition penalty applied to token 0, token 0 is penalized.
+    let _ = sampler.sample_token(&mut logits, &mut state, 13).unwrap();
+    assert_eq!(logits[0], 5.0);
+}
+
+#[test]
 fn test_mirostat_v2_sampling() {
     let mut logits = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let config = SamplingConfig {

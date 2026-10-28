@@ -1302,22 +1302,57 @@ __global__ void logit_softcap_f32_kernel(
     }
 }
 
+__device__ inline float compute_rope_freq_yarn(
+    int d,
+    int head_dim,
+    float theta,
+    float scaling_factor,
+    int orig_ctx,
+    float ext_factor = 1.0f,
+    float beta_fast = 32.0f,
+    float beta_slow = 1.0f
+) {
+    float freq = 1.0f / powf(theta, (float)(2 * d) / (float)head_dim);
+    if (scaling_factor > 1.0f && orig_ctx > 0) {
+        float wavelength = 6.28318530718f / freq;
+        float ramp = ((float)orig_ctx / wavelength - beta_slow) / (beta_fast - beta_slow);
+        ramp = fminf(fmaxf(ramp, 0.0f), 1.0f);
+        float freq_interp = freq / scaling_factor;
+        freq = (1.0f - ramp) * freq_interp + ramp * (freq * ext_factor);
+    }
+    return freq;
+}
+
+__global__ void convert_f32_to_f16_kernel(
+    __half* __restrict__ dst,
+    const float* __restrict__ src,
+    int n
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        dst[idx] = __float2half(src[idx]);
+    }
+}
+
 __global__ void rope_single_token_kernel(
     float* __restrict__ q,
     float* __restrict__ k,
-    float* __restrict__ k_out,
+    void* __restrict__ k_out,
     int pos,
     int num_heads,
     int num_kv_heads,
     int head_dim,
-    float theta
+    float theta,
+    int is_fp16 = 0,
+    float scaling_factor = 1.0f,
+    int orig_ctx = 0
 ) {
     int head_idx = blockIdx.x;
     int half_dim = head_dim / 2;
     int d = threadIdx.x;
     if (d >= half_dim) return;
 
-    float freq = 1.0f / powf(theta, (float)(2 * d) / (float)head_dim);
+    float freq = compute_rope_freq_yarn(d, head_dim, theta, scaling_factor, orig_ctx);
     float angle = (float)pos * freq;
     float sin_val, cos_val;
     __sincosf(angle, &sin_val, &cos_val);
@@ -1336,22 +1371,36 @@ __global__ void rope_single_token_kernel(
         float k1 = k[k_base + d + half_dim];
         float rot0 = k0 * cos_val - k1 * sin_val;
         float rot1 = k0 * sin_val + k1 * cos_val;
-        float* dst = (k_out != nullptr) ? k_out : k;
-        dst[k_base + d]            = rot0;
-        dst[k_base + d + half_dim] = rot1;
+        k[k_base + d]            = rot0;
+        k[k_base + d + half_dim] = rot1;
+
+        if (k_out != nullptr) {
+            if (is_fp16) {
+                __half* dst_h = (__half*)k_out;
+                dst_h[k_base + d]            = __float2half(rot0);
+                dst_h[k_base + d + half_dim] = __float2half(rot1);
+            } else {
+                float* dst_f = (float*)k_out;
+                dst_f[k_base + d]            = rot0;
+                dst_f[k_base + d + half_dim] = rot1;
+            }
+        }
     }
 }
 
 __global__ void rope_batch_tokens_kernel(
     float* __restrict__ q,
     float* __restrict__ k,
-    float* __restrict__ k_cache,
+    void* __restrict__ k_cache,
     int start_pos,
     int batch_size,
     int num_heads,
     int num_kv_heads,
     int head_dim,
-    float theta
+    float theta,
+    int is_fp16 = 0,
+    float scaling_factor = 1.0f,
+    int orig_ctx = 0
 ) {
     int head_idx = blockIdx.x;
     int b = blockIdx.y;
@@ -1362,7 +1411,7 @@ __global__ void rope_batch_tokens_kernel(
     if (d >= half_dim) return;
 
     int token_pos = start_pos + b;
-    float freq = 1.0f / powf(theta, (float)(2 * d) / (float)head_dim);
+    float freq = compute_rope_freq_yarn(d, head_dim, theta, scaling_factor, orig_ctx);
     float angle = (float)token_pos * freq;
     float sin_val, cos_val;
     __sincosf(angle, &sin_val, &cos_val);
@@ -1386,28 +1435,36 @@ __global__ void rope_batch_tokens_kernel(
 
         if (k_cache != nullptr) {
             int cache_base = token_pos * (num_kv_heads * head_dim) + head_idx * head_dim;
-            k_cache[cache_base + d]            = rot0;
-            k_cache[cache_base + d + half_dim] = rot1;
+            if (is_fp16) {
+                __half* dst_h = (__half*)k_cache;
+                dst_h[cache_base + d]            = __float2half(rot0);
+                dst_h[cache_base + d + half_dim] = __float2half(rot1);
+            } else {
+                float* dst_f = (float*)k_cache;
+                dst_f[cache_base + d]            = rot0;
+                dst_f[cache_base + d + half_dim] = rot1;
+            }
         }
     }
 }
 
-
 /**
  * Custom CUDA Kernel: FlashAttention-2 Paged Token Decode Kernel (Tiling + Online Softmax + GQA)
  * Warp-Per-Head architecture: 0 shared memory, 0 __syncthreads(), independent warp registers.
+ * Supports FP16 and FP32 KV cache.
  */
 __global__ void flash_decode_paged_kernel(
     float* __restrict__ output,
     const float* __restrict__ q,
-    const float* __restrict__ k_cache,
-    const float* __restrict__ v_cache,
+    const void* __restrict__ k_cache,
+    const void* __restrict__ v_cache,
     int num_heads,
     int num_kv_heads,
     int head_dim,
     int num_kv_tokens,
     int start_token,
-    float sm_scale
+    float sm_scale,
+    int is_fp16 = 0
 ) {
     if (num_heads <= 0 || head_dim <= 0 || num_kv_tokens <= 0) return;
     int head_idx = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
@@ -1439,12 +1496,20 @@ __global__ void flash_decode_paged_kernel(
 
     // Grid-stride over past KV cached tokens
     for (int t = valid_start; t < num_kv_tokens; t++) {
-        const float* k_tok = k_cache + (t * kv_heads + kv_head_idx) * head_dim;
+        size_t tok_offset = (size_t)(t * kv_heads + kv_head_idx) * head_dim;
 
         // Compute Q . K dot product for this head from registers
         float score = 0.0f;
-        for (int i = 0; i < q_items; i++) {
-            score += q_reg[i] * k_tok[lane_id + i * 32];
+        if (is_fp16) {
+            const __half* k_tok = (const __half*)k_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                score += q_reg[i] * __half2float(k_tok[lane_id + i * 32]);
+            }
+        } else {
+            const float* k_tok = (const float*)k_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                score += q_reg[i] * k_tok[lane_id + i * 32];
+            }
         }
 
         // Warp reduction across the 32 lanes
@@ -1464,9 +1529,16 @@ __global__ void flash_decode_paged_kernel(
         max_score = new_max;
         sum_exp = sum_exp * alpha + beta;
 
-        const float* v_tok = v_cache + (t * kv_heads + kv_head_idx) * head_dim;
-        for (int i = 0; i < q_items; i++) {
-            acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
+        if (is_fp16) {
+            const __half* v_tok = (const __half*)v_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                acc_v[i] = acc_v[i] * alpha + beta * __half2float(v_tok[lane_id + i * 32]);
+            }
+        } else {
+            const float* v_tok = (const float*)v_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
+            }
         }
     }
 
@@ -1482,19 +1554,21 @@ __global__ void flash_decode_paged_kernel(
  * Evaluates causal attention for all B tokens in prompt chunk across past KV cache in single pass.
  * Grid: dim3 grid((num_heads + 7) / 8, batch_size)
  * Block: 256 threads (8 warps, 1 warp per head).
+ * Supports FP16 and FP32 KV cache.
  */
 __global__ void flash_causal_batched_prefill_kernel(
     float* __restrict__ output,
     const float* __restrict__ q,
-    const float* __restrict__ k_cache,
-    const float* __restrict__ v_cache,
+    const void* __restrict__ k_cache,
+    const void* __restrict__ v_cache,
     int start_pos,
     int batch_size,
     int num_heads,
     int num_kv_heads,
     int head_dim,
     int kv_cap,
-    float sm_scale
+    float sm_scale,
+    int is_fp16 = 0
 ) {
     if (num_heads <= 0 || head_dim <= 0 || batch_size <= 0) return;
     int b = blockIdx.y;
@@ -1534,12 +1608,20 @@ __global__ void flash_causal_batched_prefill_kernel(
 
     // Grid-stride over past KV cached tokens (causal: up to token_pos)
     for (int t = 0; t < num_kv_tokens; t++) {
-        const float* k_tok = k_cache + (t * kv_heads + kv_head_idx) * head_dim;
+        size_t tok_offset = (size_t)(t * kv_heads + kv_head_idx) * head_dim;
 
         // Compute Q . K dot product for this head from registers
         float score = 0.0f;
-        for (int i = 0; i < q_items; i++) {
-            score += q_reg[i] * k_tok[lane_id + i * 32];
+        if (is_fp16) {
+            const __half* k_tok = (const __half*)k_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                score += q_reg[i] * __half2float(k_tok[lane_id + i * 32]);
+            }
+        } else {
+            const float* k_tok = (const float*)k_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                score += q_reg[i] * k_tok[lane_id + i * 32];
+            }
         }
 
         // Warp reduction across the 32 lanes
@@ -1559,9 +1641,16 @@ __global__ void flash_causal_batched_prefill_kernel(
         max_score = new_max;
         sum_exp = sum_exp * alpha + beta;
 
-        const float* v_tok = v_cache + (t * kv_heads + kv_head_idx) * head_dim;
-        for (int i = 0; i < q_items; i++) {
-            acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
+        if (is_fp16) {
+            const __half* v_tok = (const __half*)v_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                acc_v[i] = acc_v[i] * alpha + beta * __half2float(v_tok[lane_id + i * 32]);
+            }
+        } else {
+            const float* v_tok = (const float*)v_cache + tok_offset;
+            for (int i = 0; i < q_items; i++) {
+                acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
+            }
         }
     }
 
@@ -1998,18 +2087,21 @@ int launch_cuda_fused_swiglu_q8_1(
 int launch_cuda_rope_single(
     float* q,
     float* k,
-    float* k_out,
+    void* k_out,
     int pos,
     int num_heads,
     int num_kv_heads,
     int head_dim,
     float theta,
+    int is_fp16,
+    float scaling_factor,
+    int orig_ctx,
     cudaStream_t stream
 ) {
     int grid = num_heads > num_kv_heads ? num_heads : num_kv_heads;
     int block_size = head_dim / 2;
     rope_single_token_kernel<<<grid, block_size, 0, stream>>>(
-        q, k, k_out, pos, num_heads, num_kv_heads, head_dim, theta
+        q, k, k_out, pos, num_heads, num_kv_heads, head_dim, theta, is_fp16, scaling_factor, orig_ctx
     );
     return cudaGetLastError();
 }
@@ -2017,21 +2109,22 @@ int launch_cuda_rope_single(
 int launch_cuda_flash_decode(
     float* output,
     const float* q,
-    const float* k_cache,
-    const float* v_cache,
+    const void* k_cache,
+    const void* v_cache,
     int num_heads,
     int num_kv_heads,
     int head_dim,
     int num_kv_tokens,
     int start_token,
     float sm_scale,
+    int is_fp16,
     cudaStream_t stream
 ) {
     if (num_heads <= 0 || head_dim <= 0 || num_kv_tokens <= 0) return 0;
     const int block_size = 32; // 1 warp per block = maximum SM distribution
     int grid = num_heads;
     flash_decode_paged_kernel<<<grid, block_size, 0, stream>>>(
-        output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale
+        output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale, is_fp16
     );
     return cudaGetLastError();
 }
@@ -2039,13 +2132,16 @@ int launch_cuda_flash_decode(
 int launch_cuda_rope_batch(
     float* q,
     float* k,
-    float* k_cache,
+    void* k_cache,
     int start_pos,
     int batch_size,
     int num_heads,
     int num_kv_heads,
     int head_dim,
     float theta,
+    int is_fp16,
+    float scaling_factor,
+    int orig_ctx,
     cudaStream_t stream
 ) {
     if (batch_size <= 0 || head_dim <= 0) return 0;
@@ -2053,7 +2149,7 @@ int launch_cuda_rope_batch(
     dim3 grid(max_heads, batch_size);
     int block_size = head_dim / 2;
     rope_batch_tokens_kernel<<<grid, block_size, 0, stream>>>(
-        q, k, k_cache, start_pos, batch_size, num_heads, num_kv_heads, head_dim, theta
+        q, k, k_cache, start_pos, batch_size, num_heads, num_kv_heads, head_dim, theta, is_fp16, scaling_factor, orig_ctx
     );
     return cudaGetLastError();
 }
@@ -2061,8 +2157,8 @@ int launch_cuda_rope_batch(
 int launch_cuda_flash_causal_prefill(
     float* output,
     const float* q,
-    const float* k_cache,
-    const float* v_cache,
+    const void* k_cache,
+    const void* v_cache,
     int start_pos,
     int batch_size,
     int num_heads,
@@ -2070,14 +2166,28 @@ int launch_cuda_flash_causal_prefill(
     int head_dim,
     int kv_cap,
     float sm_scale,
+    int is_fp16,
     cudaStream_t stream
 ) {
     if (batch_size <= 0 || num_heads <= 0 || head_dim <= 0) return 0;
     const int block_size = 256; // 8 warps per block = 8 heads per block
     dim3 grid((num_heads + 7) / 8, batch_size);
     flash_causal_batched_prefill_kernel<<<grid, block_size, 0, stream>>>(
-        output, q, k_cache, v_cache, start_pos, batch_size, num_heads, num_kv_heads, head_dim, kv_cap, sm_scale
+        output, q, k_cache, v_cache, start_pos, batch_size, num_heads, num_kv_heads, head_dim, kv_cap, sm_scale, is_fp16
     );
+    return cudaGetLastError();
+}
+
+int launch_cuda_convert_f32_to_f16(
+    void* dst,
+    const float* src,
+    int n,
+    cudaStream_t stream
+) {
+    if (!dst || !src || n <= 0) return 0;
+    int block_size = 256;
+    int grid_size = (n + block_size - 1) / block_size;
+    convert_f32_to_f16_kernel<<<grid_size, block_size, 0, stream>>>((__half*)dst, src, n);
     return cudaGetLastError();
 }
 

@@ -149,6 +149,8 @@ pub struct CudaBackend {
     pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
     pub lm_head_quant_type: u32,
     pub rope_theta: f32,
+    pub rope_scaling_factor: f32,
+    pub rope_scaling_orig_ctx: usize,
     pub is_gemma: bool,
     pub final_logit_softcapping: Option<f32>,
     pub sampler: oxide_core::sampler::AcademicSamplerEngine,
@@ -243,6 +245,8 @@ impl CudaBackend {
             mmap_handle: None,
             lm_head_quant_type: 1,
             rope_theta: 10_000.0,
+            rope_scaling_factor: 1.0,
+            rope_scaling_orig_ctx: 0,
             is_gemma: false,
             final_logit_softcapping: None,
             sampler: {
@@ -250,6 +254,8 @@ impl CudaBackend {
                     temperature: 0.7,
                     top_p: 0.95,
                     min_p: 0.05,
+                    repeat_penalty: 1.1,
+                    repeat_last_n: 64,
                     dry_multiplier: 0.8,
                     ..Default::default()
                 };
@@ -260,12 +266,14 @@ impl CudaBackend {
                     temperature: 0.7,
                     top_p: 0.95,
                     min_p: 0.05,
+                    repeat_penalty: 1.1,
+                    repeat_last_n: 64,
                     dry_multiplier: 0.8,
                     ..Default::default()
                 };
                 oxide_core::sampler::SamplerState::from_config(&sampling_config)
             },
-            kv_capacity: 4096,
+            kv_capacity: 8192,
             rms_norm_eps: 1e-5,
             is_qwen: false,
             sliding_window: None,
@@ -297,12 +305,15 @@ impl CudaBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn configure_sampling(
         &mut self,
         temp: f32,
         top_p: f32,
         top_k: usize,
         min_p: f32,
+        repeat_penalty: f32,
+        repeat_last_n: usize,
         seed: u64,
         greedy: bool,
     ) {
@@ -314,6 +325,8 @@ impl CudaBackend {
             sampling_config.top_p = top_p;
             sampling_config.top_k = top_k;
             sampling_config.min_p = min_p;
+            sampling_config.repeat_penalty = repeat_penalty;
+            sampling_config.repeat_last_n = repeat_last_n;
         }
         sampling_config.seed = Some(seed);
         self.sampler = oxide_core::sampler::AcademicSamplerEngine::new(sampling_config.clone());
@@ -862,7 +875,8 @@ impl CudaBackend {
         } else {
             self.num_kv_heads.max(1) * self.head_dim.max(64)
         };
-        let kv_bytes = kv_cap * layer_kv_dim * std::mem::size_of::<f32>();
+        // FP16 KV Cache: 2 bytes per element (half precision)
+        let kv_bytes = kv_cap * layer_kv_dim * 2;
         let mut kv_k_buf =
             CudaDeviceBuffer::allocate(kv_bytes.max(1024)).map_err(EngineError::BackendError)?;
         kv_k_buf
@@ -1191,18 +1205,18 @@ impl CudaBackend {
                         let token_pos = pos + b;
                         let k_dst_ptr = if layer_idx < self.kv_k.len() {
                             unsafe {
-                                self.kv_k[layer_idx]
-                                    .as_typed_ptr::<f32>()
-                                    .add(token_pos * kv_dim)
+                                (self.kv_k[layer_idx].as_raw_ptr() as *mut u8)
+                                    .add(token_pos * kv_dim * 2)
+                                    as *mut std::ffi::c_void
                             }
                         } else {
                             std::ptr::null_mut()
                         };
                         let v_dst_ptr = if layer_idx < self.kv_v.len() {
                             unsafe {
-                                self.kv_v[layer_idx]
-                                    .as_typed_ptr::<f32>()
-                                    .add(token_pos * kv_dim)
+                                (self.kv_v[layer_idx].as_raw_ptr() as *mut u8)
+                                    .add(token_pos * kv_dim * 2)
+                                    as *mut std::ffi::c_void
                             }
                         } else {
                             std::ptr::null_mut()
@@ -1221,6 +1235,9 @@ impl CudaBackend {
                                     cur_num_kv_heads as i32,
                                     cur_head_dim as i32,
                                     layer_rope_theta,
+                                    1, // is_fp16
+                                    self.rope_scaling_factor,
+                                    self.rope_scaling_orig_ctx as i32,
                                     s,
                                 );
                             }
@@ -1229,12 +1246,10 @@ impl CudaBackend {
                         if let Some(d_v) = &self.d_scratch_v {
                             if !v_dst_ptr.is_null() {
                                 unsafe {
-                                    driver::cudaMemcpyAsync(
-                                        v_dst_ptr as *mut std::ffi::c_void,
-                                        d_v.as_typed_ptr::<f32>().add(b * kv_dim)
-                                            as *const std::ffi::c_void,
-                                        kv_dim * std::mem::size_of::<f32>(),
-                                        driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                    driver::launch_cuda_convert_f32_to_f16(
+                                        v_dst_ptr,
+                                        d_v.as_typed_ptr::<f32>().add(b * kv_dim),
+                                        kv_dim as i32,
                                         s,
                                     );
                                 }
@@ -1251,14 +1266,15 @@ impl CudaBackend {
                                     driver::launch_cuda_flash_decode(
                                         d_out.as_typed_ptr::<f32>().add(b * q_dim),
                                         d_q.as_typed_ptr::<f32>().add(b * q_dim),
-                                        self.kv_k[layer_idx].as_typed_ptr::<f32>(),
-                                        self.kv_v[layer_idx].as_typed_ptr::<f32>(),
+                                        self.kv_k[layer_idx].as_raw_ptr(),
+                                        self.kv_v[layer_idx].as_raw_ptr(),
                                         cur_num_heads as i32,
                                         cur_num_kv_heads as i32,
                                         cur_head_dim as i32,
                                         num_tokens,
                                         0,
                                         sm_scale,
+                                        1, // is_fp16
                                         s,
                                     );
                                 }
@@ -1721,7 +1737,7 @@ impl CudaBackend {
                     };
 
                     let k_cache_ptr = if layer_idx < self.kv_k.len() {
-                        self.kv_k[layer_idx].as_typed_ptr::<f32>()
+                        self.kv_k[layer_idx].as_raw_ptr()
                     } else {
                         std::ptr::null_mut()
                     };
@@ -1738,6 +1754,9 @@ impl CudaBackend {
                                 cur_num_kv_heads as i32,
                                 cur_head_dim as i32,
                                 layer_rope_theta,
+                                1, // is_fp16
+                                self.rope_scaling_factor,
+                                self.rope_scaling_orig_ctx as i32,
                                 s,
                             );
                         }
@@ -1746,13 +1765,13 @@ impl CudaBackend {
                     if let Some(d_v) = &self.d_scratch_v {
                         if layer_idx < self.kv_v.len() {
                             unsafe {
-                                let v_dst_ptr =
-                                    self.kv_v[layer_idx].as_typed_ptr::<f32>().add(pos * kv_dim);
-                                driver::cudaMemcpyAsync(
-                                    v_dst_ptr as *mut std::ffi::c_void,
-                                    d_v.as_typed_ptr::<f32>() as *const std::ffi::c_void,
-                                    batch_size * kv_dim * std::mem::size_of::<f32>(),
-                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                let v_dst_ptr = (self.kv_v[layer_idx].as_raw_ptr() as *mut u8)
+                                    .add(pos * kv_dim * 2)
+                                    as *mut std::ffi::c_void;
+                                driver::launch_cuda_convert_f32_to_f16(
+                                    v_dst_ptr,
+                                    d_v.as_typed_ptr::<f32>(),
+                                    (batch_size * kv_dim) as i32,
                                     s,
                                 );
                             }
@@ -1768,8 +1787,8 @@ impl CudaBackend {
                                 driver::launch_cuda_flash_causal_prefill(
                                     d_out.as_typed_ptr::<f32>(),
                                     d_q.as_typed_ptr::<f32>(),
-                                    self.kv_k[layer_idx].as_typed_ptr::<f32>(),
-                                    self.kv_v[layer_idx].as_typed_ptr::<f32>(),
+                                    self.kv_k[layer_idx].as_raw_ptr(),
+                                    self.kv_v[layer_idx].as_raw_ptr(),
                                     pos as i32,
                                     batch_size as i32,
                                     cur_num_heads as i32,
@@ -1777,6 +1796,7 @@ impl CudaBackend {
                                     cur_head_dim as i32,
                                     kv_cap as i32,
                                     sm_scale,
+                                    1, // is_fp16
                                     s,
                                 );
                             }
@@ -2270,18 +2290,21 @@ impl HardwareBackend for CudaBackend {
                             )));
                         }
                         let kv_dim = cur_num_kv_heads * cur_head_dim;
-                        let (k_dst_ptr, v_dst_ptr) = if layer_idx < self.kv_k.len()
-                            && layer_idx < self.kv_v.len()
-                        {
-                            unsafe {
-                                (
-                                    self.kv_k[layer_idx].as_typed_ptr::<f32>().add(pos * kv_dim),
-                                    self.kv_v[layer_idx].as_typed_ptr::<f32>().add(pos * kv_dim),
-                                )
-                            }
-                        } else {
-                            (std::ptr::null_mut(), std::ptr::null_mut())
-                        };
+                        let (k_dst_ptr, v_dst_ptr) =
+                            if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
+                                unsafe {
+                                    (
+                                        (self.kv_k[layer_idx].as_raw_ptr() as *mut u8)
+                                            .add(pos * kv_dim * 2)
+                                            as *mut std::ffi::c_void,
+                                        (self.kv_v[layer_idx].as_raw_ptr() as *mut u8)
+                                            .add(pos * kv_dim * 2)
+                                            as *mut std::ffi::c_void,
+                                    )
+                                }
+                            } else {
+                                (std::ptr::null_mut(), std::ptr::null_mut())
+                            };
 
                         // Q Projection
                         if let Some(d_q) = &mut self.d_scratch_q {
@@ -2317,18 +2340,11 @@ impl HardwareBackend for CudaBackend {
                             check_cuda("k_proj", layer_idx)?;
                         }
 
-                        // V Projection: directly projects into physical KV cache (zero memcpy)
-                        let v_out_ptr = if !v_dst_ptr.is_null() {
-                            v_dst_ptr
-                        } else if let Some(d_v) = &mut self.d_scratch_v {
-                            d_v.as_typed_ptr::<f32>()
-                        } else {
-                            std::ptr::null_mut()
-                        };
-                        if !v_out_ptr.is_null() {
+                        // V Projection: computes GEMV into scratch buffer, then converts to FP16 in KV cache
+                        if let Some(d_v) = &mut self.d_scratch_v {
                             unsafe {
                                 Self::dispatch_gemv(
-                                    v_out_ptr,
+                                    d_v.as_typed_ptr::<f32>(),
                                     &layer.d_wv,
                                     d_norm.as_typed_ptr::<f32>(),
                                     d_q8_1_ptr,
@@ -2337,6 +2353,14 @@ impl HardwareBackend for CudaBackend {
                                     layer.v_quant,
                                     s,
                                 );
+                                if !v_dst_ptr.is_null() {
+                                    driver::launch_cuda_convert_f32_to_f16(
+                                        v_dst_ptr,
+                                        d_v.as_typed_ptr::<f32>(),
+                                        kv_dim as i32,
+                                        s,
+                                    );
+                                }
                             }
                             check_cuda("v_proj", layer_idx)?;
                         }
@@ -2377,7 +2401,7 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
 
-                        // Rotary Position Embedding (RoPE) on Q and K: directly emits rotated K to KV cache
+                        // Rotary Position Embedding (RoPE) on Q and K: directly emits rotated K to FP16 KV cache
                         let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
                             10_000.0f32
                         } else {
@@ -2396,6 +2420,9 @@ impl HardwareBackend for CudaBackend {
                                     cur_num_kv_heads as i32,
                                     cur_head_dim as i32,
                                     layer_rope_theta,
+                                    1, // is_fp16
+                                    self.rope_scaling_factor,
+                                    self.rope_scaling_orig_ctx as i32,
                                     s,
                                 );
                             }
@@ -2422,14 +2449,15 @@ impl HardwareBackend for CudaBackend {
                                     driver::launch_cuda_flash_decode(
                                         d_out.as_typed_ptr::<f32>(),
                                         d_q.as_typed_ptr::<f32>(),
-                                        self.kv_k[layer_idx].as_typed_ptr::<f32>(),
-                                        self.kv_v[layer_idx].as_typed_ptr::<f32>(),
+                                        self.kv_k[layer_idx].as_raw_ptr(),
+                                        self.kv_v[layer_idx].as_raw_ptr(),
                                         cur_num_heads as i32,
                                         cur_num_kv_heads as i32,
                                         cur_head_dim as i32,
                                         num_tokens,
                                         start_token,
                                         sm_scale,
+                                        1, // is_fp16
                                         s,
                                     );
                                 }

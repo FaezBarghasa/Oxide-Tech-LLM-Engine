@@ -407,31 +407,55 @@ impl SpecializedPipeline {
         }
     }
 
-    /// Configures sampling parameters (temperature, top_p, top_k, min_p, seed, greedy) on the underlying backend.
+    /// Configures sampling parameters (temperature, top_p, top_k, min_p, repeat_penalty, repeat_last_n, seed, greedy) on the underlying backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn configure_sampling(
         &mut self,
         temp: f32,
         top_p: f32,
         top_k: usize,
         min_p: f32,
+        repeat_penalty: f32,
+        repeat_last_n: usize,
         seed: u64,
         greedy: bool,
     ) {
         match self {
             Self::Llama3Cuda(engine) => {
-                engine
-                    .backend
-                    .configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
+                engine.backend.configure_sampling(
+                    temp,
+                    top_p,
+                    top_k,
+                    min_p,
+                    repeat_penalty,
+                    repeat_last_n,
+                    seed,
+                    greedy,
+                );
             }
             Self::Needle3Cuda(engine) => {
-                engine
-                    .backend
-                    .configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
+                engine.backend.configure_sampling(
+                    temp,
+                    top_p,
+                    top_k,
+                    min_p,
+                    repeat_penalty,
+                    repeat_last_n,
+                    seed,
+                    greedy,
+                );
             }
             Self::Bonsai2Cuda(engine) => {
-                engine
-                    .backend
-                    .configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
+                engine.backend.configure_sampling(
+                    temp,
+                    top_p,
+                    top_k,
+                    min_p,
+                    repeat_penalty,
+                    repeat_last_n,
+                    seed,
+                    greedy,
+                );
             }
             _ => {}
         }
@@ -492,7 +516,7 @@ impl SpecializedPipeline {
                         rms_eps,
                         model.config.is_qwen,
                         model.config.sliding_window,
-                        model.config.max_seq_len.min(4096),
+                        model.config.max_seq_len.min(8192),
                     );
                     // Host-side embedding lookup via mmap avoids allocating gigabytes of VRAM for token_embd.
                     backend.configure_model(
@@ -509,6 +533,12 @@ impl SpecializedPipeline {
                     let theta = f32::from_bits(model.config.rope_theta);
                     if theta > 0.0 {
                         backend.rope_theta = theta;
+                    }
+                    if let Some(scaling) = model.config.rope_scaling_factor_f32() {
+                        backend.rope_scaling_factor = scaling;
+                    }
+                    if let Some(orig_ctx) = model.config.rope_scaling_orig_ctx {
+                        backend.rope_scaling_orig_ctx = orig_ctx;
                     }
                     if let Some(mmap) = model.mmap_handle.clone() {
                         backend.set_mmap_handle(mmap);
@@ -743,7 +773,7 @@ impl SpecializedPipeline {
                     rms_eps,
                     model.config.is_qwen,
                     model.config.sliding_window,
-                    model.config.max_seq_len.min(4096),
+                    model.config.max_seq_len.min(8192),
                 );
                 let _ = backend.configure_model(
                     model.config.hidden_dim,
@@ -756,6 +786,16 @@ impl SpecializedPipeline {
                     &[],
                     model.lm_head.quant_type(),
                 );
+                let theta = f32::from_bits(model.config.rope_theta);
+                if theta > 0.0 {
+                    backend.rope_theta = theta;
+                }
+                if let Some(scaling) = model.config.rope_scaling_factor_f32() {
+                    backend.rope_scaling_factor = scaling;
+                }
+                if let Some(orig_ctx) = model.config.rope_scaling_orig_ctx {
+                    backend.rope_scaling_orig_ctx = orig_ctx;
+                }
                 if let Some(mmap) = model.mmap_handle.clone() {
                     backend.set_mmap_handle(mmap);
                 }

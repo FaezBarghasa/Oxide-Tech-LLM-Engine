@@ -406,6 +406,14 @@ pub struct ChatArgs {
     #[arg(long = "min-p", default_value_t = 0.05)]
     pub min_p: f32,
 
+    /// Repetition penalty factor (1.0 = disabled, default 1.1)
+    #[arg(long = "repeat-penalty", default_value_t = 1.1)]
+    pub repeat_penalty: f32,
+
+    /// Number of most recent tokens to consider for repetition penalty (default 64)
+    #[arg(long = "repeat-last-n", default_value_t = 64)]
+    pub repeat_last_n: usize,
+
     /// Top-k sampling cutoff (default 40)
     #[arg(long = "top-k", default_value_t = 40)]
     pub top_k: usize,
@@ -596,6 +604,14 @@ pub struct Cli {
     #[arg(long = "min-p", default_value_t = 0.05)]
     pub min_p: f32,
 
+    /// Repetition penalty factor (1.0 = disabled, default 1.1)
+    #[arg(long = "repeat-penalty", default_value_t = 1.1)]
+    pub repeat_penalty: f32,
+
+    /// Number of most recent tokens to consider for repetition penalty (default 64)
+    #[arg(long = "repeat-last-n", default_value_t = 64)]
+    pub repeat_last_n: usize,
+
     /// Top-k sampling cutoff (default 40)
     #[arg(long = "top-k", default_value_t = 40)]
     pub top_k: usize,
@@ -682,6 +698,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chat.top_p,
             chat.top_k,
             chat.min_p,
+            chat.repeat_penalty,
+            chat.repeat_last_n,
             chat.seed,
             chat.greedy,
             &chat.speculative,
@@ -757,6 +775,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.top_p,
                     cli.top_k,
                     cli.min_p,
+                    cli.repeat_penalty,
+                    cli.repeat_last_n,
                     cli.seed,
                     cli.greedy,
                     &cli.speculative,
@@ -798,6 +818,8 @@ fn run_chat_session(
     top_p: f32,
     top_k: usize,
     min_p: f32,
+    repeat_penalty: f32,
+    repeat_last_n: usize,
     seed: u64,
     greedy: bool,
     speculative: &str,
@@ -822,10 +844,19 @@ fn run_chat_session(
     );
     let mut pipeline =
         SpecializedPipeline::from_model_or_path(&current_model, backend_str, gpu, 1, weights)?;
-    pipeline.configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
+    pipeline.configure_sampling(
+        temp,
+        top_p,
+        top_k,
+        min_p,
+        repeat_penalty,
+        repeat_last_n,
+        seed,
+        greedy,
+    );
 
     println!(
-        "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens} | Temp: {temp} | TopP: {top_p} | TopK: {top_k} | MinP: {min_p} | Greedy: {greedy}"
+        "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens} | Temp: {temp} | TopP: {top_p} | TopK: {top_k} | MinP: {min_p} | RepeatPenalty: {repeat_penalty} | Greedy: {greedy}"
     );
 
     let tokenizer = {

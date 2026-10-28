@@ -288,47 +288,54 @@ unsafe extern "C" {
     pub fn launch_cuda_rope_single(
         q: *mut f32,
         k: *mut f32,
-        k_out: *mut f32,
+        k_out: *mut std::ffi::c_void,
         pos: i32,
         num_heads: i32,
         num_kv_heads: i32,
         head_dim: i32,
         theta: f32,
+        is_fp16: i32,
+        scaling_factor: f32,
+        orig_ctx: i32,
         stream: cudaStream_t,
     ) -> i32;
 
     pub fn launch_cuda_flash_decode(
         output: *mut f32,
         q: *const f32,
-        k_cache: *const f32,
-        v_cache: *const f32,
+        k_cache: *const std::ffi::c_void,
+        v_cache: *const std::ffi::c_void,
         num_heads: i32,
         num_kv_heads: i32,
         head_dim: i32,
         num_kv_tokens: i32,
         start_token: i32,
         sm_scale: f32,
+        is_fp16: i32,
         stream: cudaStream_t,
     ) -> i32;
 
     pub fn launch_cuda_rope_batch(
         q: *mut f32,
         k: *mut f32,
-        k_cache: *mut f32,
+        k_cache: *mut std::ffi::c_void,
         start_pos: i32,
         batch_size: i32,
         num_heads: i32,
         num_kv_heads: i32,
         head_dim: i32,
         theta: f32,
+        is_fp16: i32,
+        scaling_factor: f32,
+        orig_ctx: i32,
         stream: cudaStream_t,
     ) -> i32;
 
     pub fn launch_cuda_flash_causal_prefill(
         output: *mut f32,
         q: *const f32,
-        k_cache: *const f32,
-        v_cache: *const f32,
+        k_cache: *const std::ffi::c_void,
+        v_cache: *const std::ffi::c_void,
         start_pos: i32,
         batch_size: i32,
         num_heads: i32,
@@ -336,6 +343,14 @@ unsafe extern "C" {
         head_dim: i32,
         kv_cap: i32,
         sm_scale: f32,
+        is_fp16: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_convert_f32_to_f16(
+        dst: *mut std::ffi::c_void,
+        src: *const f32,
+        n: i32,
         stream: cudaStream_t,
     ) -> i32;
 

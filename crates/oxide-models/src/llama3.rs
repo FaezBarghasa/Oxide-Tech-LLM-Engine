@@ -24,6 +24,8 @@ pub struct Llama3Config {
     pub is_gemma: bool,
     pub is_qwen: bool,
     pub final_logit_softcapping: Option<u32>,
+    pub rope_scaling_factor: Option<u32>,
+    pub rope_scaling_orig_ctx: Option<usize>,
 }
 
 impl Default for Llama3Config {
@@ -46,6 +48,8 @@ impl Default for Llama3Config {
             is_gemma: false,
             is_qwen: false,
             final_logit_softcapping: None,
+            rope_scaling_factor: None,
+            rope_scaling_orig_ctx: None,
         }
     }
 }
@@ -72,6 +76,8 @@ impl Llama3Config {
             is_gemma: false,
             is_qwen: false,
             final_logit_softcapping: None,
+            rope_scaling_factor: None,
+            rope_scaling_orig_ctx: None,
         }
     }
 
@@ -95,6 +101,11 @@ impl Llama3Config {
     #[must_use]
     pub fn rope_theta_swa_f32(&self) -> Option<f32> {
         self.rope_theta_swa.map(f32::from_bits)
+    }
+
+    #[must_use]
+    pub fn rope_scaling_factor_f32(&self) -> Option<f32> {
+        self.rope_scaling_factor.map(f32::from_bits)
     }
 
     #[must_use]
@@ -123,6 +134,8 @@ impl Llama3Config {
             is_gemma: false,
             is_qwen: false,
             final_logit_softcapping: None,
+            rope_scaling_factor: None,
+            rope_scaling_orig_ctx: None,
         }
     }
 
@@ -220,6 +233,13 @@ impl Llama3Config {
             .get_f32(&format!("{arch}.final_logit_softcapping"))
             .map(f32::to_bits);
 
+        let rope_scaling_factor = gguf
+            .get_f32(&format!("{arch}.rope.scaling.factor"))
+            .map(f32::to_bits);
+        let rope_scaling_orig_ctx = gguf
+            .get_u64(&format!("{arch}.rope.scaling.original_context_length"))
+            .map(|v| v as usize);
+
         Self {
             hidden_dim,
             intermediate_dim,
@@ -238,6 +258,8 @@ impl Llama3Config {
             is_gemma,
             is_qwen,
             final_logit_softcapping,
+            rope_scaling_factor,
+            rope_scaling_orig_ctx,
         }
     }
 }

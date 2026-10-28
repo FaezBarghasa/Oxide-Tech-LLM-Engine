@@ -30,6 +30,10 @@ pub struct SamplingConfig {
     pub dry_base: f32,
     pub dry_allowed_length: usize,
     pub dry_range: usize,
+    pub repeat_penalty: f32,
+    pub repeat_last_n: usize,
+    pub frequency_penalty: f32,
+    pub presence_penalty: f32,
     pub penalize_nl: bool,
     pub newline_penalty: f32,
     pub logit_biases: HashMap<u32, f32>,
@@ -55,6 +59,10 @@ impl Default for SamplingConfig {
             dry_base: 1.75,
             dry_allowed_length: 2,
             dry_range: 1024,
+            repeat_penalty: 1.1,
+            repeat_last_n: 64,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
             penalize_nl: false,
             newline_penalty: 0.5,
             logit_biases: HashMap::new(),
@@ -190,6 +198,47 @@ impl AcademicSamplerEngine {
         // 3. Apply DRY (Don't Repeat Yourself) sequence-length exponential penalty
         if self.config.dry_multiplier > 0.0 && !state.generated_tokens.is_empty() {
             self.apply_dry_penalty(logits, &state.generated_tokens);
+        }
+
+        // 3b. Apply Localized Sliding-Window Repetition, Frequency, and Presence Penalties
+        if !state.generated_tokens.is_empty() {
+            let window_len = if self.config.repeat_last_n > 0 {
+                self.config.repeat_last_n
+            } else {
+                state.generated_tokens.len()
+            };
+            let start = state.generated_tokens.len().saturating_sub(window_len);
+            let window = &state.generated_tokens[start..];
+
+            if (self.config.repeat_penalty - 1.0).abs() > 1e-5 && self.config.repeat_penalty > 0.0 {
+                let mut seen = HashSet::new();
+                for &tok in window {
+                    if seen.insert(tok)
+                        && let Some(l) = logits.get_mut(tok as usize)
+                    {
+                        if *l > 0.0 {
+                            *l /= self.config.repeat_penalty;
+                        } else {
+                            *l *= self.config.repeat_penalty;
+                        }
+                    }
+                }
+            }
+
+            if self.config.frequency_penalty.abs() > 1e-5
+                || self.config.presence_penalty.abs() > 1e-5
+            {
+                let mut counts = HashMap::new();
+                for &tok in window {
+                    *counts.entry(tok).or_insert(0usize) += 1;
+                }
+                for (tok, count) in counts {
+                    if let Some(l) = logits.get_mut(tok as usize) {
+                        *l -= (count as f32) * self.config.frequency_penalty
+                            + self.config.presence_penalty;
+                    }
+                }
+            }
         }
 
         // 4. Apply Temperature
