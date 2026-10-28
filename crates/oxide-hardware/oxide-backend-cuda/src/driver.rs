@@ -128,6 +128,16 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_q8_0(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_gemv_q8_0(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
@@ -137,12 +147,32 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_q6_k(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_gemv_q6_k(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
         x: *const std::ffi::c_void,
         m: i32,
         k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_mmvq_q4_k(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
         stream: cudaStream_t,
     ) -> i32;
 
@@ -293,6 +323,7 @@ unsafe extern "C" {
         vocab_size: i32,
         out_token: *mut u32,
         out_max_val: *mut f32,
+        batch_size: i32,
         stream: cudaStream_t,
     ) -> i32;
 

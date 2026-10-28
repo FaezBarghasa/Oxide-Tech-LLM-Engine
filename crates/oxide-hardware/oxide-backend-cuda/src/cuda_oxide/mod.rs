@@ -193,6 +193,7 @@ pub fn launch_on_device_argmax(
             logits.len() as i32,
             d_tok_ptr,
             d_val_ptr,
+            1,
             stream,
         )
     };

@@ -2,8 +2,6 @@
 #include <cuda_fp16.h>
 #include <stdint.h>
 
-extern "C" {
-
 struct __attribute__((packed)) BlockQ8_1_Gpu {
     half2 ds;       // ds.x = d (scale = amax / 127.0f), ds.y = sum
     int8_t qs[32];  // 32 quantized signed 8-bit ints
@@ -688,10 +686,12 @@ __global__ void gemv_ptq1_0_cuda_kernel(
 }
 
 /**
- * Custom CUDA Kernel: Quantized Q8_0 Matrix-Vector GEMV (34-byte Block x Q8_1 Activations).
+ * Custom CUDA Kernel: Quantized Q8_0 Multi-Column MMVQ (34-byte Block x Q8_1 Activations).
+ * Evaluates BATCH_N token vectors simultaneously while reading weights once.
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
-__global__ void gemv_q8_0_cuda_kernel(
+template <int BATCH_N>
+__global__ void mmvq_q8_0_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
     const void* __restrict__ x_q8_1_raw,
@@ -707,32 +707,46 @@ __global__ void gemv_q8_0_cuda_kernel(
     const BlockQ8_0_Gpu* row_blocks = (const BlockQ8_0_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 34);
     const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
-    float thread_dot = 0.0f;
+    float thread_dot[BATCH_N];
+    #pragma unroll
+    for (int col = 0; col < BATCH_N; ++col) {
+        thread_dot[col] = 0.0f;
+    }
+
     for (int b = 0; b < num_blocks_per_row; ++b) {
         const BlockQ8_0_Gpu* blk = &row_blocks[b];
-        const BlockQ8_1_Gpu* bq8_1 = &x_q8_1[b];
         float d = __half2float(*((const half*)&blk->scale));
-        float d8 = __low2float(bq8_1->ds);
         int8_t q = blk->qs[lane_id];
-        int8_t u = bq8_1->qs[lane_id];
-        thread_dot += (d * d8) * (float)((int)q * (int)u);
+
+        #pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+            const BlockQ8_1_Gpu* bq8_1 = &x_q8_1[col * num_blocks_per_row + b];
+            float d8 = __low2float(bq8_1->ds);
+            int8_t u = bq8_1->qs[lane_id];
+            thread_dot[col] += (d * d8) * (float)((int)q * (int)u);
+        }
     }
 
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        thread_dot += __shfl_down_sync(0xFFFFFFFF, thread_dot, offset);
-    }
+    for (int col = 0; col < BATCH_N; ++col) {
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            thread_dot[col] += __shfl_down_sync(0xFFFFFFFF, thread_dot[col], offset);
+        }
 
-    if (lane_id == 0) {
-        y[row] = thread_dot;
+        if (lane_id == 0) {
+            y[col * m + row] = thread_dot[col];
+        }
     }
 }
 
 /**
- * Custom CUDA Kernel: Quantized Q6_K Matrix-Vector GEMV (210-byte Super-block x Q8_1 Activations).
+ * Custom CUDA Kernel: Quantized Q6_K Multi-Column MMVQ (210-byte Super-block x Q8_1 Activations).
+ * Evaluates BATCH_N token vectors simultaneously while reading weights once.
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
-__global__ void gemv_q6_k_cuda_kernel(
+template <int BATCH_N>
+__global__ void mmvq_q6_k_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
     const void* __restrict__ x_q8_1_raw,
@@ -744,18 +758,27 @@ __global__ void gemv_q6_k_cuda_kernel(
 
     int lane_id = threadIdx.x % 32;
     int num_blocks_per_row = k / 256;
+    int num_q8_blocks_per_col = k / 32;
 
     const BlockQ6_K_Gpu* row_blocks = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 210);
     const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
-    float thread_dot = 0.0f;
+    float thread_dot[BATCH_N];
+    #pragma unroll
+    for (int col = 0; col < BATCH_N; ++col) {
+        thread_dot[col] = 0.0f;
+    }
+
     int is = lane_id / 16;
     #pragma unroll 2
     for (int b = 0; b < num_blocks_per_row; ++b) {
         const BlockQ6_K_Gpu* blk = &row_blocks[b];
         float d = __half2float(*((const half*)&blk->d));
-        const BlockQ8_1_Gpu* bx = &x_q8_1[b * 8];
-        float block_dot = 0.0f;
+        float block_dot[BATCH_N];
+        #pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+            block_dot[col] = 0.0f;
+        }
 
         #pragma unroll
         for (int half_idx = 0; half_idx < 2; half_idx++) {
@@ -772,33 +795,49 @@ __global__ void gemv_q6_k_cuda_kernel(
             int q3 = (int)((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) - 32;
             int q4 = (int)((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) - 32;
 
-            const BlockQ8_1_Gpu* bq0 = &bx[half_idx * 4 + 0];
-            const BlockQ8_1_Gpu* bq1 = &bx[half_idx * 4 + 1];
-            const BlockQ8_1_Gpu* bq2 = &bx[half_idx * 4 + 2];
-            const BlockQ8_1_Gpu* bq3 = &bx[half_idx * 4 + 3];
+            int sc0 = (int)blk->scales[sc_offset + is + 0];
+            int sc1 = (int)blk->scales[sc_offset + is + 2];
+            int sc2 = (int)blk->scales[sc_offset + is + 4];
+            int sc3 = (int)blk->scales[sc_offset + is + 6];
 
-            float c0 = __low2float(bq0->ds) * (float)blk->scales[sc_offset + is + 0];
-            float c1 = __low2float(bq1->ds) * (float)blk->scales[sc_offset + is + 2];
-            float c2 = __low2float(bq2->ds) * (float)blk->scales[sc_offset + is + 4];
-            float c3 = __low2float(bq3->ds) * (float)blk->scales[sc_offset + is + 6];
+            #pragma unroll
+            for (int col = 0; col < BATCH_N; ++col) {
+                const BlockQ8_1_Gpu* bx = &x_q8_1[col * num_q8_blocks_per_col + b * 8];
+                const BlockQ8_1_Gpu* bq0 = &bx[half_idx * 4 + 0];
+                const BlockQ8_1_Gpu* bq1 = &bx[half_idx * 4 + 1];
+                const BlockQ8_1_Gpu* bq2 = &bx[half_idx * 4 + 2];
+                const BlockQ8_1_Gpu* bq3 = &bx[half_idx * 4 + 3];
 
-            int u0 = (int)bq0->qs[lane_id];
-            int u1 = (int)bq1->qs[lane_id];
-            int u2 = (int)bq2->qs[lane_id];
-            int u3 = (int)bq3->qs[lane_id];
+                float c0 = __low2float(bq0->ds) * (float)sc0;
+                float c1 = __low2float(bq1->ds) * (float)sc1;
+                float c2 = __low2float(bq2->ds) * (float)sc2;
+                float c3 = __low2float(bq3->ds) * (float)sc3;
 
-            block_dot += c0 * (float)(q1 * u0) + c1 * (float)(q2 * u1) + c2 * (float)(q3 * u2) + c3 * (float)(q4 * u3);
+                int u0 = (int)bq0->qs[lane_id];
+                int u1 = (int)bq1->qs[lane_id];
+                int u2 = (int)bq2->qs[lane_id];
+                int u3 = (int)bq3->qs[lane_id];
+
+                block_dot[col] += c0 * (float)(q1 * u0) + c1 * (float)(q2 * u1) + c2 * (float)(q3 * u2) + c3 * (float)(q4 * u3);
+            }
         }
-        thread_dot += d * block_dot;
+
+        #pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+            thread_dot[col] += d * block_dot[col];
+        }
     }
 
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        thread_dot += __shfl_down_sync(0xFFFFFFFF, thread_dot, offset);
-    }
+    for (int col = 0; col < BATCH_N; ++col) {
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            thread_dot[col] += __shfl_down_sync(0xFFFFFFFF, thread_dot[col], offset);
+        }
 
-    if (lane_id == 0) {
-        y[row] = thread_dot;
+        if (lane_id == 0) {
+            y[col * m + row] = thread_dot[col];
+        }
     }
 }
 
@@ -820,11 +859,13 @@ __device__ __forceinline__ void get_scale_min_k4_cuda(int j, const uint8_t* scal
 }
 
 /**
- * Custom CUDA Kernel: Quantized Q4_K Matrix-Vector GEMV (INT4 Super-blocks x Q8_1 Activations via __dp4a).
+ * Custom CUDA Kernel: Quantized Q4_K Multi-Column MMVQ (INT4 Super-blocks x Q8_1 Activations via __dp4a).
+ * Evaluates BATCH_N token vectors simultaneously while reading weights once.
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  * 128-byte coalesced weight loads + hardware INT8 dot products.
  */
-__global__ void gemv_q4_k_cuda_kernel(
+template <int BATCH_N>
+__global__ void mmvq_q4_k_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
     const void* __restrict__ x_q8_1_raw,
@@ -836,6 +877,7 @@ __global__ void gemv_q4_k_cuda_kernel(
 
     int lane_id = threadIdx.x % 32;
     int num_blocks_per_row = k / 256;
+    int num_q8_blocks_per_col = k / 32;
 
     const BlockQ4_K_Gpu* row_blocks = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 144);
     const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
@@ -845,7 +887,11 @@ __global__ void gemv_q4_k_cuda_kernel(
     int sub0 = 2 * chunk + 0;
     int sub1 = 2 * chunk + 1;
 
-    float thread_dot = 0.0f;
+    float thread_dot[BATCH_N];
+    #pragma unroll
+    for (int col = 0; col < BATCH_N; ++col) {
+        thread_dot[col] = 0.0f;
+    }
 
     #pragma unroll 2
     for (int b = 0; b < num_blocks_per_row; b++) {
@@ -857,37 +903,44 @@ __global__ void gemv_q4_k_cuda_kernel(
         get_scale_min_k4_cuda(sub0, blk->scales, &sc0, &min0);
         get_scale_min_k4_cuda(sub1, blk->scales, &sc1, &min1);
 
-        const BlockQ8_1_Gpu* bq8_0 = &x_q8_1[b * 8 + sub0];
-        const BlockQ8_1_Gpu* bq8_1 = &x_q8_1[b * 8 + sub1];
-
-        float d8_0 = __low2float(bq8_0->ds);
-        float d8_1 = __low2float(bq8_1->ds);
-
-        int u0 = ((const int*)bq8_0->qs)[sub_idx];
-        int u1 = ((const int*)bq8_1->qs)[sub_idx];
-
         int v = ((const int*)blk->qs)[lane_id];
         int v0 = v & 0x0F0F0F0F;
         int v1 = (v >> 4) & 0x0F0F0F0F;
 
-        int dot0 = __dp4a(v0, u0, 0);
-        int dot1 = __dp4a(v1, u1, 0);
-        int sum0 = __dp4a(0x01010101, u0, 0);
-        int sum1 = __dp4a(0x01010101, u1, 0);
+        #pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+            const BlockQ8_1_Gpu* bx = &x_q8_1[col * num_q8_blocks_per_col + b * 8];
+            const BlockQ8_1_Gpu* bq8_0 = &bx[sub0];
+            const BlockQ8_1_Gpu* bq8_1 = &bx[sub1];
 
-        float term_d = (sc0 * d8_0) * (float)dot0 + (sc1 * d8_1) * (float)dot1;
-        float term_min = (min0 * d8_0) * (float)sum0 + (min1 * d8_1) * (float)sum1;
+            float d8_0 = __low2float(bq8_0->ds);
+            float d8_1 = __low2float(bq8_1->ds);
 
-        thread_dot += d * term_d - dmin * term_min;
+            int u0 = ((const int*)bq8_0->qs)[sub_idx];
+            int u1 = ((const int*)bq8_1->qs)[sub_idx];
+
+            int dot0 = __dp4a(v0, u0, 0);
+            int dot1 = __dp4a(v1, u1, 0);
+            int sum0 = __dp4a(0x01010101, u0, 0);
+            int sum1 = __dp4a(0x01010101, u1, 0);
+
+            float term_d = (sc0 * d8_0) * (float)dot0 + (sc1 * d8_1) * (float)dot1;
+            float term_min = (min0 * d8_0) * (float)sum0 + (min1 * d8_1) * (float)sum1;
+
+            thread_dot[col] += d * term_d - dmin * term_min;
+        }
     }
 
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        thread_dot += __shfl_down_sync(0xFFFFFFFF, thread_dot, offset);
-    }
+    for (int col = 0; col < BATCH_N; ++col) {
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            thread_dot[col] += __shfl_down_sync(0xFFFFFFFF, thread_dot[col], offset);
+        }
 
-    if (lane_id == 0) {
-        y[row] = thread_dot;
+        if (lane_id == 0) {
+            y[col * m + row] = thread_dot[col];
+        }
     }
 }
 
@@ -1321,6 +1374,8 @@ __global__ void flash_decode_paged_kernel(
 }
 
 // C-ABI Launch Wrappers for FFI
+extern "C" {
+
 int launch_cuda_rmsnorm(
     float* output,
     const float* input,
@@ -1453,6 +1508,42 @@ int launch_cuda_quantize_q8_1(
     return cudaGetLastError();
 }
 
+int launch_cuda_mmvq_q8_0(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0 || batch_size <= 0) return 0;
+    int grid, block;
+    get_gemv_launch_dims(m, grid, block);
+    switch (batch_size) {
+        case 1:
+            mmvq_q8_0_cuda_kernel<1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        case 2:
+            mmvq_q8_0_cuda_kernel<2><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        case 3:
+            mmvq_q8_0_cuda_kernel<3><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        case 4:
+            mmvq_q8_0_cuda_kernel<4><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        default:
+            for (int b = 0; b < batch_size; ++b) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
+                float* yb = y + b * m;
+                mmvq_q8_0_cuda_kernel<1><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+            }
+            break;
+    }
+    return cudaGetLastError();
+}
+
 int launch_cuda_gemv_q8_0(
     float* y,
     const void* raw_blocks,
@@ -1461,12 +1552,42 @@ int launch_cuda_gemv_q8_0(
     int k,
     cudaStream_t stream
 ) {
-    if (m <= 0 || k <= 0) return 0;
+    return launch_cuda_mmvq_q8_0(y, raw_blocks, x_q8_1, m, k, 1, stream);
+}
+
+int launch_cuda_mmvq_q6_k(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0 || batch_size <= 0) return 0;
     int grid, block;
     get_gemv_launch_dims(m, grid, block);
-    gemv_q8_0_cuda_kernel<<<grid, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k
-    );
+    switch (batch_size) {
+        case 1:
+            mmvq_q6_k_cuda_kernel<1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        case 2:
+            mmvq_q6_k_cuda_kernel<2><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        case 3:
+            mmvq_q6_k_cuda_kernel<3><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        case 4:
+            mmvq_q6_k_cuda_kernel<4><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        default:
+            for (int b = 0; b < batch_size; ++b) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
+                float* yb = y + b * m;
+                mmvq_q6_k_cuda_kernel<1><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+            }
+            break;
+    }
     return cudaGetLastError();
 }
 
@@ -1478,12 +1599,42 @@ int launch_cuda_gemv_q6_k(
     int k,
     cudaStream_t stream
 ) {
-    if (m <= 0 || k <= 0) return 0;
+    return launch_cuda_mmvq_q6_k(y, raw_blocks, x_q8_1, m, k, 1, stream);
+}
+
+int launch_cuda_mmvq_q4_k(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0 || batch_size <= 0) return 0;
     int grid, block;
     get_gemv_launch_dims(m, grid, block);
-    gemv_q6_k_cuda_kernel<<<grid, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k
-    );
+    switch (batch_size) {
+        case 1:
+            mmvq_q4_k_cuda_kernel<1><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
+            break;
+        case 2:
+            mmvq_q4_k_cuda_kernel<2><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
+            break;
+        case 3:
+            mmvq_q4_k_cuda_kernel<3><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
+            break;
+        case 4:
+            mmvq_q4_k_cuda_kernel<4><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
+            break;
+        default:
+            for (int b = 0; b < batch_size; ++b) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
+                float* yb = y + b * m;
+                mmvq_q4_k_cuda_kernel<1><<<grid, block, 0, stream>>>(yb, (const uint8_t*)raw_blocks, xb, m, k);
+            }
+            break;
+    }
     return cudaGetLastError();
 }
 
@@ -1495,13 +1646,7 @@ int launch_cuda_gemv_q4_k(
     int k,
     cudaStream_t stream
 ) {
-    if (m <= 0 || k <= 0) return 0;
-    int grid, block;
-    get_gemv_launch_dims(m, grid, block);
-    gemv_q4_k_cuda_kernel<<<grid, block, 0, stream>>>(
-        y, (const uint8_t*)raw_blocks, x_q8_1, m, k
-    );
-    return cudaGetLastError();
+    return launch_cuda_mmvq_q4_k(y, raw_blocks, x_q8_1, m, k, 1, stream);
 }
 
 int launch_cuda_gemv_ptq1_0(
@@ -1824,6 +1969,9 @@ __global__ void argmax_f32_kernel(
     uint32_t* __restrict__ out_token,
     float* __restrict__ out_max_val
 ) {
+    int token_idx = blockIdx.x;
+    const float* token_logits = logits + (size_t)token_idx * vocab_size;
+
     __shared__ float s_max_val[32];
     __shared__ uint32_t s_max_idx[32];
 
@@ -1833,7 +1981,7 @@ __global__ void argmax_f32_kernel(
 
     // Thread stride across vocab
     for (int i = tid; i < vocab_size; i += blockDim.x) {
-        float v = logits[i];
+        float v = token_logits[i];
         if (v > max_v) {
             max_v = v;
             max_i = (uint32_t)i;
@@ -1877,8 +2025,8 @@ __global__ void argmax_f32_kernel(
         }
 
         if (lane_id == 0) {
-            if (out_token) *out_token = b_max_i;
-            if (out_max_val) *out_max_val = b_max_v;
+            if (out_token) out_token[token_idx] = b_max_i;
+            if (out_max_val) out_max_val[token_idx] = b_max_v;
         }
     }
 }
@@ -1888,19 +2036,20 @@ int launch_cuda_argmax(
     int vocab_size,
     uint32_t* out_token,
     float* out_max_val,
+    int batch_size,
     cudaStream_t stream
 ) {
-    if (!logits || vocab_size <= 0 || !out_token) return 0;
+    if (!logits || vocab_size <= 0 || !out_token || batch_size <= 0) return 0;
     int block_size = 1024;
-    argmax_f32_kernel<<<1, block_size, 0, stream>>>(logits, vocab_size, out_token, out_max_val);
+    argmax_f32_kernel<<<batch_size, block_size, 0, stream>>>(logits, vocab_size, out_token, out_max_val);
     return cudaGetLastError();
 }
 
 void init_cuda_kernel_attributes() {
     cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
-    cudaFuncSetAttribute(gemv_q4_k_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
-    cudaFuncSetAttribute(gemv_q6_k_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
-    cudaFuncSetAttribute(gemv_q8_0_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_rmsnorm_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_swiglu_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
 }

@@ -102,6 +102,17 @@ pub enum SpecializedPipeline {
 }
 
 impl SpecializedPipeline {
+    /// Evaluates speculative draft tokens in a single physical GPU forward pass with Multi-Column MMVQ.
+    #[inline(always)]
+    pub fn step_speculative(&mut self, cur_token: u32, draft_tokens: &[u32]) -> Result<Vec<u32>> {
+        match self {
+            Self::Llama3Cuda(engine) => engine
+                .backend
+                .dispatch_speculative_verification(cur_token, draft_tokens),
+            _ => Ok(Vec::new()),
+        }
+    }
+
     /// Hot-loop forward step executing strictly through direct branch jump table.
     #[inline(always)]
     pub fn step(&mut self, cmd: &StepCommand) -> Result<StepCompletion> {

@@ -923,40 +923,48 @@ fn run_chat_session(
                 let draft = spec.draft_ngram_lookup(&all_tokens, draft_tokens);
                 if !draft.is_empty() {
                     spec_drafted_count += draft.len();
-                    let mut accepted_in_draft = 0usize;
-                    for &expected_tok in &draft {
-                        let cmd = StepCommand::new(1, cur_token, 0, false);
-                        let step_res = pipeline.step(&cmd)?;
-                        cur_token = step_res.sampled_token;
-                        gen_count += 1;
-                        all_tokens.push(cur_token);
-                        if stop_tokens.contains(&cur_token)
-                            || Some(cur_token) == tokenizer.eos_id
-                            || step_res.is_terminal
-                        {
-                            break;
-                        }
-                        let text = tokenizer.decode_token(cur_token);
-                        if text.contains("<|im_end|>")
-                            || text.contains("<end_of_turn>")
-                            || text.contains("<|eot_id|>")
-                        {
-                            break;
-                        }
-                        print!("{text}");
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    let verified_tokens = pipeline.step_speculative(cur_token, &draft)?;
+                    if !verified_tokens.is_empty() {
+                        let mut reached_eos = false;
+                        for &tok in &verified_tokens {
+                            cur_token = tok;
+                            gen_count += 1;
+                            all_tokens.push(cur_token);
 
-                        if cur_token == expected_tok {
-                            accepted_in_draft += 1;
-                        } else {
+                            if stop_tokens.contains(&cur_token)
+                                || Some(cur_token) == tokenizer.eos_id
+                            {
+                                reached_eos = true;
+                                break;
+                            }
+                            let text = tokenizer.decode_token(cur_token);
+                            if text.contains("<|im_end|>")
+                                || text.contains("<end_of_turn>")
+                                || text.contains("<|eot_id|>")
+                            {
+                                reached_eos = true;
+                                break;
+                            }
+                            print!("{text}");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+
+                            if gen_count >= max_tokens {
+                                reached_eos = true;
+                                break;
+                            }
+                        }
+                        let matching = verified_tokens
+                            .iter()
+                            .zip(draft.iter())
+                            .take_while(|&(v, d)| v == d)
+                            .count();
+                        spec_accepted_count += matching;
+
+                        if reached_eos {
                             break;
                         }
-                        if gen_count >= max_tokens {
-                            break;
-                        }
+                        continue;
                     }
-                    spec_accepted_count += accepted_in_draft;
-                    continue;
                 }
             }
 
