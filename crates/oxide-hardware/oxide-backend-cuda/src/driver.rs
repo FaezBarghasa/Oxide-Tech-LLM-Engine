@@ -54,7 +54,24 @@ unsafe extern "C" {
     pub fn cudaEventSynchronize(event: cudaEvent_t) -> cudaError_t;
     pub fn cudaGetLastError() -> cudaError_t;
     pub fn cudaGetErrorString(error: cudaError_t) -> *const std::os::raw::c_char;
+    pub fn cudaStreamBeginCapture(stream: cudaStream_t, mode: u32) -> cudaError_t;
+    pub fn cudaStreamEndCapture(stream: cudaStream_t, pGraph: *mut cudaGraph_t) -> cudaError_t;
+    pub fn cudaGraphInstantiate(
+        pGraphExec: *mut cudaGraphExec_t,
+        graph: cudaGraph_t,
+        flags: u64,
+    ) -> cudaError_t;
+    pub fn cudaGraphLaunch(graphExec: cudaGraphExec_t, stream: cudaStream_t) -> cudaError_t;
+    pub fn cudaGraphExecDestroy(graphExec: cudaGraphExec_t) -> cudaError_t;
+    pub fn cudaGraphDestroy(graph: cudaGraph_t) -> cudaError_t;
 }
+
+pub type cudaGraph_t = *mut c_void;
+pub type cudaGraphExec_t = *mut c_void;
+
+pub const CUDA_STREAM_CAPTURE_MODE_GLOBAL: u32 = 0;
+pub const CUDA_STREAM_CAPTURE_MODE_THREAD_LOCAL: u32 = 1;
+pub const CUDA_STREAM_CAPTURE_MODE_RELAXED: u32 = 2;
 
 type const_ptr = *const c_void;
 

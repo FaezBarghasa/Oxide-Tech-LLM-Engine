@@ -773,12 +773,11 @@ __global__ void mmvq_q6_k_cuda_kernel(
     #pragma unroll 2
     for (int b = 0; b < num_blocks_per_row; ++b) {
         const BlockQ6_K_Gpu* blk = &row_blocks[b];
-        float d = __half2float(*((const half*)&blk->d));
-        float block_dot[BATCH_N];
-        #pragma unroll
-        for (int col = 0; col < BATCH_N; ++col) {
-            block_dot[col] = 0.0f;
+        float d;
+        if (lane_id == 0) {
+            d = __half2float(*((const half*)&blk->d));
         }
+        d = __shfl_sync(0xFFFFFFFF, d, 0);
 
         #pragma unroll
         for (int half_idx = 0; half_idx < 2; half_idx++) {
@@ -795,10 +794,29 @@ __global__ void mmvq_q6_k_cuda_kernel(
             int q3 = (int)((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) - 32;
             int q4 = (int)((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) - 32;
 
-            int sc0 = (int)blk->scales[sc_offset + is + 0];
-            int sc1 = (int)blk->scales[sc_offset + is + 2];
-            int sc2 = (int)blk->scales[sc_offset + is + 4];
-            int sc3 = (int)blk->scales[sc_offset + is + 6];
+            uint32_t my_w = 0;
+            if (lane_id == 0) {
+                uint16_t p0 = *((const uint16_t*)&blk->scales[sc_offset + 0]);
+                uint16_t p1 = *((const uint16_t*)&blk->scales[sc_offset + 2]);
+                my_w = (uint32_t)p0 | ((uint32_t)p1 << 16);
+            } else if (lane_id == 1) {
+                uint16_t p2 = *((const uint16_t*)&blk->scales[sc_offset + 4]);
+                uint16_t p3 = *((const uint16_t*)&blk->scales[sc_offset + 6]);
+                my_w = (uint32_t)p2 | ((uint32_t)p3 << 16);
+            }
+            uint32_t w0 = __shfl_sync(0xFFFFFFFF, my_w, 0);
+            uint32_t w1 = __shfl_sync(0xFFFFFFFF, my_w, 1);
+
+            int shift = is * 8;
+            float sc0 = (float)(int8_t)((w0 >> (shift + 0)) & 0xFF);
+            float sc1 = (float)(int8_t)((w0 >> (shift + 16)) & 0xFF);
+            float sc2 = (float)(int8_t)((w1 >> (shift + 0)) & 0xFF);
+            float sc3 = (float)(int8_t)((w1 >> (shift + 16)) & 0xFF);
+
+            float d_sc0 = d * sc0;
+            float d_sc1 = d * sc1;
+            float d_sc2 = d * sc2;
+            float d_sc3 = d * sc3;
 
             #pragma unroll
             for (int col = 0; col < BATCH_N; ++col) {
@@ -808,23 +826,18 @@ __global__ void mmvq_q6_k_cuda_kernel(
                 const BlockQ8_1_Gpu* bq2 = &bx[half_idx * 4 + 2];
                 const BlockQ8_1_Gpu* bq3 = &bx[half_idx * 4 + 3];
 
-                float c0 = __low2float(bq0->ds) * (float)sc0;
-                float c1 = __low2float(bq1->ds) * (float)sc1;
-                float c2 = __low2float(bq2->ds) * (float)sc2;
-                float c3 = __low2float(bq3->ds) * (float)sc3;
+                float c0 = __low2float(bq0->ds) * d_sc0;
+                float c1 = __low2float(bq1->ds) * d_sc1;
+                float c2 = __low2float(bq2->ds) * d_sc2;
+                float c3 = __low2float(bq3->ds) * d_sc3;
 
                 int u0 = (int)bq0->qs[lane_id];
                 int u1 = (int)bq1->qs[lane_id];
                 int u2 = (int)bq2->qs[lane_id];
                 int u3 = (int)bq3->qs[lane_id];
 
-                block_dot[col] += c0 * (float)(q1 * u0) + c1 * (float)(q2 * u1) + c2 * (float)(q3 * u2) + c3 * (float)(q4 * u3);
+                thread_dot[col] += c0 * (float)(q1 * u0) + c1 * (float)(q2 * u1) + c2 * (float)(q3 * u2) + c3 * (float)(q4 * u3);
             }
-        }
-
-        #pragma unroll
-        for (int col = 0; col < BATCH_N; ++col) {
-            thread_dot[col] += d * block_dot[col];
         }
     }
 
