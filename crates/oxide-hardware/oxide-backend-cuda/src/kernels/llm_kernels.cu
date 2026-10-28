@@ -858,6 +858,26 @@ __device__ __forceinline__ void get_scale_min_k4_cuda(int j, const uint8_t* scal
     }
 }
 
+__device__ __forceinline__ void get_scale_min_k4_pair_cuda(
+    int chunk,
+    const uint8_t* scales,
+    float* sc0, float* min0,
+    float* sc1, float* min1
+) {
+    int j = 2 * chunk;
+    if (chunk < 2) {
+        *sc0  = (float)(scales[j] & 63);
+        *min0 = (float)(scales[j + 4] & 63);
+        *sc1  = (float)(scales[j + 1] & 63);
+        *min1 = (float)(scales[j + 5] & 63);
+    } else {
+        *sc0  = (float)((scales[j + 4] & 0x0F) | ((scales[j - 4] >> 6) << 4));
+        *min0 = (float)((scales[j + 4] >> 4)   | ((scales[j] >> 6) << 4));
+        *sc1  = (float)((scales[j + 5] & 0x0F) | ((scales[j - 3] >> 6) << 4));
+        *min1 = (float)((scales[j + 5] >> 4)   | ((scales[j + 1] >> 6) << 4));
+    }
+}
+
 /**
  * Custom CUDA Kernel: Quantized Q4_K Multi-Column MMVQ (INT4 Super-blocks x Q8_1 Activations via __dp4a).
  * Evaluates BATCH_N token vectors simultaneously while reading weights once.
@@ -896,12 +916,17 @@ __global__ void mmvq_q4_k_cuda_kernel(
     #pragma unroll 2
     for (int b = 0; b < num_blocks_per_row; b++) {
         const BlockQ4_K_Gpu* blk = &row_blocks[b];
-        float d = __half2float(*((const half*)&blk->d));
-        float dmin = __half2float(*((const half*)&blk->dmin));
+        half2 d_dmin = *((const half2*)&blk->d);
+        float d = __low2float(d_dmin);
+        float dmin = __high2float(d_dmin);
 
         float sc0, min0, sc1, min1;
-        get_scale_min_k4_cuda(sub0, blk->scales, &sc0, &min0);
-        get_scale_min_k4_cuda(sub1, blk->scales, &sc1, &min1);
+        get_scale_min_k4_pair_cuda(chunk, blk->scales, &sc0, &min0, &sc1, &min1);
+
+        float d_sc0 = d * sc0;
+        float d_sc1 = d * sc1;
+        float dm_min0 = dmin * min0;
+        float dm_min1 = dmin * min1;
 
         int v = ((const int*)blk->qs)[lane_id];
         int v0 = v & 0x0F0F0F0F;
@@ -924,10 +949,10 @@ __global__ void mmvq_q4_k_cuda_kernel(
             int sum0 = __dp4a(0x01010101, u0, 0);
             int sum1 = __dp4a(0x01010101, u1, 0);
 
-            float term_d = (sc0 * d8_0) * (float)dot0 + (sc1 * d8_1) * (float)dot1;
-            float term_min = (min0 * d8_0) * (float)sum0 + (min1 * d8_1) * (float)sum1;
+            float acc0 = d_sc0 * (float)dot0 - dm_min0 * (float)sum0;
+            float acc1 = d_sc1 * (float)dot1 - dm_min1 * (float)sum1;
 
-            thread_dot[col] += d * term_d - dmin * term_min;
+            thread_dot[col] += acc0 * d8_0 + acc1 * d8_1;
         }
     }
 
@@ -1266,8 +1291,8 @@ __global__ void rope_single_token_kernel(
 
     float freq = 1.0f / powf(theta, (float)(2 * d) / (float)head_dim);
     float angle = (float)pos * freq;
-    float cos_val = cosf(angle);
-    float sin_val = sinf(angle);
+    float sin_val, cos_val;
+    __sincosf(angle, &sin_val, &cos_val);
 
     if (head_idx < num_heads && q != nullptr) {
         int q_base = head_idx * head_dim;
@@ -1533,6 +1558,9 @@ int launch_cuda_mmvq_q8_0(
         case 4:
             mmvq_q8_0_cuda_kernel<4><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
             break;
+        case 8:
+            mmvq_q8_0_cuda_kernel<8><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
         default:
             for (int b = 0; b < batch_size; ++b) {
                 const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
@@ -1580,6 +1608,9 @@ int launch_cuda_mmvq_q6_k(
         case 4:
             mmvq_q6_k_cuda_kernel<4><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
             break;
+        case 8:
+            mmvq_q6_k_cuda_kernel<8><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
         default:
             for (int b = 0; b < batch_size; ++b) {
                 const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
@@ -1626,6 +1657,9 @@ int launch_cuda_mmvq_q4_k(
             break;
         case 4:
             mmvq_q4_k_cuda_kernel<4><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
+            break;
+        case 8:
+            mmvq_q4_k_cuda_kernel<8><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
             break;
         default:
             for (int b = 0; b < batch_size; ++b) {

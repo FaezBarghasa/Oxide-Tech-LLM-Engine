@@ -402,6 +402,10 @@ pub struct ChatArgs {
     #[arg(long = "top-p", default_value_t = 0.95)]
     pub top_p: f32,
 
+    /// Min-p sampling threshold (relative to top token probability, default 0.05)
+    #[arg(long = "min-p", default_value_t = 0.05)]
+    pub min_p: f32,
+
     /// Top-k sampling cutoff (default 40)
     #[arg(long = "top-k", default_value_t = 40)]
     pub top_k: usize,
@@ -588,6 +592,10 @@ pub struct Cli {
     #[arg(long = "top-p", default_value_t = 0.95)]
     pub top_p: f32,
 
+    /// Min-p sampling threshold (relative to top token probability, default 0.05)
+    #[arg(long = "min-p", default_value_t = 0.05)]
+    pub min_p: f32,
+
     /// Top-k sampling cutoff (default 40)
     #[arg(long = "top-k", default_value_t = 40)]
     pub top_k: usize,
@@ -673,6 +681,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chat.temp,
             chat.top_p,
             chat.top_k,
+            chat.min_p,
             chat.seed,
             chat.greedy,
             &chat.speculative,
@@ -747,6 +756,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.temp,
                     cli.top_p,
                     cli.top_k,
+                    cli.min_p,
                     cli.seed,
                     cli.greedy,
                     &cli.speculative,
@@ -787,6 +797,7 @@ fn run_chat_session(
     temp: f32,
     top_p: f32,
     top_k: usize,
+    min_p: f32,
     seed: u64,
     greedy: bool,
     speculative: &str,
@@ -811,10 +822,10 @@ fn run_chat_session(
     );
     let mut pipeline =
         SpecializedPipeline::from_model_or_path(&current_model, backend_str, gpu, 1, weights)?;
-    pipeline.configure_sampling(temp, top_p, top_k, seed, greedy);
+    pipeline.configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
 
     println!(
-        "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens} | Temp: {temp} | TopP: {top_p} | TopK: {top_k} | Greedy: {greedy}"
+        "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens} | Temp: {temp} | TopP: {top_p} | TopK: {top_k} | MinP: {min_p} | Greedy: {greedy}"
     );
 
     let tokenizer = {
@@ -872,22 +883,9 @@ fn run_chat_session(
         let _ = std::io::Write::flush(&mut std::io::stdout());
 
         let t_start = std::time::Instant::now();
-        let mut cur_token = 1u32;
 
-        // 1. Prefill prompt tokens through transformer forward pass
-        for (i, &tok) in prompt_tokens.iter().enumerate() {
-            let is_prefill = i + 1 < prompt_tokens.len();
-            let cmd = StepCommand::new(1, tok, 0, is_prefill);
-            match pipeline.step(&cmd) {
-                Ok(res) => {
-                    cur_token = res.sampled_token;
-                }
-                Err(err) => {
-                    eprintln!("[ERROR] pipeline.step failed on token {tok}: {err:?}");
-                    return Err(Box::new(err));
-                }
-            }
-        }
+        // 1. Prefill prompt tokens through high-throughput chunked batched forward pass
+        let mut cur_token = pipeline.prefill_prompt(&prompt_tokens)?;
         let ttft = Some(t_start.elapsed());
 
         // 2. Decode first sampled token and continuation tokens

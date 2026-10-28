@@ -113,6 +113,38 @@ impl SpecializedPipeline {
         }
     }
 
+    /// High-throughput chunked prefill pass on physical GPU evaluating prompt tokens in batched chunks.
+    /// Streams layer weights ONCE for all tokens in each chunk and skips the 510MB LM Head on intermediate chunks.
+    pub fn prefill_prompt(&mut self, prompt_tokens: &[u32]) -> Result<u32> {
+        if let Self::Llama3Cuda(engine) = self {
+            let chunk_size = 8usize;
+            let mut last_tok = None;
+            let chunks: Vec<&[u32]> = prompt_tokens.chunks(chunk_size).collect();
+            let total_chunks = chunks.len();
+            for (idx, chunk) in chunks.into_iter().enumerate() {
+                let is_final = idx + 1 == total_chunks;
+                let res = engine.backend.dispatch_prefill_chunk(chunk, is_final)?;
+                if is_final {
+                    last_tok = res;
+                }
+            }
+            last_tok.ok_or_else(|| {
+                oxide_core::error::EngineError::BackendError(
+                    "Prefill completed without producing sampled token".to_string(),
+                )
+            })
+        } else {
+            let mut cur = 1u32;
+            for (i, &tok) in prompt_tokens.iter().enumerate() {
+                let is_prefill = i + 1 < prompt_tokens.len();
+                let cmd = StepCommand::new(1, tok, 0, is_prefill);
+                let res = self.step(&cmd)?;
+                cur = res.sampled_token;
+            }
+            Ok(cur)
+        }
+    }
+
     /// Hot-loop forward step executing strictly through direct branch jump table.
     #[inline(always)]
     pub fn step(&mut self, cmd: &StepCommand) -> Result<StepCompletion> {
@@ -375,12 +407,13 @@ impl SpecializedPipeline {
         }
     }
 
-    /// Configures sampling parameters (temperature, top_p, top_k, seed, greedy) on the underlying backend.
+    /// Configures sampling parameters (temperature, top_p, top_k, min_p, seed, greedy) on the underlying backend.
     pub fn configure_sampling(
         &mut self,
         temp: f32,
         top_p: f32,
         top_k: usize,
+        min_p: f32,
         seed: u64,
         greedy: bool,
     ) {
@@ -388,17 +421,17 @@ impl SpecializedPipeline {
             Self::Llama3Cuda(engine) => {
                 engine
                     .backend
-                    .configure_sampling(temp, top_p, top_k, seed, greedy);
+                    .configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
             }
             Self::Needle3Cuda(engine) => {
                 engine
                     .backend
-                    .configure_sampling(temp, top_p, top_k, seed, greedy);
+                    .configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
             }
             Self::Bonsai2Cuda(engine) => {
                 engine
                     .backend
-                    .configure_sampling(temp, top_p, top_k, seed, greedy);
+                    .configure_sampling(temp, top_p, top_k, min_p, seed, greedy);
             }
             _ => {}
         }
