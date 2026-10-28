@@ -1005,32 +1005,46 @@ fn run_chat_session(
 
         let mut companion_draft_pipeline = if let Some(dm) = draft_model {
             println!("Initializing Companion Draft Pipeline from: {dm}...");
-            let pipe = match SpecializedPipeline::from_model_or_path(dm, backend_str, gpu, 1, None) {
+            let pipe = match SpecializedPipeline::from_model_or_path(dm, backend_str, gpu, 1, None)
+            {
                 Ok(p) => Some(p),
                 Err(e) => {
-                    eprintln!("Direct GPU loading for draft model failed ({e}), attempting CPU fallback for companion draft model...");
+                    eprintln!(
+                        "Direct GPU loading for draft model failed ({e}), attempting CPU fallback for companion draft model..."
+                    );
                     match SpecializedPipeline::from_model_or_path(dm, "cpu", None, 1, None) {
                         Ok(p) => Some(p),
                         Err(e2) => {
-                            eprintln!("Draft pipeline failed to initialize ({e2}). Reverting to internal ensemble drafter.");
+                            eprintln!(
+                                "Draft pipeline failed to initialize ({e2}). Reverting to internal ensemble drafter."
+                            );
                             None
                         }
                     }
                 }
             };
             if let Some(mut p) = pipe {
-                p.configure_sampling(
-                    temp,
-                    top_p,
-                    top_k,
-                    min_p,
-                    repeat_penalty,
-                    repeat_last_n,
-                    seed,
-                    greedy,
-                );
-                let _ = p.prefill_prompt(&prompt_tokens);
-                Some(p)
+                if p.vocab_size() == pipeline.vocab_size() {
+                    p.configure_sampling(
+                        temp,
+                        top_p,
+                        top_k,
+                        min_p,
+                        repeat_penalty,
+                        repeat_last_n,
+                        seed,
+                        greedy,
+                    );
+                    let _ = p.prefill_prompt(&prompt_tokens);
+                    Some(p)
+                } else {
+                    eprintln!(
+                        "Warning: Draft model vocab size ({}) differs from target model vocab size ({}). Reverting to internal ensemble drafter.",
+                        p.vocab_size(),
+                        pipeline.vocab_size()
+                    );
+                    None
+                }
             } else {
                 None
             }
@@ -1108,9 +1122,7 @@ fn run_chat_session(
                         gen_count += 1;
                         all_tokens.push(cur_token);
 
-                        if stop_tokens.contains(&cur_token)
-                            || Some(cur_token) == tokenizer.eos_id
-                        {
+                        if stop_tokens.contains(&cur_token) || Some(cur_token) == tokenizer.eos_id {
                             reached_eos = true;
                             break;
                         }

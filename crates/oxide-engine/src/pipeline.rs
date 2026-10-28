@@ -141,6 +141,18 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Returns model vocabulary size.
+    #[inline(always)]
+    pub fn vocab_size(&self) -> usize {
+        match self {
+            Self::Llama3Cuda(engine) => engine.backend.vocab_size,
+            Self::Llama3Dense { model, .. } | Self::Llama3AmdApuCpuIgpu { model, .. } => {
+                model.config.vocab_size
+            }
+            _ => 128_256,
+        }
+    }
+
     /// High-throughput chunked prefill pass on physical GPU evaluating prompt tokens in batched chunks.
     /// Streams layer weights ONCE for all tokens in each chunk and skips the 510MB LM Head on intermediate chunks.
     pub fn prefill_prompt(&mut self, prompt_tokens: &[u32]) -> Result<u32> {
