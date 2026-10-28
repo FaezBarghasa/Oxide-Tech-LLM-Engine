@@ -311,6 +311,35 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_rope_batch(
+        q: *mut f32,
+        k: *mut f32,
+        k_cache: *mut f32,
+        start_pos: i32,
+        batch_size: i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        theta: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_flash_causal_prefill(
+        output: *mut f32,
+        q: *const f32,
+        k_cache: *const f32,
+        v_cache: *const f32,
+        start_pos: i32,
+        batch_size: i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        kv_cap: i32,
+        sm_scale: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+
     pub fn launch_cuda_qk_norm(
         qk: *mut f32,
         weight: *const f32,

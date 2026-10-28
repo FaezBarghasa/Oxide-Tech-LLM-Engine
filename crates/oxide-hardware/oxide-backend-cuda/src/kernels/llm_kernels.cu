@@ -1345,6 +1345,57 @@ __global__ void rope_single_token_kernel(
     }
 }
 
+__global__ void rope_batch_tokens_kernel(
+    float* __restrict__ q,
+    float* __restrict__ k,
+    float* __restrict__ k_cache,
+    int start_pos,
+    int batch_size,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    float theta
+) {
+    int head_idx = blockIdx.x;
+    int b = blockIdx.y;
+    if (b >= batch_size) return;
+
+    int half_dim = head_dim / 2;
+    int d = threadIdx.x;
+    if (d >= half_dim) return;
+
+    int token_pos = start_pos + b;
+    float freq = 1.0f / powf(theta, (float)(2 * d) / (float)head_dim);
+    float angle = (float)token_pos * freq;
+    float sin_val, cos_val;
+    __sincosf(angle, &sin_val, &cos_val);
+
+    if (head_idx < num_heads && q != nullptr) {
+        int q_base = b * (num_heads * head_dim) + head_idx * head_dim;
+        float q0 = q[q_base + d];
+        float q1 = q[q_base + d + half_dim];
+        q[q_base + d]            = q0 * cos_val - q1 * sin_val;
+        q[q_base + d + half_dim] = q0 * sin_val + q1 * cos_val;
+    }
+
+    if (head_idx < num_kv_heads && k != nullptr) {
+        int k_base = b * (num_kv_heads * head_dim) + head_idx * head_dim;
+        float k0 = k[k_base + d];
+        float k1 = k[k_base + d + half_dim];
+        float rot0 = k0 * cos_val - k1 * sin_val;
+        float rot1 = k0 * sin_val + k1 * cos_val;
+        k[k_base + d]            = rot0;
+        k[k_base + d + half_dim] = rot1;
+
+        if (k_cache != nullptr) {
+            int cache_base = token_pos * (num_kv_heads * head_dim) + head_idx * head_dim;
+            k_cache[cache_base + d]            = rot0;
+            k_cache[cache_base + d + half_dim] = rot1;
+        }
+    }
+}
+
+
 /**
  * Custom CUDA Kernel: FlashAttention-2 Paged Token Decode Kernel (Tiling + Online Softmax + GQA)
  * Warp-Per-Head architecture: 0 shared memory, 0 __syncthreads(), independent warp registers.
@@ -1429,7 +1480,103 @@ __global__ void flash_decode_paged_kernel(
     }
 }
 
+/**
+ * Custom CUDA Kernel: Batched Causal FlashAttention Prefill Kernel
+ * Evaluates causal attention for all B tokens in prompt chunk across past KV cache in single pass.
+ * Grid: dim3 grid((num_heads + 7) / 8, batch_size)
+ * Block: 256 threads (8 warps, 1 warp per head).
+ */
+__global__ void flash_causal_batched_prefill_kernel(
+    float* __restrict__ output,
+    const float* __restrict__ q,
+    const float* __restrict__ k_cache,
+    const float* __restrict__ v_cache,
+    int start_pos,
+    int batch_size,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    int kv_cap,
+    float sm_scale
+) {
+    if (num_heads <= 0 || head_dim <= 0 || batch_size <= 0) return;
+    int b = blockIdx.y;
+    if (b >= batch_size) return;
+
+    int head_idx = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+    if (head_idx >= num_heads) return;
+    int lane_id = threadIdx.x % 32;
+
+    int token_pos = start_pos + b;
+    int num_kv_tokens = token_pos + 1;
+    if (kv_cap > 0 && num_kv_tokens > kv_cap) {
+        num_kv_tokens = kv_cap;
+    }
+
+    int q_dim = num_heads * head_dim;
+    const float* q_ptr = q + b * q_dim + head_idx * head_dim;
+    float* out_ptr = output + b * q_dim + head_idx * head_dim;
+
+    int kv_heads = num_kv_heads > 0 ? num_kv_heads : num_heads;
+    int heads_per_kv = (num_heads / kv_heads) > 0 ? (num_heads / kv_heads) : 1;
+    int kv_head_idx = head_idx / heads_per_kv;
+    if (kv_head_idx >= kv_heads) kv_head_idx = kv_heads - 1;
+
+    float max_score = -1e20f;
+    float sum_exp = 0.0f;
+    float acc_v[16];
+    #pragma unroll
+    for (int i = 0; i < 16; ++i) acc_v[i] = 0.0f;
+
+    // Cache Q values into thread-private registers once
+    float q_reg[16];
+    int q_items = 0;
+    for (int d = lane_id; d < head_dim && q_items < 16; d += 32, q_items++) {
+        q_reg[q_items] = q_ptr[d];
+    }
+
+    // Grid-stride over past KV cached tokens (causal: up to token_pos)
+    for (int t = 0; t < num_kv_tokens; t++) {
+        const float* k_tok = k_cache + (t * kv_heads + kv_head_idx) * head_dim;
+
+        // Compute Q . K dot product for this head from registers
+        float score = 0.0f;
+        for (int i = 0; i < q_items; i++) {
+            score += q_reg[i] * k_tok[lane_id + i * 32];
+        }
+
+        // Warp reduction across the 32 lanes
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            score += __shfl_down_sync(0xFFFFFFFF, score, offset);
+        }
+
+        // Broadcast total score to all 32 lanes in warp
+        float cur_score = __shfl_sync(0xFFFFFFFF, score, 0) * sm_scale;
+
+        // Online Softmax update with SFU expf bypass
+        float new_max = fmaxf(max_score, cur_score);
+        float alpha = (t == 0) ? 0.0f : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
+        float beta = expf(cur_score - new_max);
+
+        max_score = new_max;
+        sum_exp = sum_exp * alpha + beta;
+
+        const float* v_tok = v_cache + (t * kv_heads + kv_head_idx) * head_dim;
+        for (int i = 0; i < q_items; i++) {
+            acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
+        }
+    }
+
+    // Final normalization
+    float inv_sum = sum_exp > 0.0f ? (1.0f / sum_exp) : 0.0f;
+    for (int i = 0; i < q_items; i++) {
+        out_ptr[lane_id + i * 32] = acc_v[i] * inv_sum;
+    }
+}
+
 // C-ABI Launch Wrappers for FFI
+
 extern "C" {
 
 int launch_cuda_rmsnorm(
@@ -1592,13 +1739,47 @@ int launch_cuda_mmvq_q8_0(
         case 8:
             mmvq_q8_0_cuda_kernel<8><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
             break;
-        default:
-            for (int b = 0; b < batch_size; ++b) {
-                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
-                float* yb = y + b * m;
+        case 16:
+            mmvq_q8_0_cuda_kernel<16><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        default: {
+            int cur_b = 0;
+            int rem = batch_size;
+            while (rem >= 16) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q8_0_cuda_kernel<16><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 16;
+                rem -= 16;
+            }
+            if (rem >= 8) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q8_0_cuda_kernel<8><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 8;
+                rem -= 8;
+            }
+            if (rem >= 4) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q8_0_cuda_kernel<4><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 4;
+                rem -= 4;
+            }
+            if (rem >= 2) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q8_0_cuda_kernel<2><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 2;
+                rem -= 2;
+            }
+            if (rem >= 1) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
                 mmvq_q8_0_cuda_kernel<1><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
             }
             break;
+        }
     }
     return cudaGetLastError();
 }
@@ -1642,13 +1823,47 @@ int launch_cuda_mmvq_q6_k(
         case 8:
             mmvq_q6_k_cuda_kernel<8><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
             break;
-        default:
-            for (int b = 0; b < batch_size; ++b) {
-                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
-                float* yb = y + b * m;
+        case 16:
+            mmvq_q6_k_cuda_kernel<16><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+            break;
+        default: {
+            int cur_b = 0;
+            int rem = batch_size;
+            while (rem >= 16) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q6_k_cuda_kernel<16><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 16;
+                rem -= 16;
+            }
+            if (rem >= 8) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q6_k_cuda_kernel<8><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 8;
+                rem -= 8;
+            }
+            if (rem >= 4) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q6_k_cuda_kernel<4><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 4;
+                rem -= 4;
+            }
+            if (rem >= 2) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q6_k_cuda_kernel<2><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
+                cur_b += 2;
+                rem -= 2;
+            }
+            if (rem >= 1) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
                 mmvq_q6_k_cuda_kernel<1><<<grid, block, 0, stream>>>(yb, raw_blocks, xb, m, k);
             }
             break;
+        }
     }
     return cudaGetLastError();
 }
@@ -1692,13 +1907,47 @@ int launch_cuda_mmvq_q4_k(
         case 8:
             mmvq_q4_k_cuda_kernel<8><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
             break;
-        default:
-            for (int b = 0; b < batch_size; ++b) {
-                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + b * (k / 32);
-                float* yb = y + b * m;
+        case 16:
+            mmvq_q4_k_cuda_kernel<16><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k);
+            break;
+        default: {
+            int cur_b = 0;
+            int rem = batch_size;
+            while (rem >= 16) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q4_k_cuda_kernel<16><<<grid, block, 0, stream>>>(yb, (const uint8_t*)raw_blocks, xb, m, k);
+                cur_b += 16;
+                rem -= 16;
+            }
+            if (rem >= 8) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q4_k_cuda_kernel<8><<<grid, block, 0, stream>>>(yb, (const uint8_t*)raw_blocks, xb, m, k);
+                cur_b += 8;
+                rem -= 8;
+            }
+            if (rem >= 4) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q4_k_cuda_kernel<4><<<grid, block, 0, stream>>>(yb, (const uint8_t*)raw_blocks, xb, m, k);
+                cur_b += 4;
+                rem -= 4;
+            }
+            if (rem >= 2) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
+                mmvq_q4_k_cuda_kernel<2><<<grid, block, 0, stream>>>(yb, (const uint8_t*)raw_blocks, xb, m, k);
+                cur_b += 2;
+                rem -= 2;
+            }
+            if (rem >= 1) {
+                const BlockQ8_1_Gpu* xb = (const BlockQ8_1_Gpu*)x_q8_1 + cur_b * (k / 32);
+                float* yb = y + cur_b * m;
                 mmvq_q4_k_cuda_kernel<1><<<grid, block, 0, stream>>>(yb, (const uint8_t*)raw_blocks, xb, m, k);
             }
             break;
+        }
     }
     return cudaGetLastError();
 }
@@ -1922,6 +2171,52 @@ int launch_cuda_flash_decode(
     return cudaGetLastError();
 }
 
+int launch_cuda_rope_batch(
+    float* q,
+    float* k,
+    float* k_cache,
+    int start_pos,
+    int batch_size,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    float theta,
+    cudaStream_t stream
+) {
+    if (batch_size <= 0 || head_dim <= 0) return 0;
+    int max_heads = num_heads > num_kv_heads ? num_heads : num_kv_heads;
+    dim3 grid(max_heads, batch_size);
+    int block_size = head_dim / 2;
+    rope_batch_tokens_kernel<<<grid, block_size, 0, stream>>>(
+        q, k, k_cache, start_pos, batch_size, num_heads, num_kv_heads, head_dim, theta
+    );
+    return cudaGetLastError();
+}
+
+int launch_cuda_flash_causal_prefill(
+    float* output,
+    const float* q,
+    const float* k_cache,
+    const float* v_cache,
+    int start_pos,
+    int batch_size,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    int kv_cap,
+    float sm_scale,
+    cudaStream_t stream
+) {
+    if (batch_size <= 0 || num_heads <= 0 || head_dim <= 0) return 0;
+    const int block_size = 256; // 8 warps per block = 8 heads per block
+    dim3 grid((num_heads + 7) / 8, batch_size);
+    flash_causal_batched_prefill_kernel<<<grid, block_size, 0, stream>>>(
+        output, q, k_cache, v_cache, start_pos, batch_size, num_heads, num_kv_heads, head_dim, kv_cap, sm_scale
+    );
+    return cudaGetLastError();
+}
+
+
 /**
  * Custom CUDA Kernel: Per-head QK-Norm (RMSNorm per head across head_dim).
  * Applied to Q and K separately before RoPE embedding.
@@ -2113,8 +2408,14 @@ int launch_cuda_argmax(
 void init_cuda_kernel_attributes() {
     cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
     cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<8>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<16>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<8>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<16>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<8>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<16>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_rmsnorm_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_swiglu_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
 }

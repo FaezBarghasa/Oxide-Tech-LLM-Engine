@@ -117,7 +117,7 @@ impl SpecializedPipeline {
     /// Streams layer weights ONCE for all tokens in each chunk and skips the 510MB LM Head on intermediate chunks.
     pub fn prefill_prompt(&mut self, prompt_tokens: &[u32]) -> Result<u32> {
         if let Self::Llama3Cuda(engine) = self {
-            let chunk_size = 8usize;
+            let chunk_size = 512usize;
             let mut last_tok = None;
             let chunks: Vec<&[u32]> = prompt_tokens.chunks(chunk_size).collect();
             let total_chunks = chunks.len();

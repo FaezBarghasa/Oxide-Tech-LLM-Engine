@@ -620,7 +620,8 @@ impl CudaBackend {
             lm_head_bytes.len()
         );
 
-        let max_batch = 8usize;
+        let max_batch = 512usize;
+        let max_logits_batch = 8usize;
         let mut d_hidden =
             CudaDeviceBuffer::allocate(max_batch * hidden_dim * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?;
@@ -670,11 +671,11 @@ impl CudaBackend {
                 .map_err(EngineError::BackendError)?,
         );
         self.d_logits = Some(
-            CudaDeviceBuffer::allocate(max_batch * vocab_size * std::mem::size_of::<f32>())
+            CudaDeviceBuffer::allocate(max_logits_batch * vocab_size * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?,
         );
         self.d_sampled_token =
-            Some(CudaDeviceBuffer::allocate(max_batch * 8).map_err(EngineError::BackendError)?);
+            Some(CudaDeviceBuffer::allocate(max_logits_batch * 8).map_err(EngineError::BackendError)?);
         self.d_scratch_gate256 = Some(
             CudaDeviceBuffer::allocate(max_batch * 256 * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?,
@@ -1630,7 +1631,7 @@ impl CudaBackend {
                         self.num_kv_heads
                     };
                     let kv_dim = cur_num_kv_heads * cur_head_dim;
-                    let q_dim = cur_num_heads * cur_head_dim;
+                    let _q_dim = cur_num_heads * cur_head_dim;
 
                     if let Some(d_q) = &mut self.d_scratch_q {
                         unsafe {
@@ -1684,17 +1685,15 @@ impl CudaBackend {
                         (&mut self.d_scratch_q, &layer.d_attn_q_norm)
                     {
                         if d_q_norm.size_bytes() >= cur_head_dim * std::mem::size_of::<f32>() {
-                            for b in 0..batch_size {
-                                unsafe {
-                                    driver::launch_cuda_qk_norm(
-                                        d_q.as_typed_ptr::<f32>().add(b * q_dim),
-                                        d_q_norm.as_typed_ptr::<f32>(),
-                                        cur_num_heads as i32,
-                                        cur_head_dim as i32,
-                                        1e-6,
-                                        s,
-                                    );
-                                }
+                            unsafe {
+                                driver::launch_cuda_qk_norm(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_q_norm.as_typed_ptr::<f32>(),
+                                    (cur_num_heads * batch_size) as i32,
+                                    cur_head_dim as i32,
+                                    1e-6,
+                                    s,
+                                );
                             }
                         }
                     }
@@ -1702,17 +1701,15 @@ impl CudaBackend {
                         (&mut self.d_scratch_k, &layer.d_attn_k_norm)
                     {
                         if d_k_norm.size_bytes() >= cur_head_dim * std::mem::size_of::<f32>() {
-                            for b in 0..batch_size {
-                                unsafe {
-                                    driver::launch_cuda_qk_norm(
-                                        d_k.as_typed_ptr::<f32>().add(b * kv_dim),
-                                        d_k_norm.as_typed_ptr::<f32>(),
-                                        cur_num_kv_heads as i32,
-                                        cur_head_dim as i32,
-                                        1e-6,
-                                        s,
-                                    );
-                                }
+                            unsafe {
+                                driver::launch_cuda_qk_norm(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    d_k_norm.as_typed_ptr::<f32>(),
+                                    (cur_num_kv_heads * batch_size) as i32,
+                                    cur_head_dim as i32,
+                                    1e-6,
+                                    s,
+                                );
                             }
                         }
                     }
@@ -1723,81 +1720,68 @@ impl CudaBackend {
                         self.rope_theta
                     };
 
-                    for b in 0..batch_size {
-                        let token_pos = pos + b;
-                        let k_dst_ptr = if layer_idx < self.kv_k.len() {
-                            unsafe {
-                                self.kv_k[layer_idx]
-                                    .as_typed_ptr::<f32>()
-                                    .add(token_pos * kv_dim)
-                            }
-                        } else {
-                            std::ptr::null_mut()
-                        };
-                        let v_dst_ptr = if layer_idx < self.kv_v.len() {
-                            unsafe {
-                                self.kv_v[layer_idx]
-                                    .as_typed_ptr::<f32>()
-                                    .add(token_pos * kv_dim)
-                            }
-                        } else {
-                            std::ptr::null_mut()
-                        };
+                    let k_cache_ptr = if layer_idx < self.kv_k.len() {
+                        self.kv_k[layer_idx].as_typed_ptr::<f32>()
+                    } else {
+                        std::ptr::null_mut()
+                    };
 
-                        if let (Some(d_q), Some(d_k)) =
-                            (&mut self.d_scratch_q, &mut self.d_scratch_k)
-                        {
+                    if let (Some(d_q), Some(d_k)) =
+                        (&mut self.d_scratch_q, &mut self.d_scratch_k)
+                    {
+                        unsafe {
+                            driver::launch_cuda_rope_batch(
+                                d_q.as_typed_ptr::<f32>(),
+                                d_k.as_typed_ptr::<f32>(),
+                                k_cache_ptr,
+                                pos as i32,
+                                batch_size as i32,
+                                cur_num_heads as i32,
+                                cur_num_kv_heads as i32,
+                                cur_head_dim as i32,
+                                layer_rope_theta,
+                                s,
+                            );
+                        }
+                    }
+
+                    if let Some(d_v) = &self.d_scratch_v {
+                        if layer_idx < self.kv_v.len() {
                             unsafe {
-                                driver::launch_cuda_rope_single(
-                                    d_q.as_typed_ptr::<f32>().add(b * q_dim),
-                                    d_k.as_typed_ptr::<f32>().add(b * kv_dim),
-                                    k_dst_ptr,
-                                    token_pos as i32,
-                                    cur_num_heads as i32,
-                                    cur_num_kv_heads as i32,
-                                    cur_head_dim as i32,
-                                    layer_rope_theta,
+                                let v_dst_ptr = self.kv_v[layer_idx]
+                                    .as_typed_ptr::<f32>()
+                                    .add(pos * kv_dim);
+                                driver::cudaMemcpyAsync(
+                                    v_dst_ptr as *mut std::ffi::c_void,
+                                    d_v.as_typed_ptr::<f32>() as *const std::ffi::c_void,
+                                    batch_size * kv_dim * std::mem::size_of::<f32>(),
+                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
                                     s,
                                 );
                             }
                         }
+                    }
 
-                        if let Some(d_v) = &self.d_scratch_v {
-                            if !v_dst_ptr.is_null() {
-                                unsafe {
-                                    driver::cudaMemcpyAsync(
-                                        v_dst_ptr as *mut std::ffi::c_void,
-                                        d_v.as_typed_ptr::<f32>().add(b * kv_dim)
-                                            as *const std::ffi::c_void,
-                                        kv_dim * std::mem::size_of::<f32>(),
-                                        driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
-                                        s,
-                                    );
-                                }
-                            }
-                        }
-
-                        if let (Some(d_q), Some(d_out)) =
-                            (&self.d_scratch_q, &mut self.d_scratch_attn_out)
-                        {
-                            if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
-                                let sm_scale = 1.0 / (cur_head_dim.max(1) as f32).sqrt();
-                                let num_tokens = (token_pos + 1).min(kv_cap) as i32;
-                                unsafe {
-                                    driver::launch_cuda_flash_decode(
-                                        d_out.as_typed_ptr::<f32>().add(b * q_dim),
-                                        d_q.as_typed_ptr::<f32>().add(b * q_dim),
-                                        self.kv_k[layer_idx].as_typed_ptr::<f32>(),
-                                        self.kv_v[layer_idx].as_typed_ptr::<f32>(),
-                                        cur_num_heads as i32,
-                                        cur_num_kv_heads as i32,
-                                        cur_head_dim as i32,
-                                        num_tokens,
-                                        0,
-                                        sm_scale,
-                                        s,
-                                    );
-                                }
+                    if let (Some(d_q), Some(d_out)) =
+                        (&self.d_scratch_q, &mut self.d_scratch_attn_out)
+                    {
+                        if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
+                            let sm_scale = 1.0 / (cur_head_dim.max(1) as f32).sqrt();
+                            unsafe {
+                                driver::launch_cuda_flash_causal_prefill(
+                                    d_out.as_typed_ptr::<f32>(),
+                                    d_q.as_typed_ptr::<f32>(),
+                                    self.kv_k[layer_idx].as_typed_ptr::<f32>(),
+                                    self.kv_v[layer_idx].as_typed_ptr::<f32>(),
+                                    pos as i32,
+                                    batch_size as i32,
+                                    cur_num_heads as i32,
+                                    cur_num_kv_heads as i32,
+                                    cur_head_dim as i32,
+                                    kv_cap as i32,
+                                    sm_scale,
+                                    s,
+                                );
                             }
                         }
                     }
@@ -1812,17 +1796,13 @@ impl CudaBackend {
                             cur_num_heads * cur_head_dim
                         };
                         if !d_q8_1_ptr.is_null() {
-                            for b in 0..batch_size {
-                                let out_ptr = unsafe { d_out.as_typed_ptr::<f32>().add(b * o_k) };
-                                let q8_ptr = unsafe {
-                                    (d_q8_1_ptr as *mut u8).add(b * (o_k / 32) * 36)
-                                        as *mut std::ffi::c_void
-                                };
-                                unsafe {
-                                    driver::launch_cuda_quantize_q8_1(
-                                        out_ptr, q8_ptr, o_k as i32, s,
-                                    );
-                                }
+                            unsafe {
+                                driver::launch_cuda_quantize_q8_1(
+                                    d_out.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    (batch_size * o_k) as i32,
+                                    s,
+                                );
                             }
                         }
                         unsafe {
@@ -1841,15 +1821,13 @@ impl CudaBackend {
                     }
 
                     if let Some(d_act) = &self.d_scratch_act {
-                        for b in 0..batch_size {
-                            unsafe {
-                                driver::launch_cuda_vector_add(
-                                    d_hid.as_typed_ptr::<f32>().add(b * h),
-                                    d_act.as_typed_ptr::<f32>().add(b * h),
-                                    h as i32,
-                                    s,
-                                );
-                            }
+                        unsafe {
+                            driver::launch_cuda_vector_add(
+                                d_hid.as_typed_ptr::<f32>(),
+                                d_act.as_typed_ptr::<f32>(),
+                                (batch_size * h) as i32,
+                                s,
+                            );
                         }
                     }
                 }
@@ -1934,15 +1912,13 @@ impl CudaBackend {
                     }
 
                     if let Some(d_act) = &self.d_scratch_act {
-                        for b in 0..batch_size {
-                            unsafe {
-                                driver::launch_cuda_vector_add(
-                                    d_hid.as_typed_ptr::<f32>().add(b * h),
-                                    d_act.as_typed_ptr::<f32>().add(b * h),
-                                    h as i32,
-                                    s,
-                                );
-                            }
+                        unsafe {
+                            driver::launch_cuda_vector_add(
+                                d_hid.as_typed_ptr::<f32>(),
+                                d_act.as_typed_ptr::<f32>(),
+                                (batch_size * h) as i32,
+                                s,
+                            );
                         }
                     }
                 }
