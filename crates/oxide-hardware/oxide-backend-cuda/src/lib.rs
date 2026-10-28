@@ -2376,63 +2376,130 @@ impl HardwareBackend for CudaBackend {
                                 (std::ptr::null_mut(), std::ptr::null_mut())
                             };
 
-                        // Q Projection
-                        if let Some(d_q) = &mut self.d_scratch_q {
-                            unsafe {
-                                Self::dispatch_gemv(
-                                    d_q.as_typed_ptr::<f32>(),
-                                    &layer.d_wq,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.q_m,
-                                    layer.q_k,
-                                    layer.q_quant,
-                                    s,
-                                );
-                            }
-                            check_cuda("q_proj", layer_idx)?;
-                        }
-
-                        // K Projection
-                        if let Some(d_k) = &mut self.d_scratch_k {
-                            unsafe {
-                                Self::dispatch_gemv(
-                                    d_k.as_typed_ptr::<f32>(),
-                                    &layer.d_wk,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.kv_m,
-                                    layer.kv_k,
-                                    layer.k_quant,
-                                    s,
-                                );
-                            }
-                            check_cuda("k_proj", layer_idx)?;
-                        }
-
-                        // V Projection: computes GEMV into scratch buffer, then converts to FP16 in KV cache
-                        if let Some(d_v) = &mut self.d_scratch_v {
-                            unsafe {
-                                Self::dispatch_gemv(
-                                    d_v.as_typed_ptr::<f32>(),
-                                    &layer.d_wv,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.kv_m,
-                                    layer.kv_k,
-                                    layer.v_quant,
-                                    s,
-                                );
-                                if !v_dst_ptr.is_null() {
-                                    driver::launch_cuda_convert_f32_to_f16(
-                                        v_dst_ptr,
+                        let (q_done, k_done, v_done) = if let (Some(d_q), Some(d_k), Some(d_v)) = (
+                            &mut self.d_scratch_q,
+                            &mut self.d_scratch_k,
+                            &mut self.d_scratch_v,
+                        ) {
+                            if layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && layer.v_quant == 1
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                unsafe {
+                                    driver::launch_cuda_gemv_qkv_q4_k(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        d_k.as_typed_ptr::<f32>(),
                                         d_v.as_typed_ptr::<f32>(),
-                                        kv_dim as i32,
+                                        layer.d_wq.as_raw_ptr(),
+                                        layer.d_wk.as_raw_ptr(),
+                                        layer.d_wv.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.q_m as i32,
+                                        layer.kv_m as i32,
+                                        layer.q_k as i32,
+                                        s,
+                                    );
+                                    if !v_dst_ptr.is_null() {
+                                        driver::launch_cuda_convert_f32_to_f16(
+                                            v_dst_ptr,
+                                            d_v.as_typed_ptr::<f32>(),
+                                            kv_dim as i32,
+                                            s,
+                                        );
+                                    }
+                                }
+                                check_cuda("qkv_grouped_proj", layer_idx)?;
+                                (true, true, true)
+                            } else if layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                unsafe {
+                                    driver::launch_cuda_gemv_qk_q4_k(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        d_k.as_typed_ptr::<f32>(),
+                                        layer.d_wq.as_raw_ptr(),
+                                        layer.d_wk.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.q_m as i32,
+                                        layer.kv_m as i32,
+                                        layer.q_k as i32,
                                         s,
                                     );
                                 }
+                                check_cuda("qk_grouped_proj", layer_idx)?;
+                                (true, true, false)
+                            } else {
+                                (false, false, false)
                             }
-                            check_cuda("v_proj", layer_idx)?;
+                        } else {
+                            (false, false, false)
+                        };
+
+                        // Q Projection fallback
+                        if !q_done {
+                            if let Some(d_q) = &mut self.d_scratch_q {
+                                unsafe {
+                                    Self::dispatch_gemv(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        &layer.d_wq,
+                                        d_norm.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
+                                        layer.q_m,
+                                        layer.q_k,
+                                        layer.q_quant,
+                                        s,
+                                    );
+                                }
+                                check_cuda("q_proj", layer_idx)?;
+                            }
+                        }
+
+                        // K Projection fallback
+                        if !k_done {
+                            if let Some(d_k) = &mut self.d_scratch_k {
+                                unsafe {
+                                    Self::dispatch_gemv(
+                                        d_k.as_typed_ptr::<f32>(),
+                                        &layer.d_wk,
+                                        d_norm.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
+                                        layer.kv_m,
+                                        layer.kv_k,
+                                        layer.k_quant,
+                                        s,
+                                    );
+                                }
+                                check_cuda("k_proj", layer_idx)?;
+                            }
+                        }
+
+                        // V Projection: computes GEMV into scratch buffer, then converts to FP16 in KV cache
+                        if !v_done {
+                            if let Some(d_v) = &mut self.d_scratch_v {
+                                unsafe {
+                                    Self::dispatch_gemv(
+                                        d_v.as_typed_ptr::<f32>(),
+                                        &layer.d_wv,
+                                        d_norm.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
+                                        layer.kv_m,
+                                        layer.kv_k,
+                                        layer.v_quant,
+                                        s,
+                                    );
+                                    if !v_dst_ptr.is_null() {
+                                        driver::launch_cuda_convert_f32_to_f16(
+                                            v_dst_ptr,
+                                            d_v.as_typed_ptr::<f32>(),
+                                            kv_dim as i32,
+                                            s,
+                                        );
+                                    }
+                                }
+                                check_cuda("v_proj", layer_idx)?;
+                            }
                         }
 
                         // QK-Norm (applied per-head before RoPE if present)
@@ -2665,26 +2732,42 @@ impl HardwareBackend for CudaBackend {
                             (&mut self.d_scratch_gate, &mut self.d_scratch_up)
                         {
                             unsafe {
-                                Self::dispatch_gemv(
-                                    d_gate.as_typed_ptr::<f32>(),
-                                    &layer.d_w1,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.inter_m,
-                                    h,
-                                    layer.gate_quant,
-                                    s,
-                                );
-                                Self::dispatch_gemv(
-                                    d_up.as_typed_ptr::<f32>(),
-                                    &layer.d_w3,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.inter_m,
-                                    h,
-                                    layer.up_quant,
-                                    s,
-                                );
+                                if layer.gate_quant == 1
+                                    && layer.up_quant == 1
+                                    && !d_q8_1_ptr.is_null()
+                                {
+                                    driver::launch_cuda_gemv_gate_up_q4_k(
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        d_up.as_typed_ptr::<f32>(),
+                                        layer.d_w1.as_raw_ptr(),
+                                        layer.d_w3.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.inter_m as i32,
+                                        h as i32,
+                                        s,
+                                    );
+                                } else {
+                                    Self::dispatch_gemv(
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        &layer.d_w1,
+                                        d_norm.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
+                                        layer.inter_m,
+                                        h,
+                                        layer.gate_quant,
+                                        s,
+                                    );
+                                    Self::dispatch_gemv(
+                                        d_up.as_typed_ptr::<f32>(),
+                                        &layer.d_w3,
+                                        d_norm.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
+                                        layer.inter_m,
+                                        h,
+                                        layer.up_quant,
+                                        s,
+                                    );
+                                }
                                 check_cuda("ffn_gate_up", layer_idx)?;
                                 if self.is_gemma {
                                     driver::launch_cuda_gelu(
