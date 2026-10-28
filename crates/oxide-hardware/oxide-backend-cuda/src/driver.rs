@@ -539,6 +539,72 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_dequantize_token_embd_q4_k_ptr(
+        d_hidden: *mut f32,
+        d_token_embd: *const std::ffi::c_void,
+        d_tok_idx: *const i32,
+        hidden_dim: i32,
+        scale: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_mmvq_qkv_mixed_ptr(
+        y_q: *mut f32,
+        y_k: *mut f32,
+        y_v: *mut f32,
+        v_cache_fp16: *mut std::ffi::c_void,
+        d_start_pos: *const i32,
+        raw_wq: *const std::ffi::c_void,
+        raw_wk: *const std::ffi::c_void,
+        raw_wv: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        q_m: i32,
+        kv_m: i32,
+        k: i32,
+        v_quant: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_fused_qknorm_rope_batch_ptr(
+        q: *mut f32,
+        k: *mut f32,
+        q_norm_weight: *const f32,
+        k_norm_weight: *const f32,
+        k_cache: *mut std::ffi::c_void,
+        d_start_pos: *const i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        eps: f32,
+        theta: f32,
+        is_fp16: i32,
+        scaling_factor: f32,
+        orig_ctx: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_flash_decode_ptr(
+        output: *mut f32,
+        q: *const f32,
+        k_cache: *const std::ffi::c_void,
+        v_cache: *const std::ffi::c_void,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        d_pos: *const i32,
+        start_token: i32,
+        sm_scale: f32,
+        is_fp16: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_advance_decode_step(
+        d_seq_pos: *mut i32,
+        d_sampled_token: *const u32,
+        d_input_token: *mut i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn fwht_kernel_128(d_out: *mut f32, d_in: *const f32, num_blocks: i32);
     pub fn init_cuda_kernel_attributes();
 }

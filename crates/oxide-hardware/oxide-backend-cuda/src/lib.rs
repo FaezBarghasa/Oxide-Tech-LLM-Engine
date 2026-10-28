@@ -169,6 +169,13 @@ pub struct CudaBackend {
     pub host_emb_buffer: Vec<f32>,
     pub host_logits_buffer: Vec<f32>,
     pub per_layer_embedding_lookup: Option<EmbeddingLookupFn>,
+    pub d_seq_pos: Option<CudaDeviceBuffer>,
+    pub d_input_token: Option<CudaDeviceBuffer>,
+    pub graph_manager: CudaGraphManager,
+    pub decode_graph_handle: Option<CudaGraphExecHandle>,
+    pub cuda_graph_enabled: bool,
+    pub last_sampled_token: Option<u32>,
+    pub last_gpu_seq_pos: Option<usize>,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -289,6 +296,13 @@ impl CudaBackend {
             host_emb_buffer: Vec::new(),
             host_logits_buffer: Vec::new(),
             per_layer_embedding_lookup: None,
+            d_seq_pos: None,
+            d_input_token: None,
+            graph_manager: CudaGraphManager::new(),
+            decode_graph_handle: None,
+            cuda_graph_enabled: true,
+            last_sampled_token: None,
+            last_gpu_seq_pos: None,
         }
     }
 
@@ -832,6 +846,14 @@ impl CudaBackend {
         );
         self.d_sampled_token = Some(
             CudaDeviceBuffer::allocate(max_logits_batch * 8).map_err(EngineError::BackendError)?,
+        );
+        self.d_seq_pos = Some(
+            CudaDeviceBuffer::allocate(std::mem::size_of::<i32>())
+                .map_err(EngineError::BackendError)?,
+        );
+        self.d_input_token = Some(
+            CudaDeviceBuffer::allocate(std::mem::size_of::<i32>())
+                .map_err(EngineError::BackendError)?,
         );
         self.d_scratch_gate256 = Some(
             CudaDeviceBuffer::allocate(max_batch * 256 * std::mem::size_of::<f32>())
@@ -1711,6 +1733,10 @@ impl CudaBackend {
         chunk_tokens: &[u32],
         is_final: bool,
     ) -> Result<Option<u32>> {
+        self.decode_graph_handle = None;
+        self.last_sampled_token = None;
+        self.last_gpu_seq_pos = None;
+
         if chunk_tokens.is_empty() {
             return Ok(None);
         }
@@ -2327,6 +2353,419 @@ impl HardwareBackend for CudaBackend {
         })?;
         let s = stream.raw();
         let slot = cmd.slot_idx as usize;
+
+        // --- PHYSICAL CUDA GRAPH DECODE REPLAY ENGINE ---
+        if !cmd.is_prefill_chunk
+            && self.cuda_graph_enabled
+            && self.sampler.config.temperature <= 0.0
+            && self.token_embd_quant_type == 1
+            && self.d_token_embd.is_some()
+            && self.d_per_layer_emb.is_none()
+            && !self.layers.is_empty()
+            && self.hidden_dim > 0
+        {
+            if self.d_seq_pos.is_none() {
+                self.d_seq_pos = Some(
+                    CudaDeviceBuffer::allocate(std::mem::size_of::<i32>())
+                        .map_err(EngineError::BackendError)?,
+                );
+            }
+            if self.d_input_token.is_none() {
+                self.d_input_token = Some(
+                    CudaDeviceBuffer::allocate(std::mem::size_of::<i32>())
+                        .map_err(EngineError::BackendError)?,
+                );
+            }
+
+            let d_sp = self.d_seq_pos.as_mut().unwrap();
+            let d_in_tok = self.d_input_token.as_mut().unwrap();
+
+            if let Some(handle) = self.decode_graph_handle {
+                let gpu_pos_match = self.last_gpu_seq_pos == Some(self.seq_pos);
+                let token_match = self.last_sampled_token == Some(cmd.input_token);
+                if !gpu_pos_match {
+                    let _ = d_sp.copy_from_host_async(&[self.seq_pos as i32], s);
+                }
+                if !token_match {
+                    let _ = d_in_tok.copy_from_host_async(&[cmd.input_token as i32], s);
+                }
+
+                unsafe {
+                    self.graph_manager.launch_graph(handle, s)?;
+                }
+
+                if let Some(ref d_sampled) = self.d_sampled_token {
+                    let mut sampled_res = [0u32, 0u32];
+                    let _ = d_sampled.copy_to_host_async(&mut sampled_res, s);
+                    stream.synchronize().map_err(EngineError::BackendError)?;
+                    let best_tok = sampled_res[0];
+                    self.last_sampled_token = Some(best_tok);
+                    self.seq_pos += 1;
+                    self.last_gpu_seq_pos = Some(self.seq_pos);
+                    if slot < self.host_token_buffer.len() {
+                        self.host_token_buffer[slot] = best_tok;
+                    }
+                    return Ok(event);
+                }
+            } else {
+                let pos = self.seq_pos;
+                let _ = d_sp.copy_from_host_async(&[pos as i32], s);
+                let _ = d_in_tok.copy_from_host_async(&[cmd.input_token as i32], s);
+                let _ = stream.synchronize();
+
+                let capture_res = unsafe { self.graph_manager.begin_capture(s) };
+                if capture_res.is_ok() {
+                    let h = self.hidden_dim;
+                    let emb_scale = if self.is_gemma { (h as f32).sqrt() } else { 1.0f32 };
+                    let d_sp_ptr = self.d_seq_pos.as_ref().unwrap().as_typed_ptr::<i32>();
+                    let d_in_tok_ptr = self.d_input_token.as_ref().unwrap().as_typed_ptr::<i32>();
+                    let d_emb_ptr = self.d_token_embd.as_ref().unwrap().as_raw_ptr();
+                    let d_hid_ptr = self.d_hidden.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_norm_ptr = self.d_scratch_norm.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_q_ptr = self.d_scratch_q.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_k_ptr = self.d_scratch_k.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_v_ptr = self.d_scratch_v.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_out_ptr = self.d_scratch_attn_out.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_gate_ptr = self.d_scratch_gate.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_up_ptr = self.d_scratch_up.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_logits_ptr = self.d_logits.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_sampled_ptr = self.d_sampled_token.as_ref().unwrap().as_raw_ptr() as *mut u32;
+                    let d_val_ptr = unsafe { d_sampled_ptr.add(1) as *mut f32 };
+                    let d_q8_1_ptr = if let Some(ref buf) = self.d_scratch_q8_1_a {
+                        buf.as_raw_ptr()
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    let weight_offset = if self.is_gemma { 1.0f32 } else { 0.0f32 };
+
+                    // 1. Dequantize token embedding directly in GPU registers
+                    unsafe {
+                        driver::launch_cuda_dequantize_token_embd_q4_k_ptr(
+                            d_hid_ptr,
+                            d_emb_ptr,
+                            d_in_tok_ptr,
+                            h as i32,
+                            emb_scale,
+                            s,
+                        );
+                    }
+
+                    // 2. Multi-layer forward execution
+                    for (layer_idx, layer) in self.layers.iter().enumerate() {
+                        // Attention RMSNorm + Q8_1
+                        if layer.d_attn_norm.size_bytes() > 0 {
+                            unsafe {
+                                driver::launch_cuda_fused_rmsnorm_q8_1(
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    d_hid_ptr,
+                                    layer.d_attn_norm.as_typed_ptr::<f32>(),
+                                    1,
+                                    h as i32,
+                                    self.rms_norm_eps,
+                                    weight_offset,
+                                    s,
+                                );
+                            }
+                        }
+
+                        let cur_head_dim = if let Some(ref d_q_norm) = layer.d_attn_q_norm {
+                            let nf = d_q_norm.size_bytes() / std::mem::size_of::<f32>();
+                            if nf > 0 { nf } else { self.head_dim }
+                        } else {
+                            self.head_dim
+                        };
+                        let cur_num_heads = if layer.o_k > 0 && cur_head_dim > 0 {
+                            layer.o_k / cur_head_dim
+                        } else if cur_head_dim > 0 && layer.q_m > 0 {
+                            layer.q_m / cur_head_dim
+                        } else {
+                            self.num_heads
+                        };
+                        let cur_num_kv_heads = if cur_head_dim > 0 && layer.kv_m > 0 {
+                            layer.kv_m / cur_head_dim
+                        } else {
+                            self.num_kv_heads
+                        };
+
+                        let v_cache_ptr = if layer_idx < self.kv_v.len() {
+                            self.kv_v[layer_idx].as_raw_ptr()
+                        } else {
+                            std::ptr::null_mut()
+                        };
+                        let k_cache_ptr = if layer_idx < self.kv_k.len() {
+                            self.kv_k[layer_idx].as_raw_ptr()
+                        } else {
+                            std::ptr::null_mut()
+                        };
+
+                        // Grouped QKV GEMV writing V-cache directly
+                        unsafe {
+                            driver::launch_cuda_mmvq_qkv_mixed_ptr(
+                                d_q_ptr,
+                                d_k_ptr,
+                                d_v_ptr,
+                                v_cache_ptr,
+                                d_sp_ptr,
+                                layer.d_wq.as_raw_ptr(),
+                                layer.d_wk.as_raw_ptr(),
+                                layer.d_wv.as_raw_ptr(),
+                                d_q8_1_ptr,
+                                layer.q_m as i32,
+                                layer.kv_m as i32,
+                                layer.q_k as i32,
+                                layer.v_quant as i32,
+                                s,
+                            );
+                        }
+
+                        // RoPE writing K-cache directly
+                        let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
+                            10_000.0f32
+                        } else {
+                            self.rope_theta
+                        };
+                        let q_norm_ptr = layer
+                            .d_attn_q_norm
+                            .as_ref()
+                            .filter(|b| b.size_bytes() >= cur_head_dim * std::mem::size_of::<f32>())
+                            .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+                        let k_norm_ptr = layer
+                            .d_attn_k_norm
+                            .as_ref()
+                            .filter(|b| b.size_bytes() >= cur_head_dim * std::mem::size_of::<f32>())
+                            .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+
+                        unsafe {
+                            driver::launch_cuda_fused_qknorm_rope_batch_ptr(
+                                d_q_ptr,
+                                d_k_ptr,
+                                q_norm_ptr,
+                                k_norm_ptr,
+                                k_cache_ptr,
+                                d_sp_ptr,
+                                cur_num_heads as i32,
+                                cur_num_kv_heads as i32,
+                                cur_head_dim as i32,
+                                1e-6,
+                                layer_rope_theta,
+                                1,
+                                self.rope_scaling_factor,
+                                self.rope_scaling_orig_ctx as i32,
+                                s,
+                            );
+                        }
+
+                        // Flash Decode
+                        let sm_scale = 1.0 / (cur_head_dim.max(1) as f32).sqrt();
+                        unsafe {
+                            driver::launch_cuda_flash_decode_ptr(
+                                d_out_ptr,
+                                d_q_ptr,
+                                k_cache_ptr,
+                                v_cache_ptr,
+                                cur_num_heads as i32,
+                                cur_num_kv_heads as i32,
+                                cur_head_dim as i32,
+                                d_sp_ptr,
+                                0,
+                                sm_scale,
+                                1,
+                                s,
+                            );
+                        }
+
+                        // Output Projection + Fused Residual 1
+                        let o_m = if layer.o_m > 0 { layer.o_m } else { h };
+                        let o_k = if layer.o_k > 0 { layer.o_k } else { cur_num_heads * cur_head_dim };
+                        unsafe {
+                            driver::launch_cuda_quantize_q8_1(
+                                d_out_ptr,
+                                d_q8_1_ptr,
+                                o_k as i32,
+                                s,
+                            );
+                            if layer.o_quant == 1 {
+                                driver::launch_cuda_gemv_q4_k_fused_add(
+                                    d_hid_ptr,
+                                    layer.d_wo.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    o_m as i32,
+                                    o_k as i32,
+                                    s,
+                                );
+                            } else if layer.o_quant == 2 {
+                                driver::launch_cuda_gemv_q6_k_fused_add(
+                                    d_hid_ptr,
+                                    layer.d_wo.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    o_m as i32,
+                                    o_k as i32,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // FFN RMSNorm + Q8_1
+                        if layer.d_ffn_norm.size_bytes() > 0 {
+                            unsafe {
+                                driver::launch_cuda_fused_rmsnorm_q8_1(
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    d_hid_ptr,
+                                    layer.d_ffn_norm.as_typed_ptr::<f32>(),
+                                    1,
+                                    h as i32,
+                                    self.rms_norm_eps,
+                                    weight_offset,
+                                    s,
+                                );
+                            }
+                        }
+
+                        // FFN Gate + Up GEMV
+                        unsafe {
+                            driver::launch_cuda_gemv_gate_up_q4_k(
+                                d_gate_ptr,
+                                d_up_ptr,
+                                layer.d_w1.as_raw_ptr(),
+                                layer.d_w3.as_raw_ptr(),
+                                d_q8_1_ptr,
+                                layer.inter_m as i32,
+                                h as i32,
+                                s,
+                            );
+                            driver::launch_cuda_fused_swiglu_q8_1(
+                                d_q8_1_ptr,
+                                d_gate_ptr,
+                                d_gate_ptr,
+                                d_up_ptr,
+                                layer.inter_m as i32,
+                                s,
+                            );
+                            if layer.down_quant == 1 {
+                                driver::launch_cuda_gemv_q4_k_fused_add(
+                                    d_hid_ptr,
+                                    layer.d_w2.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    h as i32,
+                                    layer.inter_m as i32,
+                                    s,
+                                );
+                            } else if layer.down_quant == 2 {
+                                driver::launch_cuda_gemv_q6_k_fused_add(
+                                    d_hid_ptr,
+                                    layer.d_w2.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    h as i32,
+                                    layer.inter_m as i32,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+
+                    // 3. Final Output Norm
+                    if let Some(d_out_norm) = &self.d_output_norm {
+                        unsafe {
+                            driver::launch_cuda_fused_rmsnorm_q8_1(
+                                d_norm_ptr,
+                                d_q8_1_ptr,
+                                d_hid_ptr,
+                                d_out_norm.as_typed_ptr::<f32>(),
+                                1,
+                                h as i32,
+                                self.rms_norm_eps,
+                                weight_offset,
+                                s,
+                            );
+                        }
+                    }
+
+                    // 4. LM Head Projection
+                    if let Some(d_lm) = &self.d_lm_head {
+                        unsafe {
+                            if self.lm_head_quant_type == 1 {
+                                driver::launch_cuda_gemv_q4_k(
+                                    d_logits_ptr,
+                                    d_lm.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    self.vocab_size as i32,
+                                    h as i32,
+                                    s,
+                                );
+                            } else if self.lm_head_quant_type == 2 {
+                                driver::launch_cuda_gemv_q6_k(
+                                    d_logits_ptr,
+                                    d_lm.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    self.vocab_size as i32,
+                                    h as i32,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+
+                    // 5. ArgMax
+                    unsafe {
+                        driver::launch_cuda_argmax(
+                            d_logits_ptr,
+                            self.vocab_size as i32,
+                            d_sampled_ptr,
+                            d_val_ptr,
+                            1,
+                            s,
+                        );
+                        // 6. Advance decode step on device
+                        driver::launch_cuda_advance_decode_step(
+                            d_sp_ptr,
+                            d_sampled_ptr,
+                            d_in_tok_ptr,
+                            s,
+                        );
+                    }
+
+                    let end_res = unsafe {
+                        self.graph_manager.end_capture(
+                            s,
+                            "oxide_decode_graph",
+                            self.layers.len(),
+                            1,
+                        )
+                    };
+
+                    match end_res {
+                        Ok(handle) => {
+                            self.decode_graph_handle = Some(handle);
+                            unsafe {
+                                self.graph_manager.launch_graph(handle, s)?;
+                            }
+                            if let Some(ref d_sampled) = self.d_sampled_token {
+                                let mut sampled_res = [0u32, 0u32];
+                                let _ = d_sampled.copy_to_host_async(&mut sampled_res, s);
+                                stream.synchronize().map_err(EngineError::BackendError)?;
+                                let best_tok = sampled_res[0];
+                                self.last_sampled_token = Some(best_tok);
+                                self.seq_pos += 1;
+                                self.last_gpu_seq_pos = Some(self.seq_pos);
+                                if slot < self.host_token_buffer.len() {
+                                    self.host_token_buffer[slot] = best_tok;
+                                }
+                                return Ok(event);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("CUDA graph capture failed: {}, falling back to uncaptured stream dispatch", e);
+                            self.cuda_graph_enabled = false;
+                        }
+                    }
+                } else {
+                    tracing::warn!("cudaStreamBeginCapture failed, falling back to uncaptured stream dispatch");
+                    self.cuda_graph_enabled = false;
+                }
+            }
+        }
 
         if !self.layers.is_empty() && self.hidden_dim > 0 {
             let h = self.hidden_dim;

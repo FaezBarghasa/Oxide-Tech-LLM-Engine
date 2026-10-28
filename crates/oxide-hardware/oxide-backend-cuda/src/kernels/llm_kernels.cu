@@ -1268,7 +1268,8 @@ __launch_bounds__(256, (BATCH_N > 16 ? 3 : 4)) void mmvq_qkv_mixed_cuda_kernel(
     void *__restrict__ v_cache_fp16, int start_pos,
     const void *__restrict__ raw_wq, const void *__restrict__ raw_wk,
     const void *__restrict__ raw_wv, const void *__restrict__ x_q8_1_raw,
-    int q_m, int kv_m, int k, int actual_batch = BATCH_N) {
+    int q_m, int kv_m, int k, int actual_batch = BATCH_N,
+    const int *__restrict__ d_start_pos = nullptr) {
   int warp_id = threadIdx.x / 32;
   int rows_per_block = (blockDim.x / 32) / WARPS_PER_ROW;
   int total_row = blockIdx.x * rows_per_block + (warp_id / WARPS_PER_ROW);
@@ -1430,8 +1431,9 @@ __launch_bounds__(256, (BATCH_N > 16 ? 3 : 4)) void mmvq_qkv_mixed_cuda_kernel(
           y[(col_offset + col) * out_stride + row] = val;
         }
         if (is_v && v_cache_fp16 != nullptr) {
+          int actual_pos = (d_start_pos != nullptr) ? *d_start_pos : start_pos;
           ((__half *)
-               v_cache_fp16)[(size_t)(start_pos + col_offset + col) * kv_m +
+               v_cache_fp16)[(size_t)(actual_pos + col_offset + col) * kv_m +
                              row] = __float2half(val);
         }
       }
@@ -2140,8 +2142,10 @@ __global__ void flash_decode_paged_kernel(
     float *__restrict__ output, const float *__restrict__ q,
     const void *__restrict__ k_cache, const void *__restrict__ v_cache,
     int num_heads, int num_kv_heads, int head_dim, int num_kv_tokens,
-    int start_token, float sm_scale, int is_fp16 = 0) {
-  if (num_heads <= 0 || head_dim <= 0 || num_kv_tokens <= 0)
+    int start_token, float sm_scale, int is_fp16 = 0,
+    const int *__restrict__ d_num_kv_tokens = nullptr) {
+  int actual_tokens = (d_num_kv_tokens != nullptr) ? (*d_num_kv_tokens + 1) : num_kv_tokens;
+  if (num_heads <= 0 || head_dim <= 0 || actual_tokens <= 0)
     return;
   int head_idx = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
   if (head_idx >= num_heads)
@@ -2172,10 +2176,10 @@ __global__ void flash_decode_paged_kernel(
   }
 
   int valid_start =
-      (start_token >= 0 && start_token < num_kv_tokens) ? start_token : 0;
+      (start_token >= 0 && start_token < actual_tokens) ? start_token : 0;
 
   // Grid-stride over past KV cached tokens
-  for (int t = valid_start; t < num_kv_tokens; t++) {
+  for (int t = valid_start; t < actual_tokens; t++) {
     size_t tok_offset = (size_t)(t * kv_heads + kv_head_idx) * head_dim;
 
     // Compute Q . K dot product for this head from registers
@@ -3186,7 +3190,7 @@ __global__ void fused_qknorm_rope_batch_kernel(
     const float *__restrict__ k_norm_weight, void *__restrict__ k_cache,
     int start_pos, int batch_size, int num_heads, int num_kv_heads,
     int head_dim, float eps, float theta, int is_fp16, float scaling_factor,
-    int orig_ctx) {
+    int orig_ctx, const int *__restrict__ d_start_pos = nullptr) {
   int total_head = blockIdx.x;
   int b = blockIdx.y;
   if (b >= batch_size || total_head >= (num_heads + num_kv_heads))
@@ -3218,7 +3222,8 @@ __global__ void fused_qknorm_rope_batch_kernel(
   }
 
   int half_dim = head_dim / 2;
-  int token_pos = start_pos + b;
+  int actual_pos = (d_start_pos != nullptr) ? *d_start_pos : start_pos;
+  int token_pos = actual_pos + b;
 
   for (int d = lane_id; d < half_dim; d += 32) {
     float v0 = head_vec[d];
@@ -3397,7 +3402,9 @@ int launch_cuda_argmax(const float *logits, int vocab_size, uint32_t *out_token,
  */
 __global__ void dequantize_token_embd_q4_k_cuda_kernel(
     float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
-    int tok_idx, int hidden_dim, float scale) {
+    int tok_idx, int hidden_dim, float scale,
+    const int *__restrict__ d_tok_idx = nullptr) {
+  int actual_tok_idx = (d_tok_idx != nullptr) ? *d_tok_idx : tok_idx;
   int num_blocks_per_row = hidden_dim / 256;
   int b = blockIdx.x;
   if (b >= num_blocks_per_row)
@@ -3405,7 +3412,7 @@ __global__ void dequantize_token_embd_q4_k_cuda_kernel(
 
   const BlockQ4_K_Gpu *row_blocks =
       (const BlockQ4_K_Gpu *)((const uint8_t *)raw_embd +
-                              (size_t)tok_idx * num_blocks_per_row * 144);
+                              (size_t)actual_tok_idx * num_blocks_per_row * 144);
   const BlockQ4_K_Gpu *blk = &row_blocks[b];
 
   int lane_id = threadIdx.x % 32;
@@ -3449,6 +3456,93 @@ int launch_cuda_dequantize_token_embd_q4_k(float *d_hidden,
   int num_blocks = hidden_dim / 256;
   dequantize_token_embd_q4_k_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
       d_hidden, d_token_embd, tok_idx, hidden_dim, scale);
+  return cudaGetLastError();
+}
+
+int launch_cuda_dequantize_token_embd_q4_k_ptr(float *d_hidden,
+                                               const void *d_token_embd,
+                                               const int *d_tok_idx, int hidden_dim,
+                                               float scale, cudaStream_t stream) {
+  if (!d_hidden || !d_token_embd || hidden_dim <= 0)
+    return 0;
+  int num_blocks = hidden_dim / 256;
+  dequantize_token_embd_q4_k_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+      d_hidden, d_token_embd, 0, hidden_dim, scale, d_tok_idx);
+  return cudaGetLastError();
+}
+
+int launch_cuda_mmvq_qkv_mixed_ptr(float *y_q, float *y_k, float *y_v,
+                                   void *v_cache_fp16, const int *d_start_pos,
+                                   const void *raw_wq, const void *raw_wk,
+                                   const void *raw_wv, const void *x_q8_1, int q_m,
+                                   int kv_m, int k, int v_quant,
+                                   cudaStream_t stream) {
+  if (q_m <= 0 || kv_m <= 0 || k <= 0)
+    return 0;
+  int total_m = q_m + 2 * kv_m;
+  int grid, block;
+  get_gemv_launch_dims(total_m, grid, block);
+
+  if (v_quant == 1) {
+    mmvq_qkv_mixed_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(
+        y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv,
+        x_q8_1, q_m, kv_m, k, 1, d_start_pos);
+  } else {
+    mmvq_qkv_mixed_cuda_kernel<1, 2><<<grid, block, 0, stream>>>(
+        y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv,
+        x_q8_1, q_m, kv_m, k, 1, d_start_pos);
+  }
+  return cudaGetLastError();
+}
+
+int launch_cuda_fused_qknorm_rope_batch_ptr(
+    float *q, float *k, const float *q_norm_weight, const float *k_norm_weight,
+    void *k_cache, const int *d_start_pos, int num_heads,
+    int num_kv_heads, int head_dim, float eps, float theta, int is_fp16,
+    float scaling_factor, int orig_ctx, cudaStream_t stream) {
+  if (head_dim <= 0 || (num_heads + num_kv_heads) <= 0)
+    return 0;
+  dim3 grid(num_heads + num_kv_heads, 1);
+  fused_qknorm_rope_batch_kernel<<<grid, 32, 0, stream>>>(
+      q, k, q_norm_weight, k_norm_weight, k_cache, 0, 1,
+      num_heads, num_kv_heads, head_dim, eps, theta, is_fp16, scaling_factor,
+      orig_ctx, d_start_pos);
+  return cudaGetLastError();
+}
+
+int launch_cuda_flash_decode_ptr(float *output, const float *q, const void *k_cache,
+                                const void *v_cache, int num_heads,
+                                int num_kv_heads, int head_dim, const int *d_pos,
+                                int start_token, float sm_scale, int is_fp16,
+                                cudaStream_t stream) {
+  if (num_heads <= 0 || head_dim <= 0)
+    return 0;
+  const int block_size = 32;
+  int grid = num_heads;
+  flash_decode_paged_kernel<<<grid, block_size, 0, stream>>>(
+      output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim,
+      0, start_token, sm_scale, is_fp16, d_pos);
+  return cudaGetLastError();
+}
+
+__global__ void advance_decode_step_kernel(int *__restrict__ d_seq_pos,
+                                           const uint32_t *__restrict__ d_sampled_token,
+                                           int *__restrict__ d_input_token) {
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    if (d_seq_pos != nullptr) {
+      *d_seq_pos += 1;
+    }
+    if (d_sampled_token != nullptr && d_input_token != nullptr) {
+      *d_input_token = (int)(*d_sampled_token);
+    }
+  }
+}
+
+int launch_cuda_advance_decode_step(int *d_seq_pos,
+                                    const uint32_t *d_sampled_token,
+                                    int *d_input_token,
+                                    cudaStream_t stream) {
+  advance_decode_step_kernel<<<1, 1, 0, stream>>>(d_seq_pos, d_sampled_token, d_input_token);
   return cudaGetLastError();
 }
 
