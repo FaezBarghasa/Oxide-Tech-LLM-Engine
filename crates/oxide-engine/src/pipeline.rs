@@ -113,6 +113,34 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Returns current sequence position in KV cache.
+    #[inline(always)]
+    pub fn get_seq_pos(&self, sequence_id: u64) -> usize {
+        match self {
+            Self::Llama3Cuda(engine) => engine.backend.seq_pos,
+            Self::Llama3Dense { seq_positions, .. }
+            | Self::Llama3AmdApuCpuIgpu { seq_positions, .. } => {
+                seq_positions.get(&sequence_id).copied().unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    /// Sets or rolls back sequence position in KV cache.
+    #[inline(always)]
+    pub fn set_seq_pos(&mut self, sequence_id: u64, pos: usize) {
+        match self {
+            Self::Llama3Cuda(engine) => {
+                engine.backend.seq_pos = pos;
+            }
+            Self::Llama3Dense { seq_positions, .. }
+            | Self::Llama3AmdApuCpuIgpu { seq_positions, .. } => {
+                seq_positions.insert(sequence_id, pos);
+            }
+            _ => {}
+        }
+    }
+
     /// High-throughput chunked prefill pass on physical GPU evaluating prompt tokens in batched chunks.
     /// Streams layer weights ONCE for all tokens in each chunk and skips the 510MB LM Head on intermediate chunks.
     pub fn prefill_prompt(&mut self, prompt_tokens: &[u32]) -> Result<u32> {

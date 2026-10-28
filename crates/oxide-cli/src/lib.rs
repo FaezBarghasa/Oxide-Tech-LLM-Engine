@@ -434,6 +434,10 @@ pub struct ChatArgs {
     #[arg(long, default_value_t = 4)]
     pub draft_tokens: usize,
 
+    /// Companion draft model path or alias for speculative decoding (llama.cpp -md / --model-draft compatible)
+    #[arg(long = "draft-model", alias = "model-draft", alias = "md")]
+    pub draft_model: Option<String>,
+
     /// System prompt to steer model behavior
     #[arg(long)]
     pub system: Option<String>,
@@ -640,6 +644,10 @@ pub struct Cli {
     #[arg(long, default_value_t = 4)]
     pub draft_tokens: usize,
 
+    /// Companion draft model path or alias for speculative decoding (llama.cpp -md / --model-draft compatible)
+    #[arg(long = "draft-model", alias = "model-draft", alias = "md")]
+    pub draft_model: Option<String>,
+
     /// System prompt to steer model behavior
     #[arg(long)]
     pub system: Option<String>,
@@ -665,6 +673,12 @@ impl Cli {
                     }
                     if let Some(rest) = s.strip_prefix("-ngl=") {
                         return std::ffi::OsString::from(format!("--n-gpu-layers={rest}"));
+                    }
+                    if s == "-md" {
+                        return std::ffi::OsString::from("--draft-model");
+                    }
+                    if let Some(rest) = s.strip_prefix("-md=") {
+                        return std::ffi::OsString::from(format!("--draft-model={rest}"));
                     }
                 }
                 os_str
@@ -720,6 +734,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chat.greedy,
             &chat.speculative,
             chat.draft_tokens,
+            chat.draft_model.as_deref(),
             chat.system.as_deref(),
             &chat.chat_format,
         ),
@@ -799,6 +814,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.greedy,
                     &cli.speculative,
                     cli.draft_tokens,
+                    cli.draft_model.as_deref(),
                     cli.system.as_deref(),
                     &cli.chat_format,
                 )
@@ -848,6 +864,7 @@ fn run_chat_session(
     greedy: bool,
     speculative: &str,
     draft_tokens: usize,
+    draft_model: Option<&str>,
     system: Option<&str>,
     chat_format: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -980,10 +997,47 @@ fn run_chat_session(
         let mut all_tokens = prompt_tokens.clone();
         all_tokens.push(cur_token);
 
-        let is_speculative = matches!(
-            speculative,
-            "auto" | "ensemble" | "dynamic" | "ngram" | "prompt-lookup"
-        );
+        let is_speculative = draft_model.is_some()
+            || matches!(
+                speculative,
+                "auto" | "ensemble" | "dynamic" | "ngram" | "prompt-lookup"
+            );
+
+        let mut companion_draft_pipeline = if let Some(dm) = draft_model {
+            println!("Initializing Companion Draft Pipeline from: {dm}...");
+            let pipe = match SpecializedPipeline::from_model_or_path(dm, backend_str, gpu, 1, None) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    eprintln!("Direct GPU loading for draft model failed ({e}), attempting CPU fallback for companion draft model...");
+                    match SpecializedPipeline::from_model_or_path(dm, "cpu", None, 1, None) {
+                        Ok(p) => Some(p),
+                        Err(e2) => {
+                            eprintln!("Draft pipeline failed to initialize ({e2}). Reverting to internal ensemble drafter.");
+                            None
+                        }
+                    }
+                }
+            };
+            if let Some(mut p) = pipe {
+                p.configure_sampling(
+                    temp,
+                    top_p,
+                    top_k,
+                    min_p,
+                    repeat_penalty,
+                    repeat_last_n,
+                    seed,
+                    greedy,
+                );
+                let _ = p.prefill_prompt(&prompt_tokens);
+                Some(p)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let spec_engine = if is_speculative {
             Some(oxide_engine::SpeculativeDecoderEngine::new(
                 oxide_engine::SpeculativeConfig {
@@ -1010,62 +1064,92 @@ fn run_chat_session(
         let mut spec_accepted_count = 0usize;
 
         while gen_count < max_tokens {
-            if let (Some(spec), Some(ens)) = (&spec_engine, &mut ensemble) {
-                let (draft, _tier) = ens.propose_draft(&all_tokens, spec);
-                if !draft.is_empty() {
-                    spec_drafted_count += draft.len();
-                    let verified_tokens = pipeline.step_speculative(cur_token, &draft)?;
-                    if verified_tokens.is_empty() {
-                        ens.update_acceptance(0, draft.len());
+            let mut draft = Vec::new();
+            if let Some(ref mut dp) = companion_draft_pipeline {
+                let mut d_tok = cur_token;
+                let draft_len = draft_tokens.clamp(1, 8);
+                for _ in 0..draft_len {
+                    let d_cmd = StepCommand::new(1, d_tok, 0, false);
+                    if let Ok(d_res) = dp.step(&d_cmd) {
+                        d_tok = d_res.sampled_token;
+                        draft.push(d_tok);
+                        if stop_tokens.contains(&d_tok) || Some(d_tok) == tokenizer.eos_id {
+                            break;
+                        }
                     } else {
-                        let mut reached_eos = false;
-                        let mut prev_t = cur_token;
-                        for &tok in &verified_tokens {
+                        break;
+                    }
+                }
+            } else if let (Some(spec), Some(ens)) = (&spec_engine, &mut ensemble) {
+                let (d, _tier) = ens.propose_draft(&all_tokens, spec);
+                draft = d;
+            }
+
+            if !draft.is_empty() {
+                spec_drafted_count += draft.len();
+                let verified_tokens = pipeline.step_speculative(cur_token, &draft)?;
+                if verified_tokens.is_empty() {
+                    if let Some(ref mut ens) = ensemble {
+                        ens.update_acceptance(0, draft.len());
+                    }
+                } else {
+                    let mut reached_eos = false;
+                    let mut prev_t = cur_token;
+                    for &tok in &verified_tokens {
+                        if let Some(ref mut ens) = ensemble {
                             ens.record_token(prev_t, tok);
                             if all_tokens.len() >= 2 {
                                 let p0 = all_tokens[all_tokens.len() - 2];
                                 ens.record_trigram(p0, prev_t, tok);
                             }
-                            prev_t = tok;
-                            cur_token = tok;
-                            gen_count += 1;
-                            all_tokens.push(cur_token);
-
-                            if stop_tokens.contains(&cur_token)
-                                || Some(cur_token) == tokenizer.eos_id
-                            {
-                                reached_eos = true;
-                                break;
-                            }
-                            let text = tokenizer.decode_token(cur_token);
-                            if text.contains("<|im_end|>")
-                                || text.contains("<end_of_turn>")
-                                || text.contains("<|eot_id|>")
-                            {
-                                reached_eos = true;
-                                break;
-                            }
-                            print!("{text}");
-                            let _ = std::io::Write::flush(&mut std::io::stdout());
-
-                            if gen_count >= max_tokens {
-                                reached_eos = true;
-                                break;
-                            }
                         }
-                        let matching = verified_tokens
-                            .iter()
-                            .zip(draft.iter())
-                            .take_while(|&(v, d)| v == d)
-                            .count();
-                        spec_accepted_count += matching;
-                        ens.update_acceptance(matching, draft.len());
+                        prev_t = tok;
+                        cur_token = tok;
+                        gen_count += 1;
+                        all_tokens.push(cur_token);
 
-                        if reached_eos {
+                        if stop_tokens.contains(&cur_token)
+                            || Some(cur_token) == tokenizer.eos_id
+                        {
+                            reached_eos = true;
                             break;
                         }
-                        continue;
+                        let text = tokenizer.decode_token(cur_token);
+                        if text.contains("<|im_end|>")
+                            || text.contains("<end_of_turn>")
+                            || text.contains("<|eot_id|>")
+                        {
+                            reached_eos = true;
+                            break;
+                        }
+                        print!("{text}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+
+                        if gen_count >= max_tokens {
+                            reached_eos = true;
+                            break;
+                        }
                     }
+
+                    let matching = verified_tokens
+                        .iter()
+                        .zip(draft.iter())
+                        .take_while(|&(v, d)| v == d)
+                        .count();
+                    spec_accepted_count += matching;
+
+                    if let Some(ref mut ens) = ensemble {
+                        ens.update_acceptance(matching, draft.len());
+                    }
+
+                    if let Some(ref mut dp) = companion_draft_pipeline {
+                        dp.set_seq_pos(1, all_tokens.len());
+                    }
+
+                    if reached_eos {
+                        break;
+                    }
+                    continue;
                 }
             }
 
@@ -1081,6 +1165,11 @@ fn run_chat_session(
                     let p0 = all_tokens[all_tokens.len() - 3];
                     ens.record_trigram(p0, prev_token, cur_token);
                 }
+            }
+            if let Some(ref mut dp) = companion_draft_pipeline {
+                let sync_cmd = StepCommand::new(1, cur_token, 0, true);
+                let _ = dp.step(&sync_cmd);
+                dp.set_seq_pos(1, all_tokens.len());
             }
             if stop_tokens.contains(&cur_token)
                 || Some(cur_token) == tokenizer.eos_id
@@ -1127,11 +1216,20 @@ fn run_chat_session(
                 } else {
                     0.0
                 };
-                let final_k = ensemble
-                    .as_ref()
-                    .map_or(draft_tokens, |e| e.adaptive.active_k());
+                let final_k = if companion_draft_pipeline.is_some() {
+                    draft_tokens
+                } else {
+                    ensemble
+                        .as_ref()
+                        .map_or(draft_tokens, |e| e.adaptive.active_k())
+                };
+                let drafter_desc = if companion_draft_pipeline.is_some() {
+                    "Companion Draft Model"
+                } else {
+                    "Autonomous Drafter Ensemble"
+                };
                 format!(
-                    "\nSpeculative Mode : Autonomous Drafter Ensemble (Drafted: {spec_drafted_count}, Accepted: {spec_accepted_count}, Acceptance: {acc_pct:.1}%, Final Horizon K: {final_k})"
+                    "\nSpeculative Mode : {drafter_desc} (Drafted: {spec_drafted_count}, Accepted: {spec_accepted_count}, Acceptance: {acc_pct:.1}%, Final Horizon K: {final_k})"
                 )
             } else {
                 String::new()
