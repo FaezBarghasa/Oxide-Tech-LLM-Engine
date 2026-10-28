@@ -530,6 +530,15 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_dequantize_token_embd_q4_k(
+        d_hidden: *mut f32,
+        d_token_embd: *const std::ffi::c_void,
+        tok_idx: i32,
+        hidden_dim: i32,
+        scale: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn fwht_kernel_128(d_out: *mut f32, d_in: *const f32, num_blocks: i32);
     pub fn init_cuda_kernel_attributes();
 }

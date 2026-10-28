@@ -813,20 +813,13 @@ __launch_bounds__(256, (BATCH_N > 16 ? 3 : 4)) void mmvq_q6_k_cuda_kernel(
 
   for (int b = 0; b < num_blocks_per_row; ++b) {
     const BlockQ6_K_Gpu *blk = &row_blocks[b];
-    float d;
-    if (lane_id == 0) {
-      d = __half2float(*((const half *)&blk->d));
-    }
-    d = __shfl_sync(0xFFFFFFFF, d, 0);
+    float d = __half2float(*((const half *)&blk->d));
 
 #pragma unroll
     for (int half_idx = 0; half_idx < 2; half_idx++) {
-      const uint16_t *ql16 =
-          (const uint16_t *)&blk
-              ->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
+      const uint16_t *ql16 = (const uint16_t *)&blk->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
       uint32_t ql4 = (uint32_t)ql16[0] | ((uint32_t)ql16[1] << 16);
-      const uint16_t *qh16 =
-          (const uint16_t *)&blk->qh[half_idx * 32 + idx * 4];
+      const uint16_t *qh16 = (const uint16_t *)&blk->qh[half_idx * 32 + idx * 4];
       uint32_t qh4 = (uint32_t)qh16[0] | ((uint32_t)qh16[1] << 16);
 
       uint32_t q_low4 = (ql4 >> ((group & 2) * 2)) & 0x0F0F0F0Fu;
@@ -1160,6 +1153,109 @@ __global__ __launch_bounds__(
 }
 
 /**
+ * Custom Fused Pair Q4_K Gate + Up GEMV Kernel (BATCH_N = 1).
+ * Computes both Gate and Up rows simultaneously in a single warp pass,
+ * reading activations x_q8_1 exactly ONCE for both projections.
+ */
+__global__ __launch_bounds__(256, 4) void gemv_gate_up_fused_pair_q4_k_cuda_kernel(
+    float *__restrict__ y_gate, float *__restrict__ y_up,
+    const void *__restrict__ raw_w1, const void *__restrict__ raw_w3,
+    const void *__restrict__ x_q8_1_raw, int inter_m, int k) {
+  int warp_id = threadIdx.x / 32;
+  int rows_per_block = blockDim.x / 32;
+  int row = blockIdx.x * rows_per_block + warp_id;
+  if (row >= inter_m)
+    return;
+
+  int lane_id = threadIdx.x % 32;
+  int num_blocks_per_row = k / 256;
+
+  const BlockQ4_K_Gpu *row_w1 =
+      (const BlockQ4_K_Gpu *)((const uint8_t *)raw_w1 +
+                              (size_t)row * num_blocks_per_row * 144);
+  const BlockQ4_K_Gpu *row_w3 =
+      (const BlockQ4_K_Gpu *)((const uint8_t *)raw_w3 +
+                              (size_t)row * num_blocks_per_row * 144);
+  const BlockQ8_1_Gpu *x_q8_1 = (const BlockQ8_1_Gpu *)x_q8_1_raw;
+
+  int chunk = lane_id / 8;
+  int sub_idx = lane_id % 8;
+  int sub0 = 2 * chunk + 0;
+  int sub1 = 2 * chunk + 1;
+
+  float dot_gate = 0.0f;
+  float dot_up = 0.0f;
+
+  for (int b = 0; b < num_blocks_per_row; b++) {
+    const BlockQ8_1_Gpu *bx = &x_q8_1[b * 8];
+    const BlockQ8_1_Gpu *bq8_0 = &bx[sub0];
+    const BlockQ8_1_Gpu *bq8_1 = &bx[sub1];
+
+    float d8_0 = __low2float(__ldg(&bq8_0->ds));
+    float d8_1 = __low2float(__ldg(&bq8_1->ds));
+
+    int u0 = __ldg(&((const int *)bq8_0->qs)[sub_idx]);
+    int u1 = __ldg(&((const int *)bq8_1->qs)[sub_idx]);
+
+    int sum0 = __dp4a(0x01010101, u0, 0);
+    int sum1 = __dp4a(0x01010101, u1, 0);
+
+    // 1. Gate (w1)
+    {
+      const BlockQ4_K_Gpu *blk1 = &row_w1[b];
+      uint4 hdr1 = ((const uint4 *)blk1)[0];
+      float d1 = __low2float(*((const half2 *)&hdr1.x));
+      float dmin1 = __high2float(*((const half2 *)&hdr1.x));
+      float sc0, min0, sc1, min1;
+      get_scale_min_k4_from_regs(chunk, hdr1.y, hdr1.z, hdr1.w, &sc0, &min0, &sc1, &min1);
+
+      int v = ((const int *)blk1->qs)[lane_id];
+      int v0 = v & 0x0F0F0F0F;
+      int v1 = (v >> 4) & 0x0F0F0F0F;
+
+      int dot0 = __dp4a(v0, u0, 0);
+      int dot1 = __dp4a(v1, u1, 0);
+
+      float acc0 = (d1 * sc0) * (float)dot0 - (dmin1 * min0) * (float)sum0;
+      float acc1 = (d1 * sc1) * (float)dot1 - (dmin1 * min1) * (float)sum1;
+      dot_gate += acc0 * d8_0 + acc1 * d8_1;
+    }
+
+    // 2. Up (w3) using identical loaded activations
+    {
+      const BlockQ4_K_Gpu *blk3 = &row_w3[b];
+      uint4 hdr3 = ((const uint4 *)blk3)[0];
+      float d3 = __low2float(*((const half2 *)&hdr3.x));
+      float dmin3 = __high2float(*((const half2 *)&hdr3.x));
+      float sc0, min0, sc1, min1;
+      get_scale_min_k4_from_regs(chunk, hdr3.y, hdr3.z, hdr3.w, &sc0, &min0, &sc1, &min1);
+
+      int v = ((const int *)blk3->qs)[lane_id];
+      int v0 = v & 0x0F0F0F0F;
+      int v1 = (v >> 4) & 0x0F0F0F0F;
+
+      int dot0 = __dp4a(v0, u0, 0);
+      int dot1 = __dp4a(v1, u1, 0);
+
+      float acc0 = (d3 * sc0) * (float)dot0 - (dmin3 * min0) * (float)sum0;
+      float acc1 = (d3 * sc1) * (float)dot1 - (dmin3 * min1) * (float)sum1;
+      dot_up += acc0 * d8_0 + acc1 * d8_1;
+    }
+  }
+
+#pragma unroll
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    dot_gate += __shfl_down_sync(0xFFFFFFFF, dot_gate, offset);
+    dot_up += __shfl_down_sync(0xFFFFFFFF, dot_up, offset);
+  }
+
+  if (lane_id == 0) {
+    y_gate[row] = dot_gate;
+    y_up[row] = dot_up;
+  }
+}
+
+/**
  * Grouped Multi-Column Mixed-Quant QKV MMVQ Kernel + Direct FP16 V-Cache Write.
  * Supports Q (Q4_K), K (Q4_K), and V (Q4_K when V_QUANT == 1, or Q6_K when
  * V_QUANT == 2) in a single kernel launch, and optionally writes V directly to
@@ -1288,20 +1384,13 @@ __launch_bounds__(256, (BATCH_N > 16 ? 3 : 4)) void mmvq_qkv_mixed_cuda_kernel(
 
     for (int b = 0; b < num_blocks_per_row; ++b) {
       const BlockQ6_K_Gpu *blk = &row_blocks[b];
-      float d;
-      if (lane_id == 0) {
-        d = __half2float(*((const half *)&blk->d));
-      }
-      d = __shfl_sync(0xFFFFFFFF, d, 0);
+      float d = __half2float(*((const half *)&blk->d));
 
 #pragma unroll
       for (int half_idx = 0; half_idx < 2; half_idx++) {
-        const uint16_t *ql16 =
-            (const uint16_t *)&blk
-                ->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
+        const uint16_t *ql16 = (const uint16_t *)&blk->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
         uint32_t ql4 = (uint32_t)ql16[0] | ((uint32_t)ql16[1] << 16);
-        const uint16_t *qh16 =
-            (const uint16_t *)&blk->qh[half_idx * 32 + idx * 4];
+        const uint16_t *qh16 = (const uint16_t *)&blk->qh[half_idx * 32 + idx * 4];
         uint32_t qh4 = (uint32_t)qh16[0] | ((uint32_t)qh16[1] << 16);
 
         uint32_t q_low4 = (ql4 >> ((group & 2) * 2)) & 0x0F0F0F0Fu;
@@ -2712,8 +2801,11 @@ int launch_cuda_gemv_gate_up_q4_k(float *y_gate, float *y_up,
                                   const void *raw_w1, const void *raw_w3,
                                   const void *x_q8_1, int inter_m, int k,
                                   cudaStream_t stream) {
-  return launch_cuda_mmvq_gate_up_q4_k(y_gate, y_up, raw_w1, raw_w3, x_q8_1,
-                                       inter_m, k, 1, stream);
+  int grid, block;
+  get_gemv_launch_dims(inter_m, grid, block);
+  gemv_gate_up_fused_pair_q4_k_cuda_kernel<<<grid, block, 0, stream>>>(
+      y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k);
+  return cudaGetLastError();
 }
 
 int launch_cuda_mmvq_qkv_mixed(float *y_q, float *y_k, float *y_v,
@@ -3295,6 +3387,68 @@ int launch_cuda_argmax(const float *logits, int vocab_size, uint32_t *out_token,
   int block_size = 1024;
   argmax_f32_kernel<<<batch_size, block_size, 0, stream>>>(
       logits, vocab_size, out_token, out_max_val);
+  return cudaGetLastError();
+}
+
+/**
+ * On-Device Q4_K Token Embedding Dequantization Kernel.
+ * Dequantizes 1 row of Q4_K token embedding directly to d_hidden in registers,
+ * completely eliminating host-side mmap reads and host-to-device memory copies.
+ */
+__global__ void dequantize_token_embd_q4_k_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    int tok_idx, int hidden_dim, float scale) {
+  int num_blocks_per_row = hidden_dim / 256;
+  int b = blockIdx.x;
+  if (b >= num_blocks_per_row)
+    return;
+
+  const BlockQ4_K_Gpu *row_blocks =
+      (const BlockQ4_K_Gpu *)((const uint8_t *)raw_embd +
+                              (size_t)tok_idx * num_blocks_per_row * 144);
+  const BlockQ4_K_Gpu *blk = &row_blocks[b];
+
+  int lane_id = threadIdx.x % 32;
+  int chunk = lane_id / 8;
+  int sub_idx = lane_id % 8;
+  int sub0 = 2 * chunk + 0;
+  int sub1 = 2 * chunk + 1;
+
+  uint4 hdr = ((const uint4 *)blk)[0];
+  float d = __low2float(*((const half2 *)&hdr.x)) * scale;
+  float dmin = __high2float(*((const half2 *)&hdr.x)) * scale;
+
+  float sc0, min0, sc1, min1;
+  get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
+
+  float d_sc0 = d * sc0;
+  float d_sc1 = d * sc1;
+  float dm_min0 = dmin * min0;
+  float dm_min1 = dmin * min1;
+
+  int v = ((const int *)blk->qs)[lane_id];
+  int v0 = v & 0x0F0F0F0F;
+  int v1 = (v >> 4) & 0x0F0F0F0F;
+
+  int8_t *q0_bytes = (int8_t *)&v0;
+  int8_t *q1_bytes = (int8_t *)&v1;
+
+  #pragma unroll
+  for (int i = 0; i < 4; i++) {
+    d_hidden[b * 256 + sub0 * 32 + sub_idx * 4 + i] = (float)q0_bytes[i] * d_sc0 - dm_min0;
+    d_hidden[b * 256 + sub1 * 32 + sub_idx * 4 + i] = (float)q1_bytes[i] * d_sc1 - dm_min1;
+  }
+}
+
+int launch_cuda_dequantize_token_embd_q4_k(float *d_hidden,
+                                           const void *d_token_embd,
+                                           int tok_idx, int hidden_dim,
+                                           float scale, cudaStream_t stream) {
+  if (!d_hidden || !d_token_embd || hidden_dim <= 0)
+    return 0;
+  int num_blocks = hidden_dim / 256;
+  dequantize_token_embd_q4_k_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+      d_hidden, d_token_embd, tok_idx, hidden_dim, scale);
   return cudaGetLastError();
 }
 

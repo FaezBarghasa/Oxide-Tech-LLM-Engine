@@ -562,6 +562,19 @@ impl SpecializedPipeline {
                         model.config.max_seq_len.min(8192),
                     );
                     // Host-side embedding lookup via mmap avoids allocating gigabytes of VRAM for token_embd.
+                    let token_embd_raw = if let Some(ref emb_tensor) = model.token_embd_tensor {
+                        emb_tensor.as_raw_bytes()
+                    } else if !model.token_embedding.is_empty() {
+                        unsafe {
+                            std::slice::from_raw_parts(
+                                model.token_embedding.as_ptr().cast::<u8>(),
+                                model.token_embedding.len() * std::mem::size_of::<f32>(),
+                            )
+                        }
+                    } else {
+                        &[]
+                    };
+
                     backend.configure_model(
                         model.config.hidden_dim,
                         model.config.vocab_size,
@@ -570,7 +583,7 @@ impl SpecializedPipeline {
                         model.config.head_dim,
                         &model.output_norm,
                         model.lm_head.as_raw_bytes(),
-                        &[],
+                        token_embd_raw,
                         model.lm_head.quant_type(),
                     )?;
                     let theta = f32::from_bits(model.config.rope_theta);
@@ -818,6 +831,19 @@ impl SpecializedPipeline {
                     model.config.sliding_window,
                     model.config.max_seq_len.min(8192),
                 );
+                let token_embd_raw = if let Some(ref emb_tensor) = model.token_embd_tensor {
+                    emb_tensor.as_raw_bytes()
+                } else if !model.token_embedding.is_empty() {
+                    unsafe {
+                        std::slice::from_raw_parts(
+                            model.token_embedding.as_ptr().cast::<u8>(),
+                            model.token_embedding.len() * std::mem::size_of::<f32>(),
+                        )
+                    }
+                } else {
+                    &[]
+                };
+
                 let _ = backend.configure_model(
                     model.config.hidden_dim,
                     model.config.vocab_size,
@@ -826,7 +852,7 @@ impl SpecializedPipeline {
                     model.config.head_dim,
                     &model.output_norm,
                     model.lm_head.as_raw_bytes(),
-                    &[],
+                    token_embd_raw,
                     model.lm_head.quant_type(),
                 );
                 let theta = f32::from_bits(model.config.rope_theta);

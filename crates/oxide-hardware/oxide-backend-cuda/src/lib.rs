@@ -148,6 +148,7 @@ pub struct CudaBackend {
     pub embedding_lookup: Option<EmbeddingLookupFn>,
     pub mmap_handle: Option<std::sync::Arc<memmap2::Mmap>>,
     pub lm_head_quant_type: u32,
+    pub token_embd_quant_type: u32,
     pub rope_theta: f32,
     pub rope_scaling_factor: f32,
     pub rope_scaling_orig_ctx: usize,
@@ -245,6 +246,7 @@ impl CudaBackend {
             embedding_lookup: None,
             mmap_handle: None,
             lm_head_quant_type: 1,
+            token_embd_quant_type: 1,
             rope_theta: 10_000.0,
             rope_scaling_factor: 1.0,
             rope_scaling_orig_ctx: 0,
@@ -877,6 +879,12 @@ impl CudaBackend {
                 .copy_from_host_async(token_embd_bytes, s)
                 .map_err(EngineError::BackendError)?;
             self.d_token_embd = Some(d_emb);
+            let q4_k_expected = vocab_size * (hidden_dim / 256) * 144;
+            if token_embd_bytes.len() == q4_k_expected {
+                self.token_embd_quant_type = 1;
+            } else {
+                self.token_embd_quant_type = 0;
+            }
         }
 
         self.host_logits_buffer.resize(vocab_size, 0.0f32);
@@ -1733,7 +1741,40 @@ impl CudaBackend {
         }
 
         // 1. Initial embedding lookup for all B candidate tokens on GPU
-        if let Some(lookup) = &self.embedding_lookup {
+        if let Some(d_emb) = &self.d_token_embd {
+            let emb_scale = if self.is_gemma { (h as f32).sqrt() } else { 1.0f32 };
+            for (i, &tok) in chunk_tokens.iter().enumerate() {
+                let tok_idx = (tok as usize) % self.vocab_size.max(1);
+                let dst_offset = i * h;
+                if let Some(d_hid) = &self.d_hidden {
+                    unsafe {
+                        let dst_ptr = d_hid.as_typed_ptr::<f32>().add(dst_offset);
+                        if self.token_embd_quant_type == 1 {
+                            driver::launch_cuda_dequantize_token_embd_q4_k(
+                                dst_ptr,
+                                d_emb.as_raw_ptr(),
+                                tok_idx as i32,
+                                h as i32,
+                                emb_scale,
+                                s,
+                            );
+                        } else {
+                            let src_offset = tok_idx * h * std::mem::size_of::<f32>();
+                            if src_offset + h * 4 <= d_emb.size_bytes() {
+                                let src_ptr = (d_emb.as_raw_ptr() as *const u8).add(src_offset);
+                                let _ = driver::cudaMemcpyAsync(
+                                    dst_ptr as *mut std::ffi::c_void,
+                                    src_ptr as *const std::ffi::c_void,
+                                    h * std::mem::size_of::<f32>(),
+                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Some(lookup) = &self.embedding_lookup {
             let total_floats = batch_size * h;
             if self.host_emb_buffer.len() < total_floats {
                 self.host_emb_buffer.resize(total_floats, 0.0f32);
@@ -1751,27 +1792,6 @@ impl CudaBackend {
                         driver::CUDA_MEMCPY_HOST_TO_DEVICE,
                         s,
                     );
-                }
-            }
-        } else if let Some(d_emb) = &self.d_token_embd {
-            for (i, &tok) in chunk_tokens.iter().enumerate() {
-                let tok_idx = (tok as usize) % self.vocab_size.max(1);
-                let src_offset = tok_idx * h * std::mem::size_of::<f32>();
-                let dst_offset = i * h * std::mem::size_of::<f32>();
-                if src_offset + h * 4 <= d_emb.size_bytes() {
-                    if let Some(d_hid) = &self.d_hidden {
-                        unsafe {
-                            let dst_ptr = (d_hid.as_raw_ptr() as *mut u8).add(dst_offset);
-                            let src_ptr = (d_emb.as_raw_ptr() as *const u8).add(src_offset);
-                            let _ = driver::cudaMemcpyAsync(
-                                dst_ptr as *mut std::ffi::c_void,
-                                src_ptr as *const std::ffi::c_void,
-                                h * std::mem::size_of::<f32>(),
-                                driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
-                                s,
-                            );
-                        }
-                    }
                 }
             }
         }
@@ -2314,7 +2334,38 @@ impl HardwareBackend for CudaBackend {
             self.seq_pos += 1;
 
             // 1. Initial embedding lookup on GPU (or dequantized from host)
-            if let Some(lookup) = &self.embedding_lookup {
+            if let Some(d_emb) = &self.d_token_embd {
+                let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
+                let emb_scale = if self.is_gemma { (h as f32).sqrt() } else { 1.0f32 };
+                if let Some(d_hid) = &mut self.d_hidden {
+                    if self.token_embd_quant_type == 1 {
+                        unsafe {
+                            driver::launch_cuda_dequantize_token_embd_q4_k(
+                                d_hid.as_typed_ptr::<f32>(),
+                                d_emb.as_raw_ptr(),
+                                tok_idx as i32,
+                                h as i32,
+                                emb_scale,
+                                s,
+                            );
+                        }
+                    } else {
+                        let offset = tok_idx * h * std::mem::size_of::<f32>();
+                        if offset + h * 4 <= d_emb.size_bytes() {
+                            let _ = unsafe {
+                                driver::cudaMemcpyAsync(
+                                    d_hid.as_raw_ptr(),
+                                    (d_emb.as_raw_ptr() as *const u8).add(offset)
+                                        as *const std::ffi::c_void,
+                                    h * std::mem::size_of::<f32>(),
+                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                    s,
+                                )
+                            };
+                        }
+                    }
+                }
+            } else if let Some(lookup) = &self.embedding_lookup {
                 let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
                 if self.host_emb_buffer.len() != h {
                     self.host_emb_buffer.resize(h, 0.0f32);
@@ -2322,23 +2373,6 @@ impl HardwareBackend for CudaBackend {
                 lookup(tok_idx, &mut self.host_emb_buffer);
                 if let Some(d_hid) = &mut self.d_hidden {
                     let _ = d_hid.copy_from_host_async(&self.host_emb_buffer, s);
-                }
-            } else if let Some(d_emb) = &self.d_token_embd {
-                let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
-                let offset = tok_idx * h * std::mem::size_of::<f32>();
-                if offset + h * 4 <= d_emb.size_bytes() {
-                    if let Some(d_hid) = &self.d_hidden {
-                        let _ = unsafe {
-                            driver::cudaMemcpyAsync(
-                                d_hid.as_raw_ptr(),
-                                (d_emb.as_raw_ptr() as *const u8).add(offset)
-                                    as *const std::ffi::c_void,
-                                h * std::mem::size_of::<f32>(),
-                                driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
-                                s,
-                            )
-                        };
-                    }
                 }
             }
 
