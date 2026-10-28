@@ -79,8 +79,48 @@ pub enum ChatTemplateFormat {
     Mistral,
     /// Alpaca (`### Instruction:\n...\n\n### Response:\n`).
     Alpaca,
+    /// Gemma 2 / Gemma 4 (`<start_of_turn>user\ncontent<end_of_turn>\n<start_of_turn>model\n`).
+    Gemma,
     /// Raw unformatted plaintext concat.
     RawText,
+}
+
+impl ChatTemplateFormat {
+    /// Detects the recommended chat template format from model architecture or filename.
+    #[must_use]
+    pub fn detect(model_arch: &str, model_name: &str) -> Self {
+        let arch = model_arch.to_lowercase();
+        let name = model_name.to_lowercase();
+        if arch.contains("qwen")
+            || name.contains("qwen")
+            || arch.contains("yi")
+            || name.contains("yi")
+        {
+            Self::ChatMl
+        } else if arch.contains("llama") || name.contains("llama") {
+            Self::Llama3
+        } else if arch.contains("gemma") || name.contains("gemma") {
+            Self::Gemma
+        } else if arch.contains("deepseek") || name.contains("deepseek") {
+            Self::ChatMl
+        } else if arch.contains("mistral") || name.contains("mistral") {
+            Self::Mistral
+        } else {
+            Self::ChatMl
+        }
+    }
+
+    /// Returns the standard stop token IDs for this template format.
+    #[must_use]
+    pub fn default_stop_token_ids(&self) -> &'static [u32] {
+        match self {
+            Self::ChatMl => &[151643, 151645], // <|endoftext|>, <|im_end|>
+            Self::Llama3 => &[128001, 128009], // <|end_of_text|>, <|eot_id|>
+            Self::Gemma => &[1, 2, 107],       // <bos>, <eos>, <end_of_turn>
+            Self::DeepSeek => &[100001, 151643, 151645],
+            Self::Mistral | Self::Alpaca | Self::RawText => &[2],
+        }
+    }
 }
 
 /// Chat Template Parser and Prompt Serializer.
@@ -204,6 +244,22 @@ impl ChatTemplateParser {
                 }
                 if self.add_generation_prompt {
                     prompt.push_str("### Response:\n");
+                }
+            }
+            ChatTemplateFormat::Gemma => {
+                prompt.push_str("<bos>");
+                for msg in messages {
+                    let role_str = match msg.role {
+                        ChatRole::System | ChatRole::User | ChatRole::Tool => "user",
+                        ChatRole::Assistant => "model",
+                    };
+                    prompt.push_str(&format!(
+                        "<start_of_turn>{role_str}\n{}<end_of_turn>\n",
+                        msg.content
+                    ));
+                }
+                if self.add_generation_prompt {
+                    prompt.push_str("<start_of_turn>model\n");
                 }
             }
             ChatTemplateFormat::RawText => {

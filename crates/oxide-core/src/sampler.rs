@@ -87,6 +87,7 @@ pub struct SamplerState {
     pub mirostat_mu: f32,
     pub generated_tokens: Vec<u32>,
     pub rng_state: u64,
+    pub candidates_buffer: Vec<(u32, f32)>,
 }
 
 impl Default for SamplerState {
@@ -95,6 +96,7 @@ impl Default for SamplerState {
             mirostat_mu: 10.0,
             generated_tokens: Vec::new(),
             rng_state: 0x853c_49e6_748f_ea9b,
+            candidates_buffer: Vec::new(),
         }
     }
 }
@@ -106,6 +108,7 @@ impl SamplerState {
             mirostat_mu: 2.0 * target_tau,
             generated_tokens: Vec::new(),
             rng_state: 0x853c_49e6_748f_ea9b,
+            candidates_buffer: Vec::new(),
         }
     }
 
@@ -120,6 +123,7 @@ impl SamplerState {
             mirostat_mu: 2.0 * target_tau,
             generated_tokens: Vec::new(),
             rng_state,
+            candidates_buffer: Vec::new(),
         }
     }
 
@@ -250,15 +254,29 @@ impl AcademicSamplerEngine {
         }
 
         // 5. Convert to Softmax Probabilities
-        let mut candidates: Vec<(u32, f32)> = logits
-            .iter()
-            .enumerate()
-            .filter(|&(_, &l)| l > f32::NEG_INFINITY)
-            .map(|(idx, &l)| (idx as u32, l))
-            .collect();
+        let mut candidates = std::mem::take(&mut state.candidates_buffer);
+        candidates.clear();
+        candidates.extend(
+            logits
+                .iter()
+                .enumerate()
+                .filter(|&(_, &l)| l > f32::NEG_INFINITY)
+                .map(|(idx, &l)| (idx as u32, l)),
+        );
 
         if candidates.is_empty() {
+            state.candidates_buffer = candidates;
             return Ok(0);
+        }
+
+        // Fast top-K partitioning when candidate pool is large:
+        // We only need the top candidates for top-k, top-p, min-p, etc.
+        let filter_k = self.config.top_k.max(256).min(candidates.len());
+        if filter_k < candidates.len() {
+            candidates.select_nth_unstable_by(filter_k, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            candidates.truncate(filter_k);
         }
 
         // Sort descending by logit
@@ -278,8 +296,18 @@ impl AcademicSamplerEngine {
 
         // 6. Mirostat Adaptive Filtering (v1 & v2)
         match self.config.mirostat_mode {
-            MirostatMode::V1 => return Ok(self.sample_mirostat_v1(&mut candidates, state)),
-            MirostatMode::V2 => return Ok(self.sample_mirostat_v2(&mut candidates, state)),
+            MirostatMode::V1 => {
+                let tok = self.sample_mirostat_v1(&mut candidates, state);
+                state.record_token(tok);
+                state.candidates_buffer = candidates;
+                return Ok(tok);
+            }
+            MirostatMode::V2 => {
+                let tok = self.sample_mirostat_v2(&mut candidates, state);
+                state.record_token(tok);
+                state.candidates_buffer = candidates;
+                return Ok(tok);
+            }
             MirostatMode::Disabled => {}
         }
 
@@ -357,6 +385,7 @@ impl AcademicSamplerEngine {
         };
 
         state.record_token(picked);
+        state.candidates_buffer = candidates;
         Ok(picked)
     }
 

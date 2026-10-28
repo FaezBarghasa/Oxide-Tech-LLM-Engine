@@ -433,6 +433,14 @@ pub struct ChatArgs {
     /// Initial draft tokens to propose per speculative step (dynamically adapted between 2 and 5)
     #[arg(long, default_value_t = 4)]
     pub draft_tokens: usize,
+
+    /// System prompt to steer model behavior
+    #[arg(long)]
+    pub system: Option<String>,
+
+    /// Chat template format ("auto", "chatml", "llama3", "deepseek", "gemma", "mistral", "alpaca", "raw", default: "auto")
+    #[arg(long, default_value = "auto")]
+    pub chat_format: String,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -631,6 +639,14 @@ pub struct Cli {
     /// Initial draft tokens to propose per speculative step (dynamically adapted between 2 and 5)
     #[arg(long, default_value_t = 4)]
     pub draft_tokens: usize,
+
+    /// System prompt to steer model behavior
+    #[arg(long)]
+    pub system: Option<String>,
+
+    /// Chat template format ("auto", "chatml", "llama3", "deepseek", "gemma", "mistral", "alpaca", "raw", default: "auto")
+    #[arg(long, default_value = "auto")]
+    pub chat_format: String,
 }
 
 impl Cli {
@@ -704,6 +720,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chat.greedy,
             &chat.speculative,
             chat.draft_tokens,
+            chat.system.as_deref(),
+            &chat.chat_format,
         ),
         Some(Commands::Img(img)) => {
             tracing::info!(
@@ -781,6 +799,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.greedy,
                     &cli.speculative,
                     cli.draft_tokens,
+                    cli.system.as_deref(),
+                    &cli.chat_format,
                 )
             } else {
                 run_server_with_options(
@@ -804,7 +824,11 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
-#[allow(clippy::cast_precision_loss, clippy::collapsible_if)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::collapsible_if,
+    clippy::too_many_arguments
+)]
 fn run_chat_session(
     initial_model: &str,
     backend: BackendArg,
@@ -824,6 +848,8 @@ fn run_chat_session(
     greedy: bool,
     speculative: &str,
     draft_tokens: usize,
+    system: Option<&str>,
+    chat_format: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if threads > 0 {
         let _ = rayon::ThreadPoolBuilder::new()
@@ -891,16 +917,41 @@ fn run_chat_session(
 
     if let Some(p) = prompt {
         println!("Prompt: {p}");
-        let formatted = if tokenizer.token_to_id.contains_key("<|im_start|>") {
-            format!("<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n")
-        } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
-            format!("<start_of_turn>user\n{p}<end_of_turn>\n<start_of_turn>model\n")
-        } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
-            format!(
-                "<|start_header_id|>user<|end_header_id|>\n\n{p}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-            )
-        } else {
+        let formatted = if p.starts_with("<|im_start|>")
+            || p.starts_with("<start_of_turn>")
+            || p.starts_with("<|begin_of_text|>")
+            || p.starts_with("[INST]")
+        {
             p.to_string()
+        } else {
+            let mut messages = Vec::new();
+            if let Some(sys) = system {
+                messages.push(oxide_models::ChatMessage::system(sys));
+            }
+            messages.push(oxide_models::ChatMessage::user(p));
+
+            let format = match chat_format.to_lowercase().as_str() {
+                "chatml" => oxide_models::ChatTemplateFormat::ChatMl,
+                "llama3" => oxide_models::ChatTemplateFormat::Llama3,
+                "gemma" => oxide_models::ChatTemplateFormat::Gemma,
+                "deepseek" => oxide_models::ChatTemplateFormat::DeepSeek,
+                "mistral" => oxide_models::ChatTemplateFormat::Mistral,
+                "alpaca" => oxide_models::ChatTemplateFormat::Alpaca,
+                "raw" => oxide_models::ChatTemplateFormat::RawText,
+                _ => {
+                    if tokenizer.token_to_id.contains_key("<|im_start|>") {
+                        oxide_models::ChatTemplateFormat::ChatMl
+                    } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
+                        oxide_models::ChatTemplateFormat::Gemma
+                    } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
+                        oxide_models::ChatTemplateFormat::Llama3
+                    } else {
+                        oxide_models::ChatTemplateFormat::RawText
+                    }
+                }
+            };
+            let parser = oxide_models::ChatTemplateParser::new(format);
+            parser.render_chat(&messages)
         };
         let mut tokens = tokenizer.encode(&formatted);
         if let Some(bos) = tokenizer.bos_id

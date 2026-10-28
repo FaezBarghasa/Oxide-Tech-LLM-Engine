@@ -166,6 +166,7 @@ pub struct CudaBackend {
     pub d_scratch_ple256: Option<CudaDeviceBuffer>,
     pub host_ple_buffer: Vec<f32>,
     pub host_emb_buffer: Vec<f32>,
+    pub host_logits_buffer: Vec<f32>,
     pub per_layer_embedding_lookup: Option<EmbeddingLookupFn>,
 }
 
@@ -284,6 +285,7 @@ impl CudaBackend {
             d_scratch_ple256: None,
             host_ple_buffer: Vec::new(),
             host_emb_buffer: Vec::new(),
+            host_logits_buffer: Vec::new(),
             per_layer_embedding_lookup: None,
         }
     }
@@ -535,6 +537,70 @@ impl CudaBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn dispatch_gemv_add(
+        d_y: *mut f32,
+        d_w: &CudaDeviceBuffer,
+        d_x: *const f32,
+        d_x_q8_1: *const std::ffi::c_void,
+        m: usize,
+        k: usize,
+        quant_type: u32,
+        stream: driver::cudaStream_t,
+        d_scratch: &mut CudaDeviceBuffer,
+    ) {
+        if d_w.size_bytes() == 0 || m == 0 || k == 0 || d_w.as_raw_ptr().is_null() {
+            return;
+        }
+        unsafe {
+            if quant_type == 1 {
+                driver::launch_cuda_gemv_q4_k_fused_add(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x_q8_1,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else if quant_type == 2 {
+                driver::launch_cuda_gemv_q6_k_fused_add(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x_q8_1,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else if quant_type == 3 || quant_type > 13 {
+                driver::launch_cuda_gemv_q8_0_fused_add(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x_q8_1,
+                    m as i32,
+                    k as i32,
+                    stream,
+                );
+            } else {
+                Self::dispatch_gemv(
+                    d_scratch.as_typed_ptr::<f32>(),
+                    d_w,
+                    d_x,
+                    d_x_q8_1,
+                    m,
+                    k,
+                    quant_type,
+                    stream,
+                );
+                driver::launch_cuda_vector_add(
+                    d_y,
+                    d_scratch.as_typed_ptr::<f32>(),
+                    m as i32,
+                    stream,
+                );
+            }
+        }
+    }
+
     /// Retains strong reference to memory-mapped model file to prevent premature unmapping.
     pub fn set_mmap_handle(&mut self, mmap: std::sync::Arc<memmap2::Mmap>) {
         self.mmap_handle = Some(mmap);
@@ -730,6 +796,7 @@ impl CudaBackend {
             self.d_token_embd = Some(d_emb);
         }
 
+        self.host_logits_buffer.resize(vocab_size, 0.0f32);
         stream.synchronize().map_err(EngineError::BackendError)?;
         Ok(())
     }
@@ -2016,8 +2083,11 @@ impl CudaBackend {
                     ));
                 }
             } else {
-                let mut host_logits = vec![0.0f32; self.vocab_size];
-                let _ = d_logits.copy_to_host_async(&mut host_logits, s);
+                if self.host_logits_buffer.len() != self.vocab_size {
+                    self.host_logits_buffer.resize(self.vocab_size, 0.0f32);
+                }
+                let host_logits = &mut self.host_logits_buffer;
+                let _ = d_logits.copy_to_host_async(host_logits, s);
                 stream.synchronize().map_err(EngineError::BackendError)?;
 
                 let mut best_tok = 1u32;
@@ -2030,7 +2100,7 @@ impl CudaBackend {
                 }
 
                 self.sampler
-                    .sample_token(&mut host_logits, &mut self.sampler_state, 198)
+                    .sample_token(host_logits, &mut self.sampler_state, 198)
                     .unwrap_or(best_tok)
             };
 
@@ -2465,8 +2535,73 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
 
-                        // Output Projection: wo x attn_out -> d_act
-                        if let (Some(d_out), Some(d_act)) =
+                        // Output Projection: wo x attn_out -> d_hid (Fused Residual 1)
+                        let has_post_attn_norm = layer
+                            .d_post_attn_norm
+                            .as_ref()
+                            .is_some_and(|p| p.size_bytes() > 0);
+
+                        if has_post_attn_norm {
+                            if let (Some(d_out), Some(d_act)) =
+                                (&self.d_scratch_attn_out, &mut self.d_scratch_act)
+                            {
+                                let o_m = if layer.o_m > 0 { layer.o_m } else { h };
+                                let o_k = if layer.o_k > 0 {
+                                    layer.o_k
+                                } else {
+                                    cur_num_heads * cur_head_dim
+                                };
+                                if !d_q8_1_ptr.is_null() {
+                                    unsafe {
+                                        driver::launch_cuda_quantize_q8_1(
+                                            d_out.as_typed_ptr::<f32>(),
+                                            d_q8_1_ptr,
+                                            o_k as i32,
+                                            s,
+                                        );
+                                    }
+                                }
+                                unsafe {
+                                    Self::dispatch_gemv(
+                                        d_act.as_typed_ptr::<f32>(),
+                                        &layer.d_wo,
+                                        d_out.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
+                                        o_m,
+                                        o_k,
+                                        layer.o_quant,
+                                        s,
+                                    );
+                                }
+                                check_cuda("wo_proj", layer_idx)?;
+
+                                if let Some(d_post_attn) = &layer.d_post_attn_norm {
+                                    unsafe {
+                                        driver::launch_cuda_rmsnorm(
+                                            d_act.as_typed_ptr::<f32>(),
+                                            d_act.as_typed_ptr::<f32>(),
+                                            d_post_attn.as_typed_ptr::<f32>(),
+                                            1,
+                                            h as i32,
+                                            self.rms_norm_eps,
+                                            weight_offset,
+                                            s,
+                                        );
+                                    }
+                                    check_cuda("post_attn_norm", layer_idx)?;
+                                }
+
+                                unsafe {
+                                    driver::launch_cuda_vector_add(
+                                        d_hid.as_typed_ptr::<f32>(),
+                                        d_act.as_typed_ptr::<f32>(),
+                                        h as i32,
+                                        s,
+                                    );
+                                }
+                                check_cuda("residual_1", layer_idx)?;
+                            }
+                        } else if let (Some(d_out), Some(d_act)) =
                             (&self.d_scratch_attn_out, &mut self.d_scratch_act)
                         {
                             let o_m = if layer.o_m > 0 { layer.o_m } else { h };
@@ -2486,8 +2621,8 @@ impl HardwareBackend for CudaBackend {
                                 }
                             }
                             unsafe {
-                                Self::dispatch_gemv(
-                                    d_act.as_typed_ptr::<f32>(),
+                                Self::dispatch_gemv_add(
+                                    d_hid.as_typed_ptr::<f32>(),
                                     &layer.d_wo,
                                     d_out.as_typed_ptr::<f32>(),
                                     d_q8_1_ptr,
@@ -2495,43 +2630,10 @@ impl HardwareBackend for CudaBackend {
                                     o_k,
                                     layer.o_quant,
                                     s,
+                                    d_act,
                                 );
                             }
-                            check_cuda("wo_proj", layer_idx)?;
-                        }
-
-                        // Post-attention norm (Gemma 2 / Gemma 4 / Nemotron)
-                        if let (Some(d_post_attn), Some(d_act)) =
-                            (&layer.d_post_attn_norm, &mut self.d_scratch_act)
-                        {
-                            if d_post_attn.size_bytes() > 0 {
-                                unsafe {
-                                    driver::launch_cuda_rmsnorm(
-                                        d_act.as_typed_ptr::<f32>(),
-                                        d_act.as_typed_ptr::<f32>(),
-                                        d_post_attn.as_typed_ptr::<f32>(),
-                                        1,
-                                        h as i32,
-                                        self.rms_norm_eps,
-                                        weight_offset,
-                                        s,
-                                    );
-                                }
-                                check_cuda("post_attn_norm", layer_idx)?;
-                            }
-                        }
-
-                        // Residual 1: hidden += attn_out
-                        if let Some(d_act) = &self.d_scratch_act {
-                            unsafe {
-                                driver::launch_cuda_vector_add(
-                                    d_hid.as_typed_ptr::<f32>(),
-                                    d_act.as_typed_ptr::<f32>(),
-                                    h as i32,
-                                    s,
-                                );
-                            }
-                            check_cuda("residual_1", layer_idx)?;
+                            check_cuda("wo_proj_fused_residual", layer_idx)?;
                         }
                     }
 
@@ -2623,13 +2725,62 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
 
-                        // FFN Down Projection: w2 x gate -> d_act
-                        if let (Some(d_gate), Some(d_act)) =
+                        // FFN Down Projection: w2 x gate -> d_hid (Fused Residual 2)
+                        let has_post_ffn_norm = layer
+                            .d_post_ffn_norm
+                            .as_ref()
+                            .is_some_and(|p| p.size_bytes() > 0);
+
+                        if has_post_ffn_norm {
+                            if let (Some(d_gate), Some(d_act)) =
+                                (&self.d_scratch_gate, &mut self.d_scratch_act)
+                            {
+                                unsafe {
+                                    Self::dispatch_gemv(
+                                        d_act.as_typed_ptr::<f32>(),
+                                        &layer.d_w2,
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
+                                        h,
+                                        layer.inter_m,
+                                        layer.down_quant,
+                                        s,
+                                    );
+                                }
+                                check_cuda("ffn_down", layer_idx)?;
+
+                                if let Some(d_post_ffn) = &layer.d_post_ffn_norm {
+                                    unsafe {
+                                        driver::launch_cuda_rmsnorm(
+                                            d_act.as_typed_ptr::<f32>(),
+                                            d_act.as_typed_ptr::<f32>(),
+                                            d_post_ffn.as_typed_ptr::<f32>(),
+                                            1,
+                                            h as i32,
+                                            self.rms_norm_eps,
+                                            weight_offset,
+                                            s,
+                                        );
+                                    }
+                                    check_cuda("post_ffn_norm", layer_idx)?;
+                                }
+
+                                unsafe {
+                                    driver::launch_cuda_vector_add(
+                                        d_hid.as_typed_ptr::<f32>(),
+                                        d_act.as_typed_ptr::<f32>(),
+                                        h as i32,
+                                        s,
+                                    );
+                                }
+                                check_cuda("residual_2", layer_idx)?;
+                            }
+                        } else if let (Some(d_gate), Some(d_act)) =
                             (&self.d_scratch_gate, &mut self.d_scratch_act)
                         {
                             unsafe {
-                                Self::dispatch_gemv(
-                                    d_act.as_typed_ptr::<f32>(),
+                                Self::dispatch_gemv_add(
+                                    d_hid.as_typed_ptr::<f32>(),
                                     &layer.d_w2,
                                     d_gate.as_typed_ptr::<f32>(),
                                     d_q8_1_ptr,
@@ -2637,43 +2788,10 @@ impl HardwareBackend for CudaBackend {
                                     layer.inter_m,
                                     layer.down_quant,
                                     s,
+                                    d_act,
                                 );
                             }
-                            check_cuda("ffn_down", layer_idx)?;
-                        }
-
-                        // Post-FFN norm (Gemma 2 / Gemma 4 / Nemotron)
-                        if let (Some(d_post_ffn), Some(d_act)) =
-                            (&layer.d_post_ffn_norm, &mut self.d_scratch_act)
-                        {
-                            if d_post_ffn.size_bytes() > 0 {
-                                unsafe {
-                                    driver::launch_cuda_rmsnorm(
-                                        d_act.as_typed_ptr::<f32>(),
-                                        d_act.as_typed_ptr::<f32>(),
-                                        d_post_ffn.as_typed_ptr::<f32>(),
-                                        1,
-                                        h as i32,
-                                        self.rms_norm_eps,
-                                        weight_offset,
-                                        s,
-                                    );
-                                }
-                                check_cuda("post_ffn_norm", layer_idx)?;
-                            }
-                        }
-
-                        // Residual 2: hidden += ffn_out
-                        if let Some(d_act) = &self.d_scratch_act {
-                            unsafe {
-                                driver::launch_cuda_vector_add(
-                                    d_hid.as_typed_ptr::<f32>(),
-                                    d_act.as_typed_ptr::<f32>(),
-                                    h as i32,
-                                    s,
-                                );
-                            }
-                            check_cuda("residual_2", layer_idx)?;
+                            check_cuda("ffn_down_fused_residual", layer_idx)?;
                         }
 
                         // Layer scalar output scale (Gemma 4 / Nemotron)
@@ -2795,8 +2913,11 @@ impl HardwareBackend for CudaBackend {
                 let selected_token = if let Some(tok) = selected_token {
                     tok
                 } else {
-                    let mut host_logits = vec![0.0f32; self.vocab_size];
-                    let _ = d_logits.copy_to_host_async(&mut host_logits, s);
+                    if self.host_logits_buffer.len() != self.vocab_size {
+                        self.host_logits_buffer.resize(self.vocab_size, 0.0f32);
+                    }
+                    let host_logits = &mut self.host_logits_buffer;
+                    let _ = d_logits.copy_to_host_async(host_logits, s);
                     if let Err(e) = stream.synchronize() {
                         tracing::error!("stream.synchronize failed after LM Head: {}", e);
                     }
@@ -2813,7 +2934,7 @@ impl HardwareBackend for CudaBackend {
                     // Sample token using AcademicSamplerEngine (temperature, top-p, min-p, DRY repetition penalty)
                     let tok = self
                         .sampler
-                        .sample_token(&mut host_logits, &mut self.sampler_state, 198)
+                        .sample_token(host_logits, &mut self.sampler_state, 198)
                         .unwrap_or(best_tok);
 
                     tracing::debug!(

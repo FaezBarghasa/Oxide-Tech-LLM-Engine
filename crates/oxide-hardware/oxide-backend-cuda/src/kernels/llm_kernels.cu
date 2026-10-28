@@ -690,7 +690,7 @@ __global__ void gemv_ptq1_0_cuda_kernel(
  * Evaluates BATCH_N token vectors simultaneously while reading weights once.
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
-template <int BATCH_N>
+template <int BATCH_N, int ADD_TO_Y = 0>
 __global__ void mmvq_q8_0_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
@@ -734,7 +734,11 @@ __global__ void mmvq_q8_0_cuda_kernel(
         }
 
         if (lane_id == 0) {
-            y[col * m + row] = thread_dot[col];
+            if (ADD_TO_Y) {
+                y[col * m + row] += thread_dot[col];
+            } else {
+                y[col * m + row] = thread_dot[col];
+            }
         }
     }
 }
@@ -744,7 +748,7 @@ __global__ void mmvq_q8_0_cuda_kernel(
  * Evaluates BATCH_N token vectors simultaneously while reading weights once.
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
-template <int BATCH_N>
+template <int BATCH_N, int ADD_TO_Y = 0>
 __global__ void mmvq_q6_k_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
@@ -847,7 +851,11 @@ __global__ void mmvq_q6_k_cuda_kernel(
         }
 
         if (lane_id == 0) {
-            y[col * m + row] = thread_dot[col];
+            if (ADD_TO_Y) {
+                y[col * m + row] += thread_dot[col];
+            } else {
+                y[col * m + row] = thread_dot[col];
+            }
         }
     }
 }
@@ -913,7 +921,7 @@ __device__ __forceinline__ void get_scale_min_k4_from_regs(
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  * 128-byte coalesced weight loads + hardware INT8 dot products.
  */
-template <int BATCH_N>
+template <int BATCH_N, int ADD_TO_Y = 0>
 __global__ void mmvq_q4_k_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
@@ -992,7 +1000,11 @@ __global__ void mmvq_q4_k_cuda_kernel(
         }
 
         if (lane_id == 0) {
-            y[col * m + row] = thread_dot[col];
+            if (ADD_TO_Y) {
+                y[col * m + row] += thread_dot[col];
+            } else {
+                y[col * m + row] = thread_dot[col];
+            }
         }
     }
 }
@@ -1837,6 +1849,21 @@ int launch_cuda_gemv_q8_0(
     return launch_cuda_mmvq_q8_0(y, raw_blocks, x_q8_1, m, k, 1, stream);
 }
 
+int launch_cuda_gemv_q8_0_fused_add(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0) return 0;
+    int grid, block;
+    get_gemv_launch_dims(m, grid, block);
+    mmvq_q8_0_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
+    return cudaGetLastError();
+}
+
 int launch_cuda_mmvq_q6_k(
     float* y,
     const void* raw_blocks,
@@ -1877,6 +1904,21 @@ int launch_cuda_gemv_q6_k(
     return launch_cuda_mmvq_q6_k(y, raw_blocks, x_q8_1, m, k, 1, stream);
 }
 
+int launch_cuda_gemv_q6_k_fused_add(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0) return 0;
+    int grid, block;
+    get_gemv_launch_dims(m, grid, block);
+    mmvq_q6_k_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
+    return cudaGetLastError();
+}
+
 int launch_cuda_mmvq_q4_k(
     float* y,
     const void* raw_blocks,
@@ -1915,6 +1957,21 @@ int launch_cuda_gemv_q4_k(
     cudaStream_t stream
 ) {
     return launch_cuda_mmvq_q4_k(y, raw_blocks, x_q8_1, m, k, 1, stream);
+}
+
+int launch_cuda_gemv_q4_k_fused_add(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0) return 0;
+    int grid, block;
+    get_gemv_launch_dims(m, grid, block);
+    mmvq_q4_k_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, 1);
+    return cudaGetLastError();
 }
 
 int launch_cuda_gemv_ptq1_0(
@@ -2384,10 +2441,13 @@ void init_cuda_kernel_attributes() {
     cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
     cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<32>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<1, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<32>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<1, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<32>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<1, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_rmsnorm_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_swiglu_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
 }
