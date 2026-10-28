@@ -1022,6 +1022,10 @@ fn run_chat_session(
                         let mut prev_t = cur_token;
                         for &tok in &verified_tokens {
                             ens.record_token(prev_t, tok);
+                            if all_tokens.len() >= 2 {
+                                let p0 = all_tokens[all_tokens.len() - 2];
+                                ens.record_trigram(p0, prev_t, tok);
+                            }
                             prev_t = tok;
                             cur_token = tok;
                             gen_count += 1;
@@ -1073,6 +1077,10 @@ fn run_chat_session(
             all_tokens.push(cur_token);
             if let Some(ref mut ens) = ensemble {
                 ens.record_token(prev_token, cur_token);
+                if all_tokens.len() >= 3 {
+                    let p0 = all_tokens[all_tokens.len() - 3];
+                    ens.record_trigram(p0, prev_token, cur_token);
+                }
             }
             if stop_tokens.contains(&cur_token)
                 || Some(cur_token) == tokenizer.eos_id

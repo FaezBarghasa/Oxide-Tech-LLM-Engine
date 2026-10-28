@@ -469,8 +469,10 @@ pub struct DrafterEnsemble {
     pub ngram_min: usize,
     pub ngram_max: usize,
     pub adaptive: AdaptiveSpeculator,
-    /// Fast bigram/trigram transition graph: from_tok -> { to_tok -> count }
+    /// Fast unigram transition graph: from_tok -> { to_tok -> count }
     pub transitions: HashMap<u32, HashMap<u32, u32>>,
+    /// Fast bigram transition graph: (from_tok0, from_tok1) -> { to_tok -> count }
+    pub bigram_transitions: HashMap<(u32, u32), HashMap<u32, u32>>,
 }
 
 impl DrafterEnsemble {
@@ -481,6 +483,7 @@ impl DrafterEnsemble {
             ngram_max: 4,
             adaptive: AdaptiveSpeculator::new(initial_k, min_k, max_k, 6),
             transitions: HashMap::new(),
+            bigram_transitions: HashMap::new(),
         }
     }
 
@@ -490,8 +493,17 @@ impl DrafterEnsemble {
         *entry.entry(next).or_insert(0) += 1;
     }
 
-    /// Ingests a slice of tokens to warm up the transition graph from prompt.
+    /// Ingests a trigram transition into the online Markov graph.
+    pub fn record_trigram(&mut self, p0: u32, p1: u32, next: u32) {
+        let entry = self.bigram_transitions.entry((p0, p1)).or_default();
+        *entry.entry(next).or_insert(0) += 1;
+    }
+
+    /// Ingests a slice of tokens to warm up both unigram and bigram transition graphs from prompt.
     pub fn warm_up(&mut self, tokens: &[u32]) {
+        for window in tokens.windows(3) {
+            self.record_trigram(window[0], window[1], window[2]);
+        }
         for window in tokens.windows(2) {
             self.record_token(window[0], window[1]);
         }
@@ -508,27 +520,50 @@ impl DrafterEnsemble {
             return (Vec::new(), "none");
         }
 
-        // Tier 1: Try N-Gram Prompt Lookup first
+        // Tier 1: Try N-Gram Prompt Lookup first (exact multi-token match in context)
         let ngram_draft = lookup_engine.draft_ngram_lookup(context, k);
         if !ngram_draft.is_empty() {
             return (ngram_draft, "ngram_prompt_lookup");
         }
 
-        // Tier 2: Markov continuation fallback
+        // Tier 2: Higher-order Markov Bigram/Trigram continuation fallback
         let mut markov_draft = Vec::with_capacity(k);
-        let mut cur = *context.last().unwrap();
+        let n = context.len();
+        let mut p0 = if n >= 2 { Some(context[n - 2]) } else { None };
+        let mut p1 = context[n - 1];
+
         for _ in 0..k {
-            if let Some(next_counts) = self.transitions.get(&cur) {
-                // Find most frequent next token with at least 2 occurrences
-                if let Some((&best_next, &count)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
-                    if count >= 2 && !markov_draft.contains(&best_next) {
-                        markov_draft.push(best_next);
-                        cur = best_next;
-                        continue;
+            let mut next_cand = None;
+
+            // 2a. Check high-confidence bigram transition (p0, p1) -> next
+            if let Some(prev0) = p0 {
+                if let Some(next_counts) = self.bigram_transitions.get(&(prev0, p1)) {
+                    if let Some((&best_next, _)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
+                        if !markov_draft.contains(&best_next) {
+                            next_cand = Some(best_next);
+                        }
                     }
                 }
             }
-            break;
+
+            // 2b. Fallback to unigram transition p1 -> next
+            if next_cand.is_none() {
+                if let Some(next_counts) = self.transitions.get(&p1) {
+                    if let Some((&best_next, _)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
+                        if !markov_draft.contains(&best_next) {
+                            next_cand = Some(best_next);
+                        }
+                    }
+                }
+            }
+
+            if let Some(cand) = next_cand {
+                markov_draft.push(cand);
+                p0 = Some(p1);
+                p1 = cand;
+            } else {
+                break;
+            }
         }
 
         if markov_draft.is_empty() {
