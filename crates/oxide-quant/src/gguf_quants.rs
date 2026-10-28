@@ -85,7 +85,7 @@ impl BlockQ4_K {
         let dmin = self.dmin.to_f32();
         let mut is = 0;
         for chunk in 0..4 {
-            let (sc1, m1) = get_scale_min_k4(is + 0, &self.scales);
+            let (sc1, m1) = get_scale_min_k4(is, &self.scales);
             let d1 = d * sc1;
             let min1 = dmin * m1;
 
@@ -166,7 +166,7 @@ impl BlockQ5_K {
         let mut u2 = 2u8;
 
         for chunk in 0..4 {
-            let (sc1, m1) = get_scale_min_k4(is + 0, &self.scales);
+            let (sc1, m1) = get_scale_min_k4(is, &self.scales);
             let d1 = d * sc1;
             let min1 = dmin * m1;
 

@@ -120,7 +120,7 @@ impl SpeculativeDecoderEngine {
         for k in (self.config.ngram_min..=self.config.ngram_max.min(n)).rev() {
             let pattern = &context[n - k..n];
             let search_limit = n - k;
-            for i in 0..search_limit {
+            for i in (0..search_limit).rev() {
                 if context[i..i + k] == *pattern {
                     let draft_start = i + k;
                     let draft_end = (draft_start + max_draft).min(n);

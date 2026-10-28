@@ -120,8 +120,7 @@ impl GgufTokenizer {
             if let Some(tok_str) = self.id_to_token.get(tok_idx) {
                 // Handle SentencePiece (' ', U+2581) and GPT-2 / Qwen byte BPE ('Ġ' -> ' ', 'Ċ' -> '\n')
                 let cleaned = tok_str
-                    .replace('\u{2581}', " ")
-                    .replace('\u{0120}', " ")
+                    .replace(['\u{2581}', '\u{0120}'], " ")
                     .replace('\u{010A}', "\n")
                     .replace('\u{0109}', "\t")
                     .replace('\u{010D}', "\r");
@@ -148,8 +147,7 @@ impl GgufTokenizer {
     pub fn decode_token(&self, token_id: u32) -> String {
         if let Some(tok_str) = self.id_to_token.get(token_id as usize) {
             let cleaned = tok_str
-                .replace('\u{2581}', " ")
-                .replace('\u{0120}', " ")
+                .replace(['\u{2581}', '\u{0120}'], " ")
                 .replace('\u{010A}', "\n")
                 .replace('\u{0109}', "\t")
                 .replace('\u{010D}', "\r");

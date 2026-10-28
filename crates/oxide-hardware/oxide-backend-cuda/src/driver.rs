@@ -71,6 +71,18 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_fused_rmsnorm_q8_1(
+        output: *mut f32,
+        y_q8_1: *mut std::ffi::c_void,
+        input: *const f32,
+        weight: *const f32,
+        num_tokens: i32,
+        hidden_dim: i32,
+        eps: f32,
+        weight_offset: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_rope(
         q: *mut f32,
         k: *mut f32,
@@ -109,10 +121,17 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_quantize_q8_1(
+        x: *const f32,
+        y_q8_1: *mut std::ffi::c_void,
+        n: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_gemv_q8_0(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
-        x: *const f32,
+        x: *const std::ffi::c_void,
         m: i32,
         k: i32,
         stream: cudaStream_t,
@@ -121,7 +140,7 @@ unsafe extern "C" {
     pub fn launch_cuda_gemv_q6_k(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
-        x: *const f32,
+        x: *const std::ffi::c_void,
         m: i32,
         k: i32,
         stream: cudaStream_t,
@@ -130,7 +149,7 @@ unsafe extern "C" {
     pub fn launch_cuda_gemv_q4_k(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
-        x: *const f32,
+        x: *const std::ffi::c_void,
         m: i32,
         k: i32,
         stream: cudaStream_t,
@@ -210,9 +229,19 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_fused_swiglu_q8_1(
+        y_q8_1: *mut std::ffi::c_void,
+        out_f32: *mut f32,
+        gate: *const f32,
+        up: *const f32,
+        n: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_rope_single(
         q: *mut f32,
         k: *mut f32,
+        k_out: *mut f32,
         pos: i32,
         num_heads: i32,
         num_kv_heads: i32,
@@ -230,6 +259,7 @@ unsafe extern "C" {
         num_kv_heads: i32,
         head_dim: i32,
         num_kv_tokens: i32,
+        start_token: i32,
         sm_scale: f32,
         stream: cudaStream_t,
     ) -> i32;
@@ -267,6 +297,7 @@ unsafe extern "C" {
     ) -> i32;
 
     pub fn fwht_kernel_128(d_out: *mut f32, d_in: *const f32, num_blocks: i32);
+    pub fn init_cuda_kernel_attributes();
 }
 
 /// Safe wrapper around an allocated physical GPU buffer on the CUDA device.

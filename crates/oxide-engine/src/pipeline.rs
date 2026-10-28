@@ -443,6 +443,13 @@ impl SpecializedPipeline {
             match norm_backend.as_str() {
                 "cuda" => {
                     let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+                    let rms_eps = f32::from_bits(model.config.rms_norm_eps);
+                    backend.configure_hyperparameters(
+                        rms_eps,
+                        model.config.is_qwen,
+                        model.config.sliding_window,
+                        model.config.max_seq_len.min(4096),
+                    );
                     // Host-side embedding lookup via mmap avoids allocating gigabytes of VRAM for token_embd.
                     backend.configure_model(
                         model.config.hidden_dim,
@@ -517,7 +524,7 @@ impl SpecializedPipeline {
                             move |tok_idx, out: &mut [f32]| {
                                 ple.extract_row(tok_idx, &mut out[..ple_len]);
                                 let scale = (256.0f32).sqrt();
-                                for x in out[..ple_len].iter_mut() {
+                                for x in &mut out[..ple_len] {
                                     *x *= scale;
                                 }
                             },
@@ -687,6 +694,13 @@ impl SpecializedPipeline {
         match backend_name.to_ascii_lowercase().as_str() {
             "cuda" => {
                 let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
+                let rms_eps = f32::from_bits(model.config.rms_norm_eps);
+                backend.configure_hyperparameters(
+                    rms_eps,
+                    model.config.is_qwen,
+                    model.config.sliding_window,
+                    model.config.max_seq_len.min(4096),
+                );
                 let _ = backend.configure_model(
                     model.config.hidden_dim,
                     model.config.vocab_size,
@@ -758,7 +772,7 @@ impl SpecializedPipeline {
                         move |tok_idx, out: &mut [f32]| {
                             ple.extract_row(tok_idx, &mut out[..ple_len]);
                             let scale = (256.0f32).sqrt();
-                            for x in out[..ple_len].iter_mut() {
+                            for x in &mut out[..ple_len] {
                                 *x *= scale;
                             }
                         },

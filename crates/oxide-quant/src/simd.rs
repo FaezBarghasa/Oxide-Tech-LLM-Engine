@@ -544,7 +544,7 @@ fn dot_q4_k_portable(
     let mut sum = 0.0f32;
     let mut is = 0;
     for chunk in 0..4 {
-        let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is + 0, scales);
+        let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is, scales);
         let d1 = d * sc1;
         let min1 = dmin * m1;
 
@@ -815,7 +815,7 @@ unsafe fn dot_q4_k_avx2(
         let mut is = 0;
 
         for chunk in 0..4 {
-            let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is + 0, scales);
+            let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is, scales);
             let d1_vec = _mm256_set1_ps(d * sc1);
             let min1_vec = _mm256_set1_ps(dmin * m1);
 
@@ -881,17 +881,17 @@ fn dot_q6_k_portable(
             let ql0 = ql[ql_offset + l];
             let ql32 = ql[ql_offset + l + 32];
 
-            let q1 = ((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) as i8 - 32;
+            let q1 = ((ql0 & 0x0F) | ((qh_byte & 3) << 4)) as i8 - 32;
             let q2 = ((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) as i8 - 32;
             let q3 = ((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) as i8 - 32;
             let q4 = ((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) as i8 - 32;
 
-            let sc0 = scales[sc_offset + is + 0] as f32;
+            let sc0 = scales[sc_offset + is] as f32;
             let sc2 = scales[sc_offset + is + 2] as f32;
             let sc4 = scales[sc_offset + is + 4] as f32;
             let sc6 = scales[sc_offset + is + 6] as f32;
 
-            sum += sc0 * (q1 as f32) * act[y_offset + l + 0]
+            sum += sc0 * (q1 as f32) * act[y_offset + l]
                 + sc2 * (q2 as f32) * act[y_offset + l + 32]
                 + sc4 * (q3 as f32) * act[y_offset + l + 64]
                 + sc6 * (q4 as f32) * act[y_offset + l + 96];

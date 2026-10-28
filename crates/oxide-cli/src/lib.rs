@@ -413,6 +413,14 @@ pub struct ChatArgs {
     /// Force greedy decoding (equivalent to --temp 0.0)
     #[arg(long)]
     pub greedy: bool,
+
+    /// Speculative decoding strategy ("ngram", "prompt-lookup", "none", default: "none")
+    #[arg(long, default_value = "none")]
+    pub speculative: String,
+
+    /// Maximum draft tokens to propose per speculative step
+    #[arg(long, default_value_t = 4)]
+    pub draft_tokens: usize,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -591,6 +599,14 @@ pub struct Cli {
     /// Force greedy decoding (equivalent to --temp 0.0)
     #[arg(long)]
     pub greedy: bool,
+
+    /// Speculative decoding strategy ("ngram", "prompt-lookup", "none", default: "none")
+    #[arg(long, default_value = "none")]
+    pub speculative: String,
+
+    /// Maximum draft tokens to propose per speculative step
+    #[arg(long, default_value_t = 4)]
+    pub draft_tokens: usize,
 }
 
 impl Cli {
@@ -659,6 +675,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chat.top_k,
             chat.seed,
             chat.greedy,
+            &chat.speculative,
+            chat.draft_tokens,
         ),
         Some(Commands::Img(img)) => {
             tracing::info!(
@@ -731,6 +749,8 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.top_k,
                     cli.seed,
                     cli.greedy,
+                    &cli.speculative,
+                    cli.draft_tokens,
                 )
             } else {
                 run_server_with_options(
@@ -754,6 +774,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
+#[allow(clippy::cast_precision_loss, clippy::collapsible_if)]
 fn run_chat_session(
     initial_model: &str,
     backend: BackendArg,
@@ -768,6 +789,8 @@ fn run_chat_session(
     top_k: usize,
     seed: u64,
     greedy: bool,
+    speculative: &str,
+    draft_tokens: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if threads > 0 {
         let _ = rayon::ThreadPoolBuilder::new()
@@ -838,10 +861,10 @@ fn run_chat_session(
             p.to_string()
         };
         let mut tokens = tokenizer.encode(&formatted);
-        if let Some(bos) = tokenizer.bos_id {
-            if tokens.first().copied() != Some(bos) {
-                tokens.insert(0, bos);
-            }
+        if let Some(bos) = tokenizer.bos_id
+            && tokens.first().copied() != Some(bos)
+        {
+            tokens.insert(0, bos);
         }
         let prompt_tokens = if tokens.is_empty() { vec![1] } else { tokens };
 
@@ -874,11 +897,74 @@ fn run_chat_session(
         let _ = std::io::Write::flush(&mut std::io::stdout());
         gen_count += 1;
 
-        for _ in 1..max_tokens {
+        let mut all_tokens = prompt_tokens.clone();
+        all_tokens.push(cur_token);
+
+        let is_speculative = speculative == "ngram" || speculative == "prompt-lookup";
+        let spec_engine = if is_speculative {
+            Some(oxide_engine::SpeculativeDecoderEngine::new(
+                oxide_engine::SpeculativeConfig {
+                    strategy: oxide_engine::SpeculativeStrategy::NGramPromptLookup,
+                    max_draft_tokens: draft_tokens,
+                    ngram_min: 2,
+                    ngram_max: 4,
+                    ..Default::default()
+                },
+            ))
+        } else {
+            None
+        };
+
+        let mut spec_drafted_count = 0usize;
+        let mut spec_accepted_count = 0usize;
+
+        while gen_count < max_tokens {
+            if let Some(ref spec) = spec_engine {
+                let draft = spec.draft_ngram_lookup(&all_tokens, draft_tokens);
+                if !draft.is_empty() {
+                    spec_drafted_count += draft.len();
+                    let mut accepted_in_draft = 0usize;
+                    for &expected_tok in &draft {
+                        let cmd = StepCommand::new(1, cur_token, 0, false);
+                        let step_res = pipeline.step(&cmd)?;
+                        cur_token = step_res.sampled_token;
+                        gen_count += 1;
+                        all_tokens.push(cur_token);
+                        if stop_tokens.contains(&cur_token)
+                            || Some(cur_token) == tokenizer.eos_id
+                            || step_res.is_terminal
+                        {
+                            break;
+                        }
+                        let text = tokenizer.decode_token(cur_token);
+                        if text.contains("<|im_end|>")
+                            || text.contains("<end_of_turn>")
+                            || text.contains("<|eot_id|>")
+                        {
+                            break;
+                        }
+                        print!("{text}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+
+                        if cur_token == expected_tok {
+                            accepted_in_draft += 1;
+                        } else {
+                            break;
+                        }
+                        if gen_count >= max_tokens {
+                            break;
+                        }
+                    }
+                    spec_accepted_count += accepted_in_draft;
+                    continue;
+                }
+            }
+
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
             gen_count += 1;
             cur_token = step_res.sampled_token;
+            all_tokens.push(cur_token);
             if stop_tokens.contains(&cur_token)
                 || Some(cur_token) == tokenizer.eos_id
                 || step_res.is_terminal
@@ -918,6 +1004,18 @@ fn run_chat_session(
             } else {
                 0.0
             };
+            let spec_info = if is_speculative {
+                let acc_pct = if spec_drafted_count > 0 {
+                    (spec_accepted_count as f64 / spec_drafted_count as f64) * 100.0
+                } else {
+                    0.0
+                };
+                format!(
+                    "\nSpeculative Mode : NGram Prompt-Lookup (Drafted: {spec_drafted_count}, Accepted: {spec_accepted_count}, Acceptance: {acc_pct:.1}%)"
+                )
+            } else {
+                String::new()
+            };
             println!(
                 "--------------------------------------------------\n\
                  [Benchmark Metrics]\n\
@@ -925,7 +1023,7 @@ fn run_chat_session(
                  Generated Tokens : {gen_count}\n\
                  TTFT             : {first_tok_time:.2?} ({prefill_tps:.2} tok/s)\n\
                  Decode Speed     : {decode_tps:.2} tokens/sec ({decode_duration:.2?})\n\
-                 Overall Speed    : {total_tps:.2} tokens/sec ({elapsed:.2?})\n\
+                 Overall Speed    : {total_tps:.2} tokens/sec ({elapsed:.2?}){spec_info}\n\
                  --------------------------------------------------"
             );
         }
@@ -1027,10 +1125,10 @@ fn run_chat_session(
             trimmed.to_string()
         };
         let mut prompt_tokens = tokenizer.encode(&formatted);
-        if let Some(bos) = tokenizer.bos_id {
-            if prompt_tokens.first().copied() != Some(bos) {
-                prompt_tokens.insert(0, bos);
-            }
+        if let Some(bos) = tokenizer.bos_id
+            && prompt_tokens.first().copied() != Some(bos)
+        {
+            prompt_tokens.insert(0, bos);
         }
         let mut cur_token = 1u32;
         for &tok in &prompt_tokens {

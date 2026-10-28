@@ -4,6 +4,46 @@
 
 extern "C" {
 
+struct __attribute__((packed)) BlockQ8_1_Gpu {
+    half2 ds;       // ds.x = d (scale = amax / 127.0f), ds.y = sum
+    int8_t qs[32];  // 32 quantized signed 8-bit ints
+};
+
+/**
+ * Custom CUDA Kernel: Dynamic Activation Quantization to Q8_1.
+ * Symmetric per-32 group quantization with half2 (scale, sum) header.
+ * Consumed by MMVQ INT8 Tensor/ALU kernels with hardware __dp4a.
+ */
+__global__ void quantize_f32_to_q8_1_cuda_kernel(
+    const float* __restrict__ x,
+    BlockQ8_1_Gpu* __restrict__ y,
+    int n
+) {
+    int block_idx = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+    int num_blocks = n / 32;
+    if (block_idx >= num_blocks) return;
+    int lane_id = threadIdx.x % 32;
+
+    float val = x[block_idx * 32 + lane_id];
+    float amax = fabsf(val);
+    float sum = val;
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset));
+        sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset);
+    }
+
+    float d = amax / 127.0f;
+    float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+    int8_t q = (int8_t)roundf(val * id);
+    y[block_idx].qs[lane_id] = q;
+
+    if (lane_id == 0) {
+        y[block_idx].ds = make_half2(__float2half(d), __float2half(sum));
+    }
+}
+
 /**
  * Custom CUDA Kernel: RMSNorm (Root Mean Square Normalization)
  * Standard normalization across hidden dimension (e.g. 4096 / 8192) in Llama/Mistral/Qwen.
@@ -63,6 +103,96 @@ __global__ void rms_norm_f32_kernel(
     for (int i = tid; i < hidden_dim; i += blockDim.x) {
         float w = weight != nullptr ? (weight[i] + weight_offset) : 1.0f;
         out_row[i] = in_row[i] * inv_rms * w;
+    }
+}
+
+/**
+ * Custom CUDA Kernel: Fused RMSNorm + Dynamic Q8_1 Activation Quantization.
+ * Computes root-mean-square normalization and directly emits quantized BlockQ8_1_Gpu
+ * activations with half2 (scale, sum) headers, eliminating separate quantization kernel launches
+ * and avoiding memory round-tripping of float activations.
+ */
+__global__ void fused_rmsnorm_q8_1_cuda_kernel(
+    float* __restrict__ output,
+    BlockQ8_1_Gpu* __restrict__ y_q8_1,
+    const float* __restrict__ input,
+    const float* __restrict__ weight,
+    int hidden_dim,
+    float eps,
+    float weight_offset
+) {
+    int tid = threadIdx.x;
+    int bid = blockIdx.x;
+
+    const float* in_row = input + bid * hidden_dim;
+    float* out_row = output ? (output + bid * hidden_dim) : nullptr;
+    BlockQ8_1_Gpu* out_q8_1 = y_q8_1 ? (y_q8_1 + bid * (hidden_dim / 32)) : nullptr;
+
+    // 1. Compute sum of squares with grid-stride loop
+    float sum_sq = 0.0f;
+    for (int i = tid; i < hidden_dim; i += blockDim.x) {
+        float val = in_row[i];
+        sum_sq += val * val;
+    }
+
+    // Warp reduction using shuffle down
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
+    }
+
+    // Shared memory for block-level reduction
+    __shared__ float s_mean;
+    __shared__ float warp_sums[32];
+
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+
+    if (lane_id == 0) {
+        warp_sums[warp_id] = sum_sq;
+    }
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float b_sum = (lane_id < (blockDim.x / 32)) ? warp_sums[lane_id] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            b_sum += __shfl_down_sync(0xFFFFFFFF, b_sum, offset);
+        }
+        if (lane_id == 0) {
+            s_mean = rsqrtf((b_sum / (float)hidden_dim) + eps);
+        }
+    }
+    __syncthreads();
+
+    float inv_rms = s_mean;
+
+    // 2. Apply scale and weights, and immediately quantize each 32-element warp block
+    for (int i = tid; i < hidden_dim; i += blockDim.x) {
+        float w = weight != nullptr ? (weight[i] + weight_offset) : 1.0f;
+        float norm_val = in_row[i] * inv_rms * w;
+        if (out_row != nullptr) {
+            out_row[i] = norm_val;
+        }
+
+        if (out_q8_1 != nullptr) {
+            int block_32_idx = i / 32;
+            float amax = fabsf(norm_val);
+            float sum = norm_val;
+
+            #pragma unroll
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset));
+                sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset);
+            }
+
+            float d = amax / 127.0f;
+            float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+            int8_t q = (int8_t)roundf(norm_val * id);
+            out_q8_1[block_32_idx].qs[lane_id] = q;
+
+            if (lane_id == 0) {
+                out_q8_1[block_32_idx].ds = make_half2(__float2half(d), __float2half(sum));
+            }
+        }
     }
 }
 
@@ -558,13 +688,13 @@ __global__ void gemv_ptq1_0_cuda_kernel(
 }
 
 /**
- * Custom CUDA Kernel: Quantized Q8_0 Matrix-Vector GEMV (34-byte Interleaved Block x FP32 Activations).
+ * Custom CUDA Kernel: Quantized Q8_0 Matrix-Vector GEMV (34-byte Block x Q8_1 Activations).
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
 __global__ void gemv_q8_0_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
-    const float* __restrict__ x,
+    const void* __restrict__ x_q8_1_raw,
     int m,
     int k
 ) {
@@ -575,34 +705,37 @@ __global__ void gemv_q8_0_cuda_kernel(
     int num_blocks_per_row = k / 32;
 
     const BlockQ8_0_Gpu* row_blocks = (const BlockQ8_0_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 34);
+    const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
-    float warp_dot = 0.0f;
+    float thread_dot = 0.0f;
     for (int b = 0; b < num_blocks_per_row; ++b) {
         const BlockQ8_0_Gpu* blk = &row_blocks[b];
+        const BlockQ8_1_Gpu* bq8_1 = &x_q8_1[b];
         float d = __half2float(*((const half*)&blk->scale));
-        float q = (float)blk->qs[lane_id];
-        float x_val = x[b * 32 + lane_id];
-        warp_dot += d * q * x_val;
+        float d8 = __low2float(bq8_1->ds);
+        int8_t q = blk->qs[lane_id];
+        int8_t u = bq8_1->qs[lane_id];
+        thread_dot += (d * d8) * (float)((int)q * (int)u);
     }
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        warp_dot += __shfl_down_sync(0xFFFFFFFF, warp_dot, offset);
+        thread_dot += __shfl_down_sync(0xFFFFFFFF, thread_dot, offset);
     }
 
     if (lane_id == 0) {
-        y[row] = warp_dot;
+        y[row] = thread_dot;
     }
 }
 
 /**
- * Custom CUDA Kernel: Quantized Q6_K Matrix-Vector GEMV (210-byte Super-block x FP32 Activations).
+ * Custom CUDA Kernel: Quantized Q6_K Matrix-Vector GEMV (210-byte Super-block x Q8_1 Activations).
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
 __global__ void gemv_q6_k_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
-    const float* __restrict__ x,
+    const void* __restrict__ x_q8_1_raw,
     int m,
     int k
 ) {
@@ -613,57 +746,59 @@ __global__ void gemv_q6_k_cuda_kernel(
     int num_blocks_per_row = k / 256;
 
     const BlockQ6_K_Gpu* row_blocks = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 210);
+    const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
-    float warp_dot = 0.0f;
+    float thread_dot = 0.0f;
+    int is = lane_id / 16;
     #pragma unroll 2
     for (int b = 0; b < num_blocks_per_row; ++b) {
         const BlockQ6_K_Gpu* blk = &row_blocks[b];
         float d = __half2float(*((const half*)&blk->d));
-        const float* x_block = x + b * 256;
+        const BlockQ8_1_Gpu* bx = &x_q8_1[b * 8];
+        float block_dot = 0.0f;
 
-        #pragma unroll 2
+        #pragma unroll
         for (int half_idx = 0; half_idx < 2; half_idx++) {
             int ql_offset = half_idx * 64;
             int qh_offset = half_idx * 32;
             int sc_offset = half_idx * 8;
-            int y_offset = half_idx * 128;
 
-            int is = lane_id / 16;
             uint8_t qh_byte = blk->qh[qh_offset + lane_id];
             uint8_t ql0 = blk->ql[ql_offset + lane_id];
             uint8_t ql32 = blk->ql[ql_offset + lane_id + 32];
 
-            int8_t q1 = (int8_t)((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) - 32;
-            int8_t q2 = (int8_t)((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) - 32;
-            int8_t q3 = (int8_t)((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) - 32;
-            int8_t q4 = (int8_t)((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) - 32;
+            int q1 = (int)((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) - 32;
+            int q2 = (int)((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) - 32;
+            int q3 = (int)((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) - 32;
+            int q4 = (int)((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) - 32;
 
-            float sc0 = (float)blk->scales[sc_offset + is + 0];
-            float sc2 = (float)blk->scales[sc_offset + is + 2];
-            float sc4 = (float)blk->scales[sc_offset + is + 4];
-            float sc6 = (float)blk->scales[sc_offset + is + 6];
+            const BlockQ8_1_Gpu* bq0 = &bx[half_idx * 4 + 0];
+            const BlockQ8_1_Gpu* bq1 = &bx[half_idx * 4 + 1];
+            const BlockQ8_1_Gpu* bq2 = &bx[half_idx * 4 + 2];
+            const BlockQ8_1_Gpu* bq3 = &bx[half_idx * 4 + 3];
 
-            float w0 = d * sc0 * (float)q1;
-            float w1 = d * sc2 * (float)q2;
-            float w2 = d * sc4 * (float)q3;
-            float w3 = d * sc6 * (float)q4;
+            float c0 = __low2float(bq0->ds) * (float)blk->scales[sc_offset + is + 0];
+            float c1 = __low2float(bq1->ds) * (float)blk->scales[sc_offset + is + 2];
+            float c2 = __low2float(bq2->ds) * (float)blk->scales[sc_offset + is + 4];
+            float c3 = __low2float(bq3->ds) * (float)blk->scales[sc_offset + is + 6];
 
-            float x0 = x_block[y_offset + lane_id + 0];
-            float x1 = x_block[y_offset + lane_id + 32];
-            float x2 = x_block[y_offset + lane_id + 64];
-            float x3 = x_block[y_offset + lane_id + 96];
+            int u0 = (int)bq0->qs[lane_id];
+            int u1 = (int)bq1->qs[lane_id];
+            int u2 = (int)bq2->qs[lane_id];
+            int u3 = (int)bq3->qs[lane_id];
 
-            warp_dot += w0 * x0 + w1 * x1 + w2 * x2 + w3 * x3;
+            block_dot += c0 * (float)(q1 * u0) + c1 * (float)(q2 * u1) + c2 * (float)(q3 * u2) + c3 * (float)(q4 * u3);
         }
+        thread_dot += d * block_dot;
     }
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        warp_dot += __shfl_down_sync(0xFFFFFFFF, warp_dot, offset);
+        thread_dot += __shfl_down_sync(0xFFFFFFFF, thread_dot, offset);
     }
 
     if (lane_id == 0) {
-        y[row] = warp_dot;
+        y[row] = thread_dot;
     }
 }
 
@@ -685,13 +820,14 @@ __device__ __forceinline__ void get_scale_min_k4_cuda(int j, const uint8_t* scal
 }
 
 /**
- * Custom CUDA Kernel: Quantized Q4_K Matrix-Vector GEMV (INT4 Super-blocks x FP32 Activations).
+ * Custom CUDA Kernel: Quantized Q4_K Matrix-Vector GEMV (INT4 Super-blocks x Q8_1 Activations via __dp4a).
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
+ * 128-byte coalesced weight loads + hardware INT8 dot products.
  */
 __global__ void gemv_q4_k_cuda_kernel(
     float* __restrict__ y,
-    const uint8_t* __restrict__ raw_blocks,
-    const float* __restrict__ x,
+    const void* __restrict__ raw_blocks,
+    const void* __restrict__ x_q8_1_raw,
     int m,
     int k
 ) {
@@ -701,55 +837,57 @@ __global__ void gemv_q4_k_cuda_kernel(
     int lane_id = threadIdx.x % 32;
     int num_blocks_per_row = k / 256;
 
-    const BlockQ4_K_Gpu* row_blocks = (const BlockQ4_K_Gpu*)(raw_blocks + (size_t)row * num_blocks_per_row * 144);
+    const BlockQ4_K_Gpu* row_blocks = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 144);
+    const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
-    float warp_dot = 0.0f;
+    int chunk = lane_id / 8;
+    int sub_idx = lane_id % 8;
+    int sub0 = 2 * chunk + 0;
+    int sub1 = 2 * chunk + 1;
+
+    float thread_dot = 0.0f;
+
     #pragma unroll 2
     for (int b = 0; b < num_blocks_per_row; b++) {
         const BlockQ4_K_Gpu* blk = &row_blocks[b];
         float d = __half2float(*((const half*)&blk->d));
         float dmin = __half2float(*((const half*)&blk->dmin));
 
-        const float* x_block = x + b * 256;
+        float sc0, min0, sc1, min1;
+        get_scale_min_k4_cuda(sub0, blk->scales, &sc0, &min0);
+        get_scale_min_k4_cuda(sub1, blk->scales, &sc1, &min1);
 
-        float d_sc[8];
-        float d_min[8];
-        #pragma unroll
-        for (int j = 0; j < 8; ++j) {
-            float sc, min_v;
-            get_scale_min_k4_cuda(j, blk->scales, &sc, &min_v);
-            d_sc[j] = d * sc;
-            d_min[j] = dmin * min_v;
-        }
+        const BlockQ8_1_Gpu* bq8_0 = &x_q8_1[b * 8 + sub0];
+        const BlockQ8_1_Gpu* bq8_1 = &x_q8_1[b * 8 + sub1];
 
-        #pragma unroll 4
-        for (int chunk = 0; chunk < 4; chunk++) {
-            float d1 = d_sc[chunk * 2 + 0];
-            float min1 = d_min[chunk * 2 + 0];
-            float d2 = d_sc[chunk * 2 + 1];
-            float min2 = d_min[chunk * 2 + 1];
+        float d8_0 = __low2float(bq8_0->ds);
+        float d8_1 = __low2float(bq8_1->ds);
 
-            uint8_t byte = blk->qs[chunk * 32 + lane_id];
-            float q0 = (float)(byte & 0x0F);
-            float q1 = (float)(byte >> 4);
+        int u0 = ((const int*)bq8_0->qs)[sub_idx];
+        int u1 = ((const int*)bq8_1->qs)[sub_idx];
 
-            float w0 = d1 * q0 - min1;
-            float w1 = d2 * q1 - min2;
+        int v = ((const int*)blk->qs)[lane_id];
+        int v0 = v & 0x0F0F0F0F;
+        int v1 = (v >> 4) & 0x0F0F0F0F;
 
-            float x0 = x_block[chunk * 64 + lane_id];
-            float x1 = x_block[chunk * 64 + 32 + lane_id];
+        int dot0 = __dp4a(v0, u0, 0);
+        int dot1 = __dp4a(v1, u1, 0);
+        int sum0 = __dp4a(0x01010101, u0, 0);
+        int sum1 = __dp4a(0x01010101, u1, 0);
 
-            warp_dot += w0 * x0 + w1 * x1;
-        }
+        float term_d = (sc0 * d8_0) * (float)dot0 + (sc1 * d8_1) * (float)dot1;
+        float term_min = (min0 * d8_0) * (float)sum0 + (min1 * d8_1) * (float)sum1;
+
+        thread_dot += d * term_d - dmin * term_min;
     }
 
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        warp_dot += __shfl_down_sync(0xFFFFFFFF, warp_dot, offset);
+        thread_dot += __shfl_down_sync(0xFFFFFFFF, thread_dot, offset);
     }
 
     if (lane_id == 0) {
-        y[row] = warp_dot;
+        y[row] = thread_dot;
     }
 }
 
@@ -982,6 +1120,54 @@ __global__ void swiglu_f32_kernel(
     }
 }
 
+/**
+ * Custom CUDA Kernel: Fused SwiGLU + Dynamic Q8_1 Activation Quantization.
+ * Directly transforms gate and up projections via silu(gate) * up and emits
+ * quantized BlockQ8_1_Gpu blocks for the down-projection GEMV.
+ */
+__global__ void fused_swiglu_q8_1_cuda_kernel(
+    BlockQ8_1_Gpu* __restrict__ y_q8_1,
+    float* __restrict__ output_f32,
+    const float* __restrict__ gate,
+    const float* __restrict__ up,
+    int n
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
+    int lane_id = threadIdx.x % 32;
+    int block_32_idx = i / 32;
+
+    float g = gate[i];
+    float u = up[i];
+    float silu_g = g / (1.0f + expf(-g));
+    float val = silu_g * u;
+
+    if (output_f32 != nullptr) {
+        output_f32[i] = val;
+    }
+
+    if (y_q8_1 != nullptr) {
+        float amax = fabsf(val);
+        float sum = val;
+
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset));
+            sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset);
+        }
+
+        float d = amax / 127.0f;
+        float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+        int8_t q = (int8_t)roundf(val * id);
+        y_q8_1[block_32_idx].qs[lane_id] = q;
+
+        if (lane_id == 0) {
+            y_q8_1[block_32_idx].ds = make_half2(__float2half(d), __float2half(sum));
+        }
+    }
+}
+
 __global__ void gelu_f32_kernel(
     float* __restrict__ out,
     const float* __restrict__ gate,
@@ -1013,6 +1199,7 @@ __global__ void logit_softcap_f32_kernel(
 __global__ void rope_single_token_kernel(
     float* __restrict__ q,
     float* __restrict__ k,
+    float* __restrict__ k_out,
     int pos,
     int num_heads,
     int num_kv_heads,
@@ -1041,8 +1228,11 @@ __global__ void rope_single_token_kernel(
         int k_base = head_idx * head_dim;
         float k0 = k[k_base + d];
         float k1 = k[k_base + d + half_dim];
-        k[k_base + d]            = k0 * cos_val - k1 * sin_val;
-        k[k_base + d + half_dim] = k0 * sin_val + k1 * cos_val;
+        float rot0 = k0 * cos_val - k1 * sin_val;
+        float rot1 = k0 * sin_val + k1 * cos_val;
+        float* dst = (k_out != nullptr) ? k_out : k;
+        dst[k_base + d]            = rot0;
+        dst[k_base + d + half_dim] = rot1;
     }
 }
 
@@ -1059,6 +1249,7 @@ __global__ void flash_decode_paged_kernel(
     int num_kv_heads,
     int head_dim,
     int num_kv_tokens,
+    int start_token,
     float sm_scale
 ) {
     if (num_heads <= 0 || head_dim <= 0 || num_kv_tokens <= 0) return;
@@ -1076,18 +1267,27 @@ __global__ void flash_decode_paged_kernel(
 
     float max_score = -1e20f;
     float sum_exp = 0.0f;
-    float acc_v[8];
+    float acc_v[16];
     #pragma unroll
-    for (int i = 0; i < 8; ++i) acc_v[i] = 0.0f;
+    for (int i = 0; i < 16; ++i) acc_v[i] = 0.0f;
+
+    // Cache Q values into thread-private registers once
+    float q_reg[16];
+    int q_items = 0;
+    for (int d = lane_id; d < head_dim && q_items < 16; d += 32, q_items++) {
+        q_reg[q_items] = q_ptr[d];
+    }
+
+    int valid_start = (start_token >= 0 && start_token < num_kv_tokens) ? start_token : 0;
 
     // Grid-stride over past KV cached tokens
-    for (int t = 0; t < num_kv_tokens; t++) {
+    for (int t = valid_start; t < num_kv_tokens; t++) {
         const float* k_tok = k_cache + (t * kv_heads + kv_head_idx) * head_dim;
 
-        // Compute Q . K dot product for this head across the 32 lanes
+        // Compute Q . K dot product for this head from registers
         float score = 0.0f;
-        for (int d = lane_id; d < head_dim; d += 32) {
-            score += q_ptr[d] * k_tok[d];
+        for (int i = 0; i < q_items; i++) {
+            score += q_reg[i] * k_tok[lane_id + i * 32];
         }
 
         // Warp reduction across the 32 lanes
@@ -1099,26 +1299,24 @@ __global__ void flash_decode_paged_kernel(
         // Broadcast total score to all 32 lanes in warp
         float cur_score = __shfl_sync(0xFFFFFFFF, score, 0) * sm_scale;
 
-        // Online Softmax update
+        // Online Softmax update with SFU expf bypass when maximum does not change
         float new_max = fmaxf(max_score, cur_score);
-        float alpha = (t == 0) ? 0.0f : expf(max_score - new_max);
+        float alpha = (t == valid_start) ? 0.0f : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
         float beta = expf(cur_score - new_max);
 
         max_score = new_max;
         sum_exp = sum_exp * alpha + beta;
 
         const float* v_tok = v_cache + (t * kv_heads + kv_head_idx) * head_dim;
-        int idx = 0;
-        for (int d = lane_id; d < head_dim; d += 32, idx++) {
-            acc_v[idx] = acc_v[idx] * alpha + beta * v_tok[d];
+        for (int i = 0; i < q_items; i++) {
+            acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
         }
     }
 
     // Final normalization
     float inv_sum = sum_exp > 0.0f ? (1.0f / sum_exp) : 0.0f;
-    int idx = 0;
-    for (int d = lane_id; d < head_dim; d += 32, idx++) {
-        out_ptr[d] = acc_v[idx] * inv_sum;
+    for (int i = 0; i < q_items; i++) {
+        out_ptr[lane_id + i * 32] = acc_v[i] * inv_sum;
     }
 }
 
@@ -1137,6 +1335,28 @@ int launch_cuda_rmsnorm(
     if (hidden_dim < 256) block_size = hidden_dim;
     rms_norm_f32_kernel<<<num_tokens, block_size, 0, stream>>>(
         output, input, weight, hidden_dim, eps, weight_offset
+    );
+    return cudaGetLastError();
+}
+
+int launch_cuda_fused_rmsnorm_q8_1(
+    float* output,
+    void* y_q8_1,
+    const float* input,
+    const float* weight,
+    int num_tokens,
+    int hidden_dim,
+    float eps,
+    float weight_offset,
+    cudaStream_t stream
+) {
+    if (hidden_dim <= 0 || num_tokens <= 0) return 0;
+    int block_size = 256;
+    if (hidden_dim >= 512 && hidden_dim % 512 == 0) {
+        block_size = 512;
+    }
+    fused_rmsnorm_q8_1_cuda_kernel<<<num_tokens, block_size, 0, stream>>>(
+        output, (BlockQ8_1_Gpu*)y_q8_1, input, weight, hidden_dim, eps, weight_offset
     );
     return cudaGetLastError();
 }
@@ -1216,10 +1436,27 @@ int launch_cuda_gemv_tq2_0(
     return cudaGetLastError();
 }
 
+int launch_cuda_quantize_q8_1(
+    const float* x,
+    void* y_q8_1,
+    int n,
+    cudaStream_t stream
+) {
+    if (n <= 0) return 0;
+    int num_blocks = n / 32;
+    int warps_per_block = 8; // 256 threads
+    int block_size = warps_per_block * 32;
+    int grid = (num_blocks + warps_per_block - 1) / warps_per_block;
+    quantize_f32_to_q8_1_cuda_kernel<<<grid, block_size, 0, stream>>>(
+        x, (BlockQ8_1_Gpu*)y_q8_1, n
+    );
+    return cudaGetLastError();
+}
+
 int launch_cuda_gemv_q8_0(
     float* y,
     const void* raw_blocks,
-    const float* x,
+    const void* x_q8_1,
     int m,
     int k,
     cudaStream_t stream
@@ -1228,7 +1465,7 @@ int launch_cuda_gemv_q8_0(
     int grid, block;
     get_gemv_launch_dims(m, grid, block);
     gemv_q8_0_cuda_kernel<<<grid, block, 0, stream>>>(
-        y, raw_blocks, x, m, k
+        y, raw_blocks, x_q8_1, m, k
     );
     return cudaGetLastError();
 }
@@ -1236,7 +1473,7 @@ int launch_cuda_gemv_q8_0(
 int launch_cuda_gemv_q6_k(
     float* y,
     const void* raw_blocks,
-    const float* x,
+    const void* x_q8_1,
     int m,
     int k,
     cudaStream_t stream
@@ -1245,7 +1482,7 @@ int launch_cuda_gemv_q6_k(
     int grid, block;
     get_gemv_launch_dims(m, grid, block);
     gemv_q6_k_cuda_kernel<<<grid, block, 0, stream>>>(
-        y, raw_blocks, x, m, k
+        y, raw_blocks, x_q8_1, m, k
     );
     return cudaGetLastError();
 }
@@ -1253,7 +1490,7 @@ int launch_cuda_gemv_q6_k(
 int launch_cuda_gemv_q4_k(
     float* y,
     const void* raw_blocks,
-    const float* x,
+    const void* x_q8_1,
     int m,
     int k,
     cudaStream_t stream
@@ -1262,7 +1499,7 @@ int launch_cuda_gemv_q4_k(
     int grid, block;
     get_gemv_launch_dims(m, grid, block);
     gemv_q4_k_cuda_kernel<<<grid, block, 0, stream>>>(
-        y, (const uint8_t*)raw_blocks, x, m, k
+        y, (const uint8_t*)raw_blocks, x_q8_1, m, k
     );
     return cudaGetLastError();
 }
@@ -1417,9 +1654,27 @@ int launch_cuda_swiglu(
     return cudaGetLastError();
 }
 
+int launch_cuda_fused_swiglu_q8_1(
+    void* y_q8_1,
+    float* output_f32,
+    const float* gate,
+    const float* up,
+    int n,
+    cudaStream_t stream
+) {
+    if (n <= 0) return 0;
+    int block_size = 256;
+    int grid = (n + block_size - 1) / block_size;
+    fused_swiglu_q8_1_cuda_kernel<<<grid, block_size, 0, stream>>>(
+        (BlockQ8_1_Gpu*)y_q8_1, output_f32, gate, up, n
+    );
+    return cudaGetLastError();
+}
+
 int launch_cuda_rope_single(
     float* q,
     float* k,
+    float* k_out,
     int pos,
     int num_heads,
     int num_kv_heads,
@@ -1430,7 +1685,7 @@ int launch_cuda_rope_single(
     int grid = num_heads > num_kv_heads ? num_heads : num_kv_heads;
     int block_size = head_dim / 2;
     rope_single_token_kernel<<<grid, block_size, 0, stream>>>(
-        q, k, pos, num_heads, num_kv_heads, head_dim, theta
+        q, k, k_out, pos, num_heads, num_kv_heads, head_dim, theta
     );
     return cudaGetLastError();
 }
@@ -1444,15 +1699,15 @@ int launch_cuda_flash_decode(
     int num_kv_heads,
     int head_dim,
     int num_kv_tokens,
+    int start_token,
     float sm_scale,
     cudaStream_t stream
 ) {
     if (num_heads <= 0 || head_dim <= 0 || num_kv_tokens <= 0) return 0;
-    const int warps_per_block = 4;
-    const int block_size = warps_per_block * 32; // 128 threads = 4 warps
-    int grid = (num_heads + warps_per_block - 1) / warps_per_block;
+    const int block_size = 32; // 1 warp per block = maximum SM distribution
+    int grid = num_heads;
     flash_decode_paged_kernel<<<grid, block_size, 0, stream>>>(
-        output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim, num_kv_tokens, sm_scale
+        output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale
     );
     return cudaGetLastError();
 }
@@ -1639,6 +1894,15 @@ int launch_cuda_argmax(
     int block_size = 1024;
     argmax_f32_kernel<<<1, block_size, 0, stream>>>(logits, vocab_size, out_token, out_max_val);
     return cudaGetLastError();
+}
+
+void init_cuda_kernel_attributes() {
+    cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+    cudaFuncSetAttribute(gemv_q4_k_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(gemv_q6_k_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(gemv_q8_0_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(fused_rmsnorm_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(fused_swiglu_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
 }
 
 }

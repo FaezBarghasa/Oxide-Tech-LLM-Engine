@@ -187,6 +187,7 @@ impl Llama3Config {
             .unwrap_or(8192) as usize;
         let eps = gguf
             .get_f32(&format!("{arch}.attention.layer_norm_rms_epsilon"))
+            .or_else(|| gguf.get_f32(&format!("{arch}.layer_norm_rms_epsilon")))
             .unwrap_or(1e-5);
         let vocab_size = gguf
             .tensors
@@ -207,7 +208,7 @@ impl Llama3Config {
         let head_dim_full = key_len;
         let rope_theta_swa = gguf
             .get_f32(&format!("{arch}.rope.freq_base_swa"))
-            .map(|f| f.to_bits());
+            .map(f32::to_bits);
         let sliding_window = gguf
             .get_u64(&format!("{arch}.attention.sliding_window"))
             .map(|v| v as usize);
@@ -217,7 +218,7 @@ impl Llama3Config {
         let is_qwen = arch.contains("qwen");
         let final_logit_softcapping = gguf
             .get_f32(&format!("{arch}.final_logit_softcapping"))
-            .map(|f| f.to_bits());
+            .map(f32::to_bits);
 
         Self {
             hidden_dim,
@@ -2705,17 +2706,16 @@ impl Llama3Model {
                         data_slice,
                         q_dim + 2 * kv_dim,
                         h,
-                    ) {
-                        if qkv.rows() == q_dim + 2 * kv_dim {
-                            if let Some(q) = qkv.slice_rows(0, q_dim) {
-                                layer.q_proj = q;
-                            }
-                            if let Some(k) = qkv.slice_rows(q_dim, kv_dim) {
-                                layer.k_proj = k;
-                            }
-                            if let Some(v) = qkv.slice_rows(q_dim + kv_dim, kv_dim) {
-                                layer.v_proj = v;
-                            }
+                    ) && qkv.rows() == q_dim + 2 * kv_dim
+                    {
+                        if let Some(q) = qkv.slice_rows(0, q_dim) {
+                            layer.q_proj = q;
+                        }
+                        if let Some(k) = qkv.slice_rows(q_dim, kv_dim) {
+                            layer.k_proj = k;
+                        }
+                        if let Some(v) = qkv.slice_rows(q_dim + kv_dim, kv_dim) {
+                            layer.v_proj = v;
                         }
                     }
                 }
@@ -3001,11 +3001,11 @@ impl Llama3Model {
         self.lm_head
             .gemv(&scratch.final_norm[..h], &mut scratch.logits);
 
-        if let Some(cap) = self.config.final_logit_softcapping_f32() {
-            if cap > 0.0 {
-                for l in &mut scratch.logits {
-                    *l = cap * (*l / cap).tanh();
-                }
+        if let Some(cap) = self.config.final_logit_softcapping_f32()
+            && cap > 0.0
+        {
+            for l in &mut scratch.logits {
+                *l = cap * (*l / cap).tanh();
             }
         }
 
@@ -3034,11 +3034,9 @@ impl Llama3Model {
         if cur_q_dim > 0 && cur_k_dim > 0 && cur_v_dim > 0 {
             let cur_heads = self.config.num_heads;
             let cur_kv_heads = self.config.num_kv_heads;
-            let cur_head_dim = if cur_heads > 0 {
-                cur_q_dim / cur_heads
-            } else {
-                self.config.head_dim
-            };
+            let cur_head_dim = cur_q_dim
+                .checked_div(cur_heads)
+                .unwrap_or(self.config.head_dim);
 
             let is_swa =
                 cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
@@ -3047,8 +3045,8 @@ impl Llama3Model {
             } else {
                 None
             };
-            let rope_engine = if cur_head_dim <= self.config.head_dim && self.rope_swa.is_some() {
-                self.rope_swa.as_ref().unwrap()
+            let rope_engine = if cur_head_dim <= self.config.head_dim {
+                self.rope_swa.as_ref().unwrap_or(&self.rope)
             } else {
                 &self.rope
             };
@@ -3253,7 +3251,7 @@ impl Llama3Model {
 
         // Layer scalar output scale (Gemma 4 / Nemotron)
         if let Some(scale) = layer.layer_output_scale {
-            for x in scratch.hidden[..h].iter_mut() {
+            for x in &mut scratch.hidden[..h] {
                 *x *= scale;
             }
         }
@@ -3387,7 +3385,7 @@ impl Llama3Model {
 
         // Layer scalar output scale (Gemma 4 / Nemotron)
         if let Some(scale) = layer.layer_output_scale {
-            for x in scratch.hidden[..h].iter_mut() {
+            for x in &mut scratch.hidden[..h] {
                 *x *= scale;
             }
         }

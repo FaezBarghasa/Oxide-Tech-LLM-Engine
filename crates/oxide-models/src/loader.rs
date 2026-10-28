@@ -57,6 +57,7 @@ impl ModelMetadata {
             .unwrap_or(500_000.0);
         let rms_norm_eps = gguf
             .get_f32(&format!("{arch}.attention.layer_norm_rms_epsilon"))
+            .or_else(|| gguf.get_f32(&format!("{arch}.layer_norm_rms_epsilon")))
             .unwrap_or(1e-5);
 
         let mut tensor_info = HashMap::new();

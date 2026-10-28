@@ -643,10 +643,8 @@ impl BlockQ6_K {
             let y_offset = half * 128;
 
             for l in 0..32 {
-                let v1 = ((values[y_offset + l + 0] * inv_d)
-                    .round()
-                    .clamp(-32.0, 31.0) as i8
-                    + 32) as u8;
+                let v1 =
+                    ((values[y_offset + l] * inv_d).round().clamp(-32.0, 31.0) as i8 + 32) as u8;
                 let v2 = ((values[y_offset + l + 32] * inv_d)
                     .round()
                     .clamp(-32.0, 31.0) as i8
@@ -694,17 +692,17 @@ impl BlockQ6_K {
                 let ql0 = self.ql[ql_offset + l];
                 let ql32 = self.ql[ql_offset + l + 32];
 
-                let q1 = ((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) as i8 - 32;
+                let q1 = ((ql0 & 0x0F) | ((qh_byte & 3) << 4)) as i8 - 32;
                 let q2 = ((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) as i8 - 32;
                 let q3 = ((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) as i8 - 32;
                 let q4 = ((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) as i8 - 32;
 
-                let sc0 = self.scales[sc_offset + is + 0] as f32;
+                let sc0 = self.scales[sc_offset + is] as f32;
                 let sc2 = self.scales[sc_offset + is + 2] as f32;
                 let sc4 = self.scales[sc_offset + is + 4] as f32;
                 let sc6 = self.scales[sc_offset + is + 6] as f32;
 
-                output[y_offset + l + 0] = d * sc0 * (q1 as f32);
+                output[y_offset + l] = d * sc0 * (q1 as f32);
                 output[y_offset + l + 32] = d * sc2 * (q2 as f32);
                 output[y_offset + l + 64] = d * sc4 * (q3 as f32);
                 output[y_offset + l + 96] = d * sc6 * (q4 as f32);

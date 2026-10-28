@@ -151,7 +151,7 @@ pub fn launch_fused_rmsnorm(
     if num_tokens <= 0 {
         return Ok(());
     }
-    let weight_ptr = weight.map_or(std::ptr::null(), |w| w.as_ptr());
+    let weight_ptr = weight.map_or(std::ptr::null(), DisjointSlice::as_ptr);
     let ret = unsafe {
         driver::launch_cuda_rmsnorm(
             out.as_mut_ptr(),
@@ -186,7 +186,7 @@ pub fn launch_on_device_argmax(
         ));
     }
     let d_tok_ptr = out_token_val.as_mut_ptr();
-    let d_val_ptr = unsafe { (d_tok_ptr as *mut u8).add(4) as *mut f32 };
+    let d_val_ptr = unsafe { d_tok_ptr.add(1) as *mut f32 };
     let ret = unsafe {
         driver::launch_cuda_argmax(
             logits.as_ptr(),
