@@ -674,8 +674,9 @@ impl CudaBackend {
             CudaDeviceBuffer::allocate(max_logits_batch * vocab_size * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?,
         );
-        self.d_sampled_token =
-            Some(CudaDeviceBuffer::allocate(max_logits_batch * 8).map_err(EngineError::BackendError)?);
+        self.d_sampled_token = Some(
+            CudaDeviceBuffer::allocate(max_logits_batch * 8).map_err(EngineError::BackendError)?,
+        );
         self.d_scratch_gate256 = Some(
             CudaDeviceBuffer::allocate(max_batch * 256 * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?,
@@ -1631,7 +1632,6 @@ impl CudaBackend {
                         self.num_kv_heads
                     };
                     let kv_dim = cur_num_kv_heads * cur_head_dim;
-                    let _q_dim = cur_num_heads * cur_head_dim;
 
                     if let Some(d_q) = &mut self.d_scratch_q {
                         unsafe {
@@ -1726,9 +1726,7 @@ impl CudaBackend {
                         std::ptr::null_mut()
                     };
 
-                    if let (Some(d_q), Some(d_k)) =
-                        (&mut self.d_scratch_q, &mut self.d_scratch_k)
-                    {
+                    if let (Some(d_q), Some(d_k)) = (&mut self.d_scratch_q, &mut self.d_scratch_k) {
                         unsafe {
                             driver::launch_cuda_rope_batch(
                                 d_q.as_typed_ptr::<f32>(),
@@ -1748,9 +1746,8 @@ impl CudaBackend {
                     if let Some(d_v) = &self.d_scratch_v {
                         if layer_idx < self.kv_v.len() {
                             unsafe {
-                                let v_dst_ptr = self.kv_v[layer_idx]
-                                    .as_typed_ptr::<f32>()
-                                    .add(pos * kv_dim);
+                                let v_dst_ptr =
+                                    self.kv_v[layer_idx].as_typed_ptr::<f32>().add(pos * kv_dim);
                                 driver::cudaMemcpyAsync(
                                     v_dst_ptr as *mut std::ffi::c_void,
                                     d_v.as_typed_ptr::<f32>() as *const std::ffi::c_void,

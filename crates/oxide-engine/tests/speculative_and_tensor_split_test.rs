@@ -395,7 +395,10 @@ fn test_specialized_pipeline_llama3_cpu_monomorphized() {
             assert!(completion.sampled_token > 0);
         }
         Err(e) => {
-            assert!(e.to_string().contains("requires initialized physical model weights"));
+            assert!(
+                e.to_string()
+                    .contains("requires initialized physical model weights")
+            );
         }
     }
 }

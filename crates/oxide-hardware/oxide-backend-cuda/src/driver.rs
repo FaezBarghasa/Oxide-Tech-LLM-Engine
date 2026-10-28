@@ -339,7 +339,6 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
-
     pub fn launch_cuda_qk_norm(
         qk: *mut f32,
         weight: *const f32,
