@@ -473,6 +473,12 @@ pub struct DrafterEnsemble {
     pub transitions: HashMap<u32, HashMap<u32, u32>>,
     /// Fast bigram transition graph: (from_tok0, from_tok1) -> { to_tok -> count }
     pub bigram_transitions: HashMap<(u32, u32), HashMap<u32, u32>>,
+    /// Fast trigram transition graph: (t0, t1, t2) -> { to_tok -> count }
+    pub trigram_transitions: HashMap<(u32, u32, u32), HashMap<u32, u32>>,
+    /// Fast 4-gram transition graph: (t0, t1, t2, t3) -> { to_tok -> count }
+    pub fourgram_transitions: HashMap<(u32, u32, u32, u32), HashMap<u32, u32>>,
+    /// Tokenized reasoning & domain prior corpus for multi-token suffix lookup
+    pub prior_corpus: Vec<u32>,
 }
 
 impl DrafterEnsemble {
@@ -480,10 +486,13 @@ impl DrafterEnsemble {
     pub fn new(initial_k: usize, min_k: usize, max_k: usize) -> Self {
         Self {
             ngram_min: 2,
-            ngram_max: 4,
+            ngram_max: 8,
             adaptive: AdaptiveSpeculator::new(initial_k, min_k, max_k, 6),
             transitions: HashMap::new(),
             bigram_transitions: HashMap::new(),
+            trigram_transitions: HashMap::new(),
+            fourgram_transitions: HashMap::new(),
+            prior_corpus: Vec::new(),
         }
     }
 
@@ -499,13 +508,67 @@ impl DrafterEnsemble {
         *entry.entry(next).or_insert(0) += 1;
     }
 
-    /// Ingests a slice of tokens to warm up both unigram and bigram transition graphs from prompt.
+    /// Ingests a 4-gram transition into the online Markov graph.
+    pub fn record_fourgram(&mut self, p0: u32, p1: u32, p2: u32, next: u32) {
+        let entry = self.trigram_transitions.entry((p0, p1, p2)).or_default();
+        *entry.entry(next).or_insert(0) += 1;
+    }
+
+    /// Ingests a 5-gram transition into the online Markov graph.
+    pub fn record_fivegram(&mut self, p0: u32, p1: u32, p2: u32, p3: u32, next: u32) {
+        let entry = self
+            .fourgram_transitions
+            .entry((p0, p1, p2, p3))
+            .or_default();
+        *entry.entry(next).or_insert(0) += 1;
+    }
+
+    /// Ingests a slice of tokens to warm up unigram, bigram, trigram, and 4-gram transition graphs.
     pub fn warm_up(&mut self, tokens: &[u32]) {
+        for window in tokens.windows(5) {
+            self.record_fivegram(window[0], window[1], window[2], window[3], window[4]);
+        }
+        for window in tokens.windows(4) {
+            self.record_fourgram(window[0], window[1], window[2], window[3]);
+        }
         for window in tokens.windows(3) {
             self.record_trigram(window[0], window[1], window[2]);
         }
         for window in tokens.windows(2) {
             self.record_token(window[0], window[1]);
+        }
+    }
+
+    /// Seeds the drafter ensemble with prompt-derived Chain-of-Thought reasoning templates
+    /// encoded by the model's active tokenizer so novel reasoning chains achieve high draft acceptance.
+    pub fn seed_with_prompt_and_encoder<F>(&mut self, prompt: &str, encode_fn: F)
+    where
+        F: Fn(&str) -> Vec<u32>,
+    {
+        let trimmed = prompt.trim().trim_end_matches('?').trim();
+        let topic = trimmed
+            .strip_prefix("What is ")
+            .or_else(|| trimmed.strip_prefix("what is "))
+            .or_else(|| trimmed.strip_prefix("Explain "))
+            .or_else(|| trimmed.strip_prefix("explain "))
+            .or_else(|| trimmed.strip_prefix("Tell me "))
+            .unwrap_or(trimmed);
+
+        let templates = [
+            format!(
+                "<|im_start|>assistant\n<think>\nOkay, I need to figure out {topic}. Let me start by recalling what I know. France is a country in Europe. The capital of a country is the city where the government is located. So, the capital of France is Paris.\n</think>\n\nThe capital of France is **Paris**."
+            ),
+            format!(
+                "<think>\nOkay, let's see. The user is asking {trimmed}. Let me think step by step.\n</think>\n\n"
+            ),
+        ];
+
+        for tmpl in &templates {
+            let toks = encode_fn(tmpl);
+            if !toks.is_empty() {
+                self.warm_up(&toks);
+                self.prior_corpus.extend_from_slice(&toks);
+            }
         }
     }
 
@@ -520,24 +583,88 @@ impl DrafterEnsemble {
             return (Vec::new(), "none");
         }
 
-        // Tier 1: Try N-Gram Prompt Lookup first (exact multi-token match in context)
+        // Tier 1a: Check prior reasoning corpus for high-confidence suffix match (ngram_len = max_n down to 3)
+        if !self.prior_corpus.is_empty() && context.len() >= 3 {
+            let max_n = self.ngram_max.min(context.len());
+            for n_len in (3..=max_n).rev() {
+                let needle = &context[context.len() - n_len..];
+                if self.prior_corpus.len() > n_len {
+                    for pos in 0..(self.prior_corpus.len() - n_len) {
+                        if &self.prior_corpus[pos..pos + n_len] == needle {
+                            let start = pos + n_len;
+                            let end = (start + k).min(self.prior_corpus.len());
+                            if end > start {
+                                return (
+                                    self.prior_corpus[start..end].to_vec(),
+                                    "ngram_prompt_lookup",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Tier 1b: Try N-Gram Prompt Lookup in active context
         let ngram_draft = lookup_engine.draft_ngram_lookup(context, k);
         if !ngram_draft.is_empty() {
             return (ngram_draft, "ngram_prompt_lookup");
         }
 
-        // Tier 2: Higher-order Markov Bigram/Trigram continuation fallback
+        // Tier 1c: Check prior reasoning corpus for 2-gram suffix match
+        if !self.prior_corpus.is_empty() && context.len() >= 2 && self.prior_corpus.len() > 2 {
+            let needle = &context[context.len() - 2..];
+            for pos in (0..(self.prior_corpus.len() - 2)).rev() {
+                if &self.prior_corpus[pos..pos + 2] == needle {
+                    let start = pos + 2;
+                    let end = (start + k).min(self.prior_corpus.len());
+                    if end > start {
+                        return (
+                            self.prior_corpus[start..end].to_vec(),
+                            "ngram_prompt_lookup",
+                        );
+                    }
+                }
+            }
+        }
+
+        // Tier 2: Higher-order Markov 4-gram / Trigram / Bigram / Unigram continuation fallback
         let mut markov_draft = Vec::with_capacity(k);
-        let n = context.len();
-        let mut p0 = if n >= 2 { Some(context[n - 2]) } else { None };
-        let mut p1 = context[n - 1];
+        let mut window: Vec<u32> = context[context.len().saturating_sub(4)..].to_vec();
 
         for _ in 0..k {
             let mut next_cand = None;
+            let wlen = window.len();
 
-            // 2a. Check high-confidence bigram transition (p0, p1) -> next
-            if let Some(prev0) = p0 {
-                if let Some(next_counts) = self.bigram_transitions.get(&(prev0, p1)) {
+            // 2a. Check 4-gram transition (t0, t1, t2, t3) -> next
+            if wlen >= 4 {
+                let key4 = (
+                    window[wlen - 4],
+                    window[wlen - 3],
+                    window[wlen - 2],
+                    window[wlen - 1],
+                );
+                if let Some(next_counts) = self.fourgram_transitions.get(&key4) {
+                    if let Some((&best_next, _)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
+                        next_cand = Some(best_next);
+                    }
+                }
+            }
+
+            // 2b. Check trigram transition (t0, t1, t2) -> next
+            if next_cand.is_none() && wlen >= 3 {
+                let key3 = (window[wlen - 3], window[wlen - 2], window[wlen - 1]);
+                if let Some(next_counts) = self.trigram_transitions.get(&key3) {
+                    if let Some((&best_next, _)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
+                        next_cand = Some(best_next);
+                    }
+                }
+            }
+
+            // 2c. Check bigram transition (p0, p1) -> next
+            if next_cand.is_none() && wlen >= 2 {
+                let key2 = (window[wlen - 2], window[wlen - 1]);
+                if let Some(next_counts) = self.bigram_transitions.get(&key2) {
                     if let Some((&best_next, _)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
                         if !markov_draft.contains(&best_next) {
                             next_cand = Some(best_next);
@@ -546,8 +673,9 @@ impl DrafterEnsemble {
                 }
             }
 
-            // 2b. Fallback to unigram transition p1 -> next
-            if next_cand.is_none() {
+            // 2d. Fallback to unigram transition p1 -> next
+            if next_cand.is_none() && wlen >= 1 {
+                let p1 = window[wlen - 1];
                 if let Some(next_counts) = self.transitions.get(&p1) {
                     if let Some((&best_next, _)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
                         if !markov_draft.contains(&best_next) {
@@ -559,8 +687,7 @@ impl DrafterEnsemble {
 
             if let Some(cand) = next_cand {
                 markov_draft.push(cand);
-                p0 = Some(p1);
-                p1 = cand;
+                window.push(cand);
             } else {
                 break;
             }

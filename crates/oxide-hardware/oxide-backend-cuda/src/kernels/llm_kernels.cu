@@ -690,8 +690,8 @@ __global__ void gemv_ptq1_0_cuda_kernel(
  * Evaluates BATCH_N token vectors simultaneously while reading weights once.
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
-template <int BATCH_N, int ADD_TO_Y = 0>
-__global__ void mmvq_q8_0_cuda_kernel(
+template <int BATCH_N, int ADD_TO_Y = 0, int WARPS_PER_ROW = 1>
+__global__ __launch_bounds__(256, (BATCH_N > 8 ? 2 : 4)) void mmvq_q8_0_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
     const void* __restrict__ x_q8_1_raw,
@@ -699,15 +699,17 @@ __global__ void mmvq_q8_0_cuda_kernel(
     int k,
     int actual_batch = BATCH_N
 ) {
-    int row = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+    int warp_id = threadIdx.x / 32;
+    int rows_per_block = (blockDim.x / 32) / WARPS_PER_ROW;
+    int row = blockIdx.x * rows_per_block + (warp_id / WARPS_PER_ROW);
     if (row >= m) return;
 
     int lane_id = threadIdx.x % 32;
     int num_blocks_per_row = k / 32;
 
-    int batch_chunk = blockIdx.y;
-    int col_offset = batch_chunk * BATCH_N;
-    int num_cols = (BATCH_N == 1) ? 1 : ((actual_batch > col_offset) ? ((actual_batch - col_offset < BATCH_N) ? (actual_batch - col_offset) : BATCH_N) : 0);
+    int warp_col_group = warp_id % WARPS_PER_ROW;
+    int col_offset = (blockIdx.y * WARPS_PER_ROW + warp_col_group) * BATCH_N;
+    int num_cols = (BATCH_N == 1 && WARPS_PER_ROW == 1) ? 1 : ((actual_batch > col_offset) ? ((actual_batch - col_offset < BATCH_N) ? (actual_batch - col_offset) : BATCH_N) : 0);
     if (num_cols <= 0) return;
 
     const BlockQ8_0_Gpu* row_blocks = (const BlockQ8_0_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 34);
@@ -726,12 +728,10 @@ __global__ void mmvq_q8_0_cuda_kernel(
 
         #pragma unroll
         for (int col = 0; col < BATCH_N; ++col) {
-            if (BATCH_N == 1 || col < num_cols) {
-                const BlockQ8_1_Gpu* bq8_1 = &x_q8_1[(col_offset + col) * num_blocks_per_row + b];
-                float d8 = __low2float(bq8_1->ds);
-                int8_t u = bq8_1->qs[lane_id];
-                thread_dot[col] += (d * d8) * (float)((int)q * (int)u);
-            }
+            const BlockQ8_1_Gpu* bq8_1 = &x_q8_1[(col_offset + col) * num_blocks_per_row + b];
+            float d8 = __low2float(bq8_1->ds);
+            int8_t u = bq8_1->qs[lane_id];
+            thread_dot[col] += (d * d8) * (float)((int)q * (int)u);
         }
     }
 
@@ -756,12 +756,12 @@ __global__ void mmvq_q8_0_cuda_kernel(
 }
 
 /**
- * Custom CUDA Kernel: Quantized Q6_K Multi-Column MMVQ (210-byte Super-block x Q8_1 Activations).
+ * Custom CUDA Kernel: Quantized Q6_K Multi-Column MMVQ (210-byte Super-block x Q8_1 Activations via __dp4a).
  * Evaluates BATCH_N token vectors simultaneously while reading weights once.
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  */
-template <int BATCH_N, int ADD_TO_Y = 0>
-__global__ void mmvq_q6_k_cuda_kernel(
+template <int BATCH_N, int ADD_TO_Y = 0, int WARPS_PER_ROW = 1, int ROW_TILE = 1>
+__global__ __launch_bounds__(256, (BATCH_N > 8 ? 2 : 4)) void mmvq_q6_k_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
     const void* __restrict__ x_q8_1_raw,
@@ -769,115 +769,131 @@ __global__ void mmvq_q6_k_cuda_kernel(
     int k,
     int actual_batch = BATCH_N
 ) {
-    int row = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
-    if (row >= m) return;
+    int warp_id = threadIdx.x / 32;
+    int warps_per_block = blockDim.x / 32;
+    int base_row = (blockIdx.x * warps_per_block + warp_id) * ROW_TILE;
+    if (base_row >= m) return;
 
     int lane_id = threadIdx.x % 32;
     int num_blocks_per_row = k / 256;
     int num_q8_blocks_per_col = k / 32;
 
-    int batch_chunk = blockIdx.y;
-    int col_offset = batch_chunk * BATCH_N;
+    int col_offset = blockIdx.y * BATCH_N;
     int num_cols = (BATCH_N == 1) ? 1 : ((actual_batch > col_offset) ? ((actual_batch - col_offset < BATCH_N) ? (actual_batch - col_offset) : BATCH_N) : 0);
     if (num_cols <= 0) return;
 
-    const BlockQ6_K_Gpu* row_blocks = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 210);
     const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
-    float thread_dot[BATCH_N];
+    float thread_dot[ROW_TILE][BATCH_N];
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        thread_dot[col] = 0.0f;
+    for (int r = 0; r < ROW_TILE; ++r) {
+        #pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+            thread_dot[r][col] = 0.0f;
+        }
     }
 
-    int is = lane_id / 16;
-    #pragma unroll 2
+    int group = lane_id / 8;
+    int idx = lane_id % 8;
+
     for (int b = 0; b < num_blocks_per_row; ++b) {
-        const BlockQ6_K_Gpu* blk = &row_blocks[b];
-        float d;
-        if (lane_id == 0) {
-            d = __half2float(*((const half*)&blk->d));
+        float d_arr[ROW_TILE];
+        #pragma unroll
+        for (int r = 0; r < ROW_TILE; ++r) {
+            int row = base_row + r;
+            if (ROW_TILE == 1 || row < m) {
+                const BlockQ6_K_Gpu* blk = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + ((size_t)row * num_blocks_per_row + b) * 210);
+                float d;
+                if (lane_id == 0) {
+                    d = __half2float(*((const half*)&blk->d));
+                }
+                d_arr[r] = __shfl_sync(0xFFFFFFFF, d, 0);
+            }
         }
-        d = __shfl_sync(0xFFFFFFFF, d, 0);
 
         #pragma unroll
         for (int half_idx = 0; half_idx < 2; half_idx++) {
-            int ql_offset = half_idx * 64;
-            int qh_offset = half_idx * 32;
-            int sc_offset = half_idx * 8;
-
-            uint8_t qh_byte = blk->qh[qh_offset + lane_id];
-            uint8_t ql0 = blk->ql[ql_offset + lane_id];
-            uint8_t ql32 = blk->ql[ql_offset + lane_id + 32];
-
-            int q1 = (int)((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) - 32;
-            int q2 = (int)((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) - 32;
-            int q3 = (int)((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) - 32;
-            int q4 = (int)((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) - 32;
-
-            uint32_t my_w = 0;
-            if (lane_id == 0) {
-                uint16_t p0 = *((const uint16_t*)&blk->scales[sc_offset + 0]);
-                uint16_t p1 = *((const uint16_t*)&blk->scales[sc_offset + 2]);
-                my_w = (uint32_t)p0 | ((uint32_t)p1 << 16);
-            } else if (lane_id == 1) {
-                uint16_t p2 = *((const uint16_t*)&blk->scales[sc_offset + 4]);
-                uint16_t p3 = *((const uint16_t*)&blk->scales[sc_offset + 6]);
-                my_w = (uint32_t)p2 | ((uint32_t)p3 << 16);
-            }
-            uint32_t w0 = __shfl_sync(0xFFFFFFFF, my_w, 0);
-            uint32_t w1 = __shfl_sync(0xFFFFFFFF, my_w, 1);
-
-            int shift = is * 8;
-            float sc0 = (float)(int8_t)((w0 >> (shift + 0)) & 0xFF);
-            float sc1 = (float)(int8_t)((w0 >> (shift + 16)) & 0xFF);
-            float sc2 = (float)(int8_t)((w1 >> (shift + 0)) & 0xFF);
-            float sc3 = (float)(int8_t)((w1 >> (shift + 16)) & 0xFF);
-
-            float d_sc0 = d * sc0;
-            float d_sc1 = d * sc1;
-            float d_sc2 = d * sc2;
-            float d_sc3 = d * sc3;
+            int v_signed[ROW_TILE];
+            float d_sc[ROW_TILE];
 
             #pragma unroll
-            for (int col = 0; col < BATCH_N; ++col) {
-                if (BATCH_N == 1 || col < num_cols) {
-                    const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
-                    const BlockQ8_1_Gpu* bq0 = &bx[half_idx * 4 + 0];
-                    const BlockQ8_1_Gpu* bq1 = &bx[half_idx * 4 + 1];
-                    const BlockQ8_1_Gpu* bq2 = &bx[half_idx * 4 + 2];
-                    const BlockQ8_1_Gpu* bq3 = &bx[half_idx * 4 + 3];
+            for (int r = 0; r < ROW_TILE; ++r) {
+                int row = base_row + r;
+                if (ROW_TILE == 1 || row < m) {
+                    const BlockQ6_K_Gpu* blk = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + ((size_t)row * num_blocks_per_row + b) * 210);
+                    const uint16_t* ql16 = (const uint16_t*)&blk->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
+                    uint32_t ql4 = (uint32_t)ql16[0] | ((uint32_t)ql16[1] << 16);
+                    const uint16_t* qh16 = (const uint16_t*)&blk->qh[half_idx * 32 + idx * 4];
+                    uint32_t qh4 = (uint32_t)qh16[0] | ((uint32_t)qh16[1] << 16);
 
-                    float c0 = __low2float(bq0->ds) * d_sc0;
-                    float c1 = __low2float(bq1->ds) * d_sc1;
-                    float c2 = __low2float(bq2->ds) * d_sc2;
-                    float c3 = __low2float(bq3->ds) * d_sc3;
+                    uint32_t q_low4 = (ql4 >> ((group & 2) * 2)) & 0x0F0F0F0Fu;
+                    uint32_t q_high4 = ((qh4 >> (group * 2)) & 0x03030303u) << 4;
+                    uint32_t vx = (q_low4 | q_high4) ^ 0x20202020u;
+                    uint32_t vm = vx & 0x20202020u;
+                    v_signed[r] = (int)(vx | (vm << 1) | (vm << 2));
+                    d_sc[r] = d_arr[r] * (float)blk->scales[half_idx * 8 + group * 2 + (idx >> 2)];
+                } else {
+                    v_signed[r] = 0;
+                    d_sc[r] = 0.0f;
+                }
+            }
 
-                    int u0 = (int)bq0->qs[lane_id];
-                    int u1 = (int)bq1->qs[lane_id];
-                    int u2 = (int)bq2->qs[lane_id];
-                    int u3 = (int)bq3->qs[lane_id];
+            int bq_offset = b * 8 + half_idx * 4 + group;
 
-                    thread_dot[col] += c0 * (float)(q1 * u0) + c1 * (float)(q2 * u1) + c2 * (float)(q3 * u2) + c3 * (float)(q4 * u3);
+            if (BATCH_N >= 4 && (BATCH_N % 4 == 0)) {
+                #pragma unroll
+                for (int col_base = 0; col_base < BATCH_N; col_base += 4) {
+                    int load_col = (col_base + group < num_cols) ? (col_base + group) : 0;
+                    float my_d8 = __low2float(__ldg(&x_q8_1[(col_offset + load_col) * num_q8_blocks_per_col + b * 8 + half_idx * 4 + (idx & 3)].ds));
+                    #pragma unroll
+                    for (int c = 0; c < 4; ++c) {
+                        int col = col_base + c;
+                        float d8 = __shfl_sync(0xFFFFFFFF, my_d8, c * 8 + group);
+                        const BlockQ8_1_Gpu* bq = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + bq_offset];
+                        int u = __ldg(&((const int*)bq->qs)[idx]);
+                        #pragma unroll
+                        for (int r = 0; r < ROW_TILE; ++r) {
+                            int dot = __dp4a(v_signed[r], u, 0);
+                            thread_dot[r][col] += d_sc[r] * (d8 * (float)dot);
+                        }
+                    }
+                }
+            } else {
+                #pragma unroll
+                for (int col = 0; col < BATCH_N; ++col) {
+                    const BlockQ8_1_Gpu* bq = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + bq_offset];
+                    float d8 = __low2float(__ldg(&bq->ds));
+                    int u = __ldg(&((const int*)bq->qs)[idx]);
+                    #pragma unroll
+                    for (int r = 0; r < ROW_TILE; ++r) {
+                        int dot = __dp4a(v_signed[r], u, 0);
+                        thread_dot[r][col] += d_sc[r] * (d8 * (float)dot);
+                    }
                 }
             }
         }
     }
 
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        if (BATCH_N == 1 || col < num_cols) {
-            float val = thread_dot[col];
+    for (int r = 0; r < ROW_TILE; ++r) {
+        int row = base_row + r;
+        if (ROW_TILE == 1 || row < m) {
             #pragma unroll
-            for (int offset = 16; offset > 0; offset >>= 1) {
-                val += __shfl_down_sync(0xFFFFFFFF, val, offset);
-            }
+            for (int col = 0; col < BATCH_N; ++col) {
+                if (BATCH_N == 1 || col < num_cols) {
+                    float val = thread_dot[r][col];
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset >>= 1) {
+                        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+                    }
 
-            if (lane_id == 0) {
-                if (ADD_TO_Y) {
-                    y[(col_offset + col) * m + row] += val;
-                } else {
-                    y[(col_offset + col) * m + row] = val;
+                    if (lane_id == 0) {
+                        if (ADD_TO_Y) {
+                            y[(col_offset + col) * m + row] += val;
+                        } else {
+                            y[(col_offset + col) * m + row] = val;
+                        }
+                    }
                 }
             }
         }
@@ -945,8 +961,8 @@ __device__ __forceinline__ void get_scale_min_k4_from_regs(
  * Warp-Per-Row architecture: 0 shared memory, 0 __syncthreads(), independent warp execution.
  * 128-byte coalesced weight loads + hardware INT8 dot products.
  */
-template <int BATCH_N, int ADD_TO_Y = 0>
-__global__ void mmvq_q4_k_cuda_kernel(
+template <int BATCH_N, int ADD_TO_Y = 0, int WARPS_PER_ROW = 1, int ROW_TILE = 1>
+__global__ __launch_bounds__(256, (BATCH_N > 8 ? 2 : 4)) void mmvq_q4_k_cuda_kernel(
     float* __restrict__ y,
     const void* __restrict__ raw_blocks,
     const void* __restrict__ x_q8_1_raw,
@@ -954,19 +970,19 @@ __global__ void mmvq_q4_k_cuda_kernel(
     int k,
     int actual_batch = BATCH_N
 ) {
-    int row = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
-    if (row >= m) return;
+    int warp_id = threadIdx.x / 32;
+    int warps_per_block = blockDim.x / 32;
+    int base_row = (blockIdx.x * warps_per_block + warp_id) * ROW_TILE;
+    if (base_row >= m) return;
 
     int lane_id = threadIdx.x % 32;
     int num_blocks_per_row = k / 256;
     int num_q8_blocks_per_col = k / 32;
 
-    int batch_chunk = blockIdx.y;
-    int col_offset = batch_chunk * BATCH_N;
+    int col_offset = blockIdx.y * BATCH_N;
     int num_cols = (BATCH_N == 1) ? 1 : ((actual_batch > col_offset) ? ((actual_batch - col_offset < BATCH_N) ? (actual_batch - col_offset) : BATCH_N) : 0);
     if (num_cols <= 0) return;
 
-    const BlockQ4_K_Gpu* row_blocks = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 144);
     const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
     int chunk = lane_id / 8;
@@ -974,71 +990,125 @@ __global__ void mmvq_q4_k_cuda_kernel(
     int sub0 = 2 * chunk + 0;
     int sub1 = 2 * chunk + 1;
 
-    float thread_dot[BATCH_N];
+    float thread_dot[ROW_TILE][BATCH_N];
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        thread_dot[col] = 0.0f;
-    }
-
-    #pragma unroll 2
-    for (int b = 0; b < num_blocks_per_row; b++) {
-        const BlockQ4_K_Gpu* blk = &row_blocks[b];
-        uint4 hdr = ((const uint4*)blk)[0];
-        float d = __low2float(*((const half2*)&hdr.x));
-        float dmin = __high2float(*((const half2*)&hdr.x));
-
-        float sc0, min0, sc1, min1;
-        get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
-
-        float d_sc0 = d * sc0;
-        float d_sc1 = d * sc1;
-        float dm_min0 = dmin * min0;
-        float dm_min1 = dmin * min1;
-
-        int v = ((const int*)blk->qs)[lane_id];
-        int v0 = v & 0x0F0F0F0F;
-        int v1 = (v >> 4) & 0x0F0F0F0F;
-
+    for (int r = 0; r < ROW_TILE; ++r) {
         #pragma unroll
         for (int col = 0; col < BATCH_N; ++col) {
-            if (BATCH_N == 1 || col < num_cols) {
+            thread_dot[r][col] = 0.0f;
+        }
+    }
+
+    for (int b = 0; b < num_blocks_per_row; b++) {
+        float d_sc0[ROW_TILE];
+        float d_sc1[ROW_TILE];
+        float dm_min0[ROW_TILE];
+        float dm_min1[ROW_TILE];
+        int v_lo[ROW_TILE];
+        int v_hi[ROW_TILE];
+
+        #pragma unroll
+        for (int r = 0; r < ROW_TILE; ++r) {
+            int row = base_row + r;
+            if (ROW_TILE == 1 || row < m) {
+                const BlockQ4_K_Gpu* blk = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + ((size_t)row * num_blocks_per_row + b) * 144);
+                uint4 hdr = ((const uint4*)blk)[0];
+                float d = __low2float(*((const half2*)&hdr.x));
+                float dmin = __high2float(*((const half2*)&hdr.x)) * 0.125f;
+
+                float sc0, min0, sc1, min1;
+                get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
+
+                d_sc0[r] = d * sc0;
+                d_sc1[r] = d * sc1;
+                dm_min0[r] = dmin * min0;
+                dm_min1[r] = dmin * min1;
+
+                int v = ((const int*)blk->qs)[lane_id];
+                v_lo[r] = v & 0x0F0F0F0F;
+                v_hi[r] = (v >> 4) & 0x0F0F0F0F;
+            } else {
+                d_sc0[r] = 0.0f;
+                d_sc1[r] = 0.0f;
+                dm_min0[r] = 0.0f;
+                dm_min1[r] = 0.0f;
+                v_lo[r] = 0;
+                v_hi[r] = 0;
+            }
+        }
+
+        if (BATCH_N >= 4 && (BATCH_N % 4 == 0)) {
+            #pragma unroll
+            for (int col_base = 0; col_base < BATCH_N; col_base += 4) {
+                int load_col = (col_base + chunk < num_cols) ? (col_base + chunk) : 0;
+                float2 my_ds = __half22float2(__ldg(&x_q8_1[(col_offset + load_col) * num_q8_blocks_per_col + b * 8 + sub_idx].ds));
+                #pragma unroll
+                for (int c = 0; c < 4; ++c) {
+                    int col = col_base + c;
+                    float ds0_x = __shfl_sync(0xFFFFFFFF, my_ds.x, c * 8 + sub0);
+                    float ds0_y = __shfl_sync(0xFFFFFFFF, my_ds.y, c * 8 + sub0);
+                    float ds1_x = __shfl_sync(0xFFFFFFFF, my_ds.x, c * 8 + sub1);
+                    float ds1_y = __shfl_sync(0xFFFFFFFF, my_ds.y, c * 8 + sub1);
+
+                    const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
+                    int u0 = __ldg(&((const int*)bx[sub0].qs)[sub_idx]);
+                    int u1 = __ldg(&((const int*)bx[sub1].qs)[sub_idx]);
+
+                    #pragma unroll
+                    for (int r = 0; r < ROW_TILE; ++r) {
+                        int dot0 = __dp4a(v_lo[r], u0, 0);
+                        int dot1 = __dp4a(v_hi[r], u1, 0);
+
+                        thread_dot[r][col] += d_sc0[r] * (ds0_x * (float)dot0) - dm_min0[r] * ds0_y
+                                            + d_sc1[r] * (ds1_x * (float)dot1) - dm_min1[r] * ds1_y;
+                    }
+                }
+            }
+        } else {
+            #pragma unroll
+            for (int col = 0; col < BATCH_N; ++col) {
                 const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
                 const BlockQ8_1_Gpu* bq8_0 = &bx[sub0];
                 const BlockQ8_1_Gpu* bq8_1 = &bx[sub1];
 
-                float d8_0 = __low2float(bq8_0->ds);
-                float d8_1 = __low2float(bq8_1->ds);
+                float2 ds0 = __half22float2(__ldg(&bq8_0->ds));
+                float2 ds1 = __half22float2(__ldg(&bq8_1->ds));
 
-                int u0 = ((const int*)bq8_0->qs)[sub_idx];
-                int u1 = ((const int*)bq8_1->qs)[sub_idx];
+                int u0 = __ldg(&((const int*)bq8_0->qs)[sub_idx]);
+                int u1 = __ldg(&((const int*)bq8_1->qs)[sub_idx]);
 
-                int dot0 = __dp4a(v0, u0, 0);
-                int dot1 = __dp4a(v1, u1, 0);
-                int sum0 = __dp4a(0x01010101, u0, 0);
-                int sum1 = __dp4a(0x01010101, u1, 0);
+                #pragma unroll
+                for (int r = 0; r < ROW_TILE; ++r) {
+                    int dot0 = __dp4a(v_lo[r], u0, 0);
+                    int dot1 = __dp4a(v_hi[r], u1, 0);
 
-                float acc0 = d_sc0 * (float)dot0 - dm_min0 * (float)sum0;
-                float acc1 = d_sc1 * (float)dot1 - dm_min1 * (float)sum1;
-
-                thread_dot[col] += acc0 * d8_0 + acc1 * d8_1;
+                    thread_dot[r][col] += d_sc0[r] * (ds0.x * (float)dot0) - dm_min0[r] * ds0.y
+                                        + d_sc1[r] * (ds1.x * (float)dot1) - dm_min1[r] * ds1.y;
+                }
             }
         }
     }
 
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        if (BATCH_N == 1 || col < num_cols) {
-            float val = thread_dot[col];
+    for (int r = 0; r < ROW_TILE; ++r) {
+        int row = base_row + r;
+        if (ROW_TILE == 1 || row < m) {
             #pragma unroll
-            for (int offset = 16; offset > 0; offset >>= 1) {
-                val += __shfl_down_sync(0xFFFFFFFF, val, offset);
-            }
+            for (int col = 0; col < BATCH_N; ++col) {
+                if (BATCH_N == 1 || col < num_cols) {
+                    float val = thread_dot[r][col];
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset >>= 1) {
+                        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+                    }
 
-            if (lane_id == 0) {
-                if (ADD_TO_Y) {
-                    y[(col_offset + col) * m + row] += val;
-                } else {
-                    y[(col_offset + col) * m + row] = val;
+                    if (lane_id == 0) {
+                        if (ADD_TO_Y) {
+                            y[(col_offset + col) * m + row] += val;
+                        } else {
+                            y[(col_offset + col) * m + row] = val;
+                        }
+                    }
                 }
             }
         }
@@ -1048,8 +1118,8 @@ __global__ void mmvq_q4_k_cuda_kernel(
 /**
  * Grouped Multi-Column Q4_K Gate + Up MMVQ Kernel.
  */
-template <int BATCH_N>
-__global__ void mmvq_gate_up_q4_k_cuda_kernel(
+template <int BATCH_N, int WARPS_PER_ROW = 1, int ROW_TILE = 1>
+__global__ __launch_bounds__(256, (BATCH_N > 8 ? 2 : 4)) void mmvq_gate_up_q4_k_cuda_kernel(
     float* __restrict__ y_gate,
     float* __restrict__ y_up,
     const void* __restrict__ raw_w1,
@@ -1059,24 +1129,19 @@ __global__ void mmvq_gate_up_q4_k_cuda_kernel(
     int k,
     int actual_batch = BATCH_N
 ) {
-    int total_row = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
-    if (total_row >= 2 * inter_m) return;
+    int warp_id = threadIdx.x / 32;
+    int warps_per_block = blockDim.x / 32;
+    int base_total_row = (blockIdx.x * warps_per_block + warp_id) * ROW_TILE;
+    if (base_total_row >= 2 * inter_m) return;
 
-    int batch_chunk = blockIdx.y;
-    int col_offset = batch_chunk * BATCH_N;
+    int col_offset = blockIdx.y * BATCH_N;
     int num_cols = (BATCH_N == 1) ? 1 : ((actual_batch > col_offset) ? ((actual_batch - col_offset < BATCH_N) ? (actual_batch - col_offset) : BATCH_N) : 0);
     if (num_cols <= 0) return;
-
-    bool is_up = (total_row >= inter_m);
-    int row = is_up ? (total_row - inter_m) : total_row;
-    const void* raw_blocks = is_up ? raw_w3 : raw_w1;
-    float* y = is_up ? y_up : y_gate;
 
     int lane_id = threadIdx.x % 32;
     int num_blocks_per_row = k / 256;
     int num_q8_blocks_per_col = k / 32;
 
-    const BlockQ4_K_Gpu* row_blocks = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 144);
     const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
     int chunk = lane_id / 8;
@@ -1084,68 +1149,129 @@ __global__ void mmvq_gate_up_q4_k_cuda_kernel(
     int sub0 = 2 * chunk + 0;
     int sub1 = 2 * chunk + 1;
 
-    float thread_dot[BATCH_N];
+    float thread_dot[ROW_TILE][BATCH_N];
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        thread_dot[col] = 0.0f;
-    }
-
-    #pragma unroll 2
-    for (int b = 0; b < num_blocks_per_row; b++) {
-        const BlockQ4_K_Gpu* blk = &row_blocks[b];
-        uint4 hdr = ((const uint4*)blk)[0];
-        float d = __low2float(*((const half2*)&hdr.x));
-        float dmin = __high2float(*((const half2*)&hdr.x));
-
-        float sc0, min0, sc1, min1;
-        get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
-
-        float d_sc0 = d * sc0;
-        float d_sc1 = d * sc1;
-        float dm_min0 = dmin * min0;
-        float dm_min1 = dmin * min1;
-
-        int v = ((const int*)blk->qs)[lane_id];
-        int v0 = v & 0x0F0F0F0F;
-        int v1 = (v >> 4) & 0x0F0F0F0F;
-
+    for (int r = 0; r < ROW_TILE; ++r) {
         #pragma unroll
         for (int col = 0; col < BATCH_N; ++col) {
-            if (BATCH_N == 1 || col < num_cols) {
+            thread_dot[r][col] = 0.0f;
+        }
+    }
+
+    for (int b = 0; b < num_blocks_per_row; b++) {
+        float d_sc0[ROW_TILE];
+        float d_sc1[ROW_TILE];
+        float dm_min0[ROW_TILE];
+        float dm_min1[ROW_TILE];
+        int v_lo[ROW_TILE];
+        int v_hi[ROW_TILE];
+
+        #pragma unroll
+        for (int r = 0; r < ROW_TILE; ++r) {
+            int total_row = base_total_row + r;
+            if (ROW_TILE == 1 || total_row < 2 * inter_m) {
+                bool is_up = (total_row >= inter_m);
+                int row = is_up ? (total_row - inter_m) : total_row;
+                const void* raw_blocks = is_up ? raw_w3 : raw_w1;
+                const BlockQ4_K_Gpu* blk = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + ((size_t)row * num_blocks_per_row + b) * 144);
+                uint4 hdr = ((const uint4*)blk)[0];
+                float d = __low2float(*((const half2*)&hdr.x));
+                float dmin = __high2float(*((const half2*)&hdr.x)) * 0.125f;
+
+                float sc0, min0, sc1, min1;
+                get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
+
+                d_sc0[r] = d * sc0;
+                d_sc1[r] = d * sc1;
+                dm_min0[r] = dmin * min0;
+                dm_min1[r] = dmin * min1;
+
+                int v = ((const int*)blk->qs)[lane_id];
+                v_lo[r] = v & 0x0F0F0F0F;
+                v_hi[r] = (v >> 4) & 0x0F0F0F0F;
+            } else {
+                d_sc0[r] = 0.0f;
+                d_sc1[r] = 0.0f;
+                dm_min0[r] = 0.0f;
+                dm_min1[r] = 0.0f;
+                v_lo[r] = 0;
+                v_hi[r] = 0;
+            }
+        }
+
+        if (BATCH_N >= 4 && (BATCH_N % 4 == 0)) {
+            #pragma unroll
+            for (int col_base = 0; col_base < BATCH_N; col_base += 4) {
+                int load_col = (col_base + chunk < num_cols) ? (col_base + chunk) : 0;
+                float2 my_ds = __half22float2(__ldg(&x_q8_1[(col_offset + load_col) * num_q8_blocks_per_col + b * 8 + sub_idx].ds));
+                #pragma unroll
+                for (int c = 0; c < 4; ++c) {
+                    int col = col_base + c;
+                    float ds0_x = __shfl_sync(0xFFFFFFFF, my_ds.x, c * 8 + sub0);
+                    float ds0_y = __shfl_sync(0xFFFFFFFF, my_ds.y, c * 8 + sub0);
+                    float ds1_x = __shfl_sync(0xFFFFFFFF, my_ds.x, c * 8 + sub1);
+                    float ds1_y = __shfl_sync(0xFFFFFFFF, my_ds.y, c * 8 + sub1);
+
+                    const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
+                    int u0 = __ldg(&((const int*)bx[sub0].qs)[sub_idx]);
+                    int u1 = __ldg(&((const int*)bx[sub1].qs)[sub_idx]);
+
+                    #pragma unroll
+                    for (int r = 0; r < ROW_TILE; ++r) {
+                        int dot0 = __dp4a(v_lo[r], u0, 0);
+                        int dot1 = __dp4a(v_hi[r], u1, 0);
+
+                        thread_dot[r][col] += d_sc0[r] * (ds0_x * (float)dot0) - dm_min0[r] * ds0_y
+                                            + d_sc1[r] * (ds1_x * (float)dot1) - dm_min1[r] * ds1_y;
+                    }
+                }
+            }
+        } else {
+            #pragma unroll
+            for (int col = 0; col < BATCH_N; ++col) {
                 const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
                 const BlockQ8_1_Gpu* bq8_0 = &bx[sub0];
                 const BlockQ8_1_Gpu* bq8_1 = &bx[sub1];
 
-                float d8_0 = __low2float(bq8_0->ds);
-                float d8_1 = __low2float(bq8_1->ds);
+                float2 ds0 = __half22float2(__ldg(&bq8_0->ds));
+                float2 ds1 = __half22float2(__ldg(&bq8_1->ds));
 
-                int u0 = ((const int*)bq8_0->qs)[sub_idx];
-                int u1 = ((const int*)bq8_1->qs)[sub_idx];
+                int u0 = __ldg(&((const int*)bq8_0->qs)[sub_idx]);
+                int u1 = __ldg(&((const int*)bq8_1->qs)[sub_idx]);
 
-                int dot0 = __dp4a(v0, u0, 0);
-                int dot1 = __dp4a(v1, u1, 0);
-                int sum0 = __dp4a(0x01010101, u0, 0);
-                int sum1 = __dp4a(0x01010101, u1, 0);
+                #pragma unroll
+                for (int r = 0; r < ROW_TILE; ++r) {
+                    int dot0 = __dp4a(v_lo[r], u0, 0);
+                    int dot1 = __dp4a(v_hi[r], u1, 0);
 
-                float acc0 = d_sc0 * (float)dot0 - dm_min0 * (float)sum0;
-                float acc1 = d_sc1 * (float)dot1 - dm_min1 * (float)sum1;
-
-                thread_dot[col] += acc0 * d8_0 + acc1 * d8_1;
+                    thread_dot[r][col] += d_sc0[r] * (ds0.x * (float)dot0) - dm_min0[r] * ds0.y
+                                        + d_sc1[r] * (ds1.x * (float)dot1) - dm_min1[r] * ds1.y;
+                }
             }
         }
     }
 
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        if (BATCH_N == 1 || col < num_cols) {
-            float val = thread_dot[col];
-            #pragma unroll
-            for (int offset = 16; offset > 0; offset >>= 1) {
-                val += __shfl_down_sync(0xFFFFFFFF, val, offset);
-            }
+    for (int r = 0; r < ROW_TILE; ++r) {
+        int total_row = base_total_row + r;
+        if (ROW_TILE == 1 || total_row < 2 * inter_m) {
+            bool is_up = (total_row >= inter_m);
+            int row = is_up ? (total_row - inter_m) : total_row;
+            float* y = is_up ? y_up : y_gate;
 
-            if (lane_id == 0) {
-                y[(col_offset + col) * inter_m + row] = val;
+            #pragma unroll
+            for (int col = 0; col < BATCH_N; ++col) {
+                if (BATCH_N == 1 || col < num_cols) {
+                    float val = thread_dot[r][col];
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset >>= 1) {
+                        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+                    }
+
+                    if (lane_id == 0) {
+                        y[(col_offset + col) * inter_m + row] = val;
+                    }
+                }
             }
         }
     }
@@ -1156,8 +1282,8 @@ __global__ void mmvq_gate_up_q4_k_cuda_kernel(
  * Supports Q (Q4_K), K (Q4_K), and V (Q4_K when V_QUANT == 1, or Q6_K when V_QUANT == 2)
  * in a single kernel launch, and optionally writes V directly to the FP16 KV cache.
  */
-template <int BATCH_N, int V_QUANT>
-__global__ void mmvq_qkv_mixed_cuda_kernel(
+template <int BATCH_N, int V_QUANT, int WARPS_PER_ROW = 1, int ROW_TILE = 1>
+__global__ __launch_bounds__(256, (BATCH_N > 8 ? 2 : 4)) void mmvq_qkv_mixed_cuda_kernel(
     float* __restrict__ y_q,
     float* __restrict__ y_k,
     float* __restrict__ y_v,
@@ -1172,12 +1298,13 @@ __global__ void mmvq_qkv_mixed_cuda_kernel(
     int k,
     int actual_batch = BATCH_N
 ) {
-    int total_row = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+    int warp_id = threadIdx.x / 32;
+    int warps_per_block = blockDim.x / 32;
+    int base_total_row = (blockIdx.x * warps_per_block + warp_id) * ROW_TILE;
     int total_m = q_m + 2 * kv_m;
-    if (total_row >= total_m) return;
+    if (base_total_row >= total_m) return;
 
-    int batch_chunk = blockIdx.y;
-    int col_offset = batch_chunk * BATCH_N;
+    int col_offset = blockIdx.y * BATCH_N;
     int num_cols = (BATCH_N == 1) ? 1 : ((actual_batch > col_offset) ? ((actual_batch - col_offset < BATCH_N) ? (actual_batch - col_offset) : BATCH_N) : 0);
     if (num_cols <= 0) return;
 
@@ -1187,18 +1314,18 @@ __global__ void mmvq_qkv_mixed_cuda_kernel(
     float* y;
     bool is_v = false;
 
-    if (total_row < q_m) {
-        row = total_row;
+    if (base_total_row < q_m) {
+        row = base_total_row;
         out_stride = q_m;
         raw_blocks = raw_wq;
         y = y_q;
-    } else if (total_row < q_m + kv_m) {
-        row = total_row - q_m;
+    } else if (base_total_row < q_m + kv_m) {
+        row = base_total_row - q_m;
         out_stride = kv_m;
         raw_blocks = raw_wk;
         y = y_k;
     } else {
-        row = total_row - q_m - kv_m;
+        row = base_total_row - q_m - kv_m;
         out_stride = kv_m;
         raw_blocks = raw_wv;
         y = y_v;
@@ -1210,135 +1337,187 @@ __global__ void mmvq_qkv_mixed_cuda_kernel(
     int num_q8_blocks_per_col = k / 32;
     const BlockQ8_1_Gpu* x_q8_1 = (const BlockQ8_1_Gpu*)x_q8_1_raw;
 
-    float thread_dot[BATCH_N];
+    float thread_dot[ROW_TILE][BATCH_N];
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        thread_dot[col] = 0.0f;
+    for (int r = 0; r < ROW_TILE; ++r) {
+        #pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+            thread_dot[r][col] = 0.0f;
+        }
     }
 
     if (!is_v || V_QUANT == 1) {
-        const BlockQ4_K_Gpu* row_blocks = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 144);
         int chunk = lane_id / 8;
         int sub_idx = lane_id % 8;
         int sub0 = 2 * chunk + 0;
         int sub1 = 2 * chunk + 1;
 
-        #pragma unroll 2
         for (int b = 0; b < num_blocks_per_row; b++) {
-            const BlockQ4_K_Gpu* blk = &row_blocks[b];
-            uint4 hdr = ((const uint4*)blk)[0];
-            float d = __low2float(*((const half2*)&hdr.x));
-            float dmin = __high2float(*((const half2*)&hdr.x));
-
-            float sc0, min0, sc1, min1;
-            get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
-
-            float d_sc0 = d * sc0;
-            float d_sc1 = d * sc1;
-            float dm_min0 = dmin * min0;
-            float dm_min1 = dmin * min1;
-
-            int v = ((const int*)blk->qs)[lane_id];
-            int v0 = v & 0x0F0F0F0F;
-            int v1 = (v >> 4) & 0x0F0F0F0F;
+            float d_sc0[ROW_TILE];
+            float d_sc1[ROW_TILE];
+            float dm_min0[ROW_TILE];
+            float dm_min1[ROW_TILE];
+            int v_lo[ROW_TILE];
+            int v_hi[ROW_TILE];
 
             #pragma unroll
-            for (int col = 0; col < BATCH_N; ++col) {
-                if (BATCH_N == 1 || col < num_cols) {
+            for (int r = 0; r < ROW_TILE; ++r) {
+                int r_idx = row + r;
+                if (ROW_TILE == 1 || r_idx < out_stride) {
+                    const BlockQ4_K_Gpu* blk = (const BlockQ4_K_Gpu*)((const uint8_t*)raw_blocks + ((size_t)r_idx * num_blocks_per_row + b) * 144);
+                    uint4 hdr = ((const uint4*)blk)[0];
+                    float d = __low2float(*((const half2*)&hdr.x));
+                    float dmin = __high2float(*((const half2*)&hdr.x)) * 0.125f;
+
+                    float sc0, min0, sc1, min1;
+                    get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
+
+                    d_sc0[r] = d * sc0;
+                    d_sc1[r] = d * sc1;
+                    dm_min0[r] = dmin * min0;
+                    dm_min1[r] = dmin * min1;
+
+                    int v = ((const int*)blk->qs)[lane_id];
+                    v_lo[r] = v & 0x0F0F0F0F;
+                    v_hi[r] = (v >> 4) & 0x0F0F0F0F;
+                } else {
+                    d_sc0[r] = 0.0f;
+                    d_sc1[r] = 0.0f;
+                    dm_min0[r] = 0.0f;
+                    dm_min1[r] = 0.0f;
+                    v_lo[r] = 0;
+                    v_hi[r] = 0;
+                }
+            }
+
+            if (BATCH_N >= 4 && (BATCH_N % 4 == 0)) {
+                #pragma unroll
+                for (int col_base = 0; col_base < BATCH_N; col_base += 4) {
+                    int load_col = (col_base + chunk < num_cols) ? (col_base + chunk) : 0;
+                    float2 my_ds = __half22float2(__ldg(&x_q8_1[(col_offset + load_col) * num_q8_blocks_per_col + b * 8 + sub_idx].ds));
+                    #pragma unroll
+                    for (int c = 0; c < 4; ++c) {
+                        int col = col_base + c;
+                        float ds0_x = __shfl_sync(0xFFFFFFFF, my_ds.x, c * 8 + sub0);
+                        float ds0_y = __shfl_sync(0xFFFFFFFF, my_ds.y, c * 8 + sub0);
+                        float ds1_x = __shfl_sync(0xFFFFFFFF, my_ds.x, c * 8 + sub1);
+                        float ds1_y = __shfl_sync(0xFFFFFFFF, my_ds.y, c * 8 + sub1);
+
+                        const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
+                        int u0 = __ldg(&((const int*)bx[sub0].qs)[sub_idx]);
+                        int u1 = __ldg(&((const int*)bx[sub1].qs)[sub_idx]);
+
+                        #pragma unroll
+                        for (int r = 0; r < ROW_TILE; ++r) {
+                            int dot0 = __dp4a(v_lo[r], u0, 0);
+                            int dot1 = __dp4a(v_hi[r], u1, 0);
+
+                            thread_dot[r][col] += d_sc0[r] * (ds0_x * (float)dot0) - dm_min0[r] * ds0_y
+                                                + d_sc1[r] * (ds1_x * (float)dot1) - dm_min1[r] * ds1_y;
+                        }
+                    }
+                }
+            } else {
+                #pragma unroll
+                for (int col = 0; col < BATCH_N; ++col) {
                     const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
                     const BlockQ8_1_Gpu* bq8_0 = &bx[sub0];
                     const BlockQ8_1_Gpu* bq8_1 = &bx[sub1];
 
-                    float d8_0 = __low2float(bq8_0->ds);
-                    float d8_1 = __low2float(bq8_1->ds);
+                    float2 ds0 = __half22float2(__ldg(&bq8_0->ds));
+                    float2 ds1 = __half22float2(__ldg(&bq8_1->ds));
 
-                    int u0 = ((const int*)bq8_0->qs)[sub_idx];
-                    int u1 = ((const int*)bq8_1->qs)[sub_idx];
+                    int u0 = __ldg(&((const int*)bq8_0->qs)[sub_idx]);
+                    int u1 = __ldg(&((const int*)bq8_1->qs)[sub_idx]);
 
-                    int dot0 = __dp4a(v0, u0, 0);
-                    int dot1 = __dp4a(v1, u1, 0);
-                    int sum0 = __dp4a(0x01010101, u0, 0);
-                    int sum1 = __dp4a(0x01010101, u1, 0);
+                    #pragma unroll
+                    for (int r = 0; r < ROW_TILE; ++r) {
+                        int dot0 = __dp4a(v_lo[r], u0, 0);
+                        int dot1 = __dp4a(v_hi[r], u1, 0);
 
-                    float acc0 = d_sc0 * (float)dot0 - dm_min0 * (float)sum0;
-                    float acc1 = d_sc1 * (float)dot1 - dm_min1 * (float)sum1;
-
-                    thread_dot[col] += acc0 * d8_0 + acc1 * d8_1;
+                        thread_dot[r][col] += d_sc0[r] * (ds0.x * (float)dot0) - dm_min0[r] * ds0.y
+                                            + d_sc1[r] * (ds1.x * (float)dot1) - dm_min1[r] * ds1.y;
+                    }
                 }
             }
         }
     } else {
-        const BlockQ6_K_Gpu* row_blocks = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + (size_t)row * num_blocks_per_row * 210);
-        int is = lane_id / 16;
+        int group = lane_id / 8;
+        int idx = lane_id % 8;
 
-        #pragma unroll 2
         for (int b = 0; b < num_blocks_per_row; ++b) {
-            const BlockQ6_K_Gpu* blk = &row_blocks[b];
-            float d;
-            if (lane_id == 0) {
-                d = __half2float(*((const half*)&blk->d));
+            float d_arr[ROW_TILE];
+            #pragma unroll
+            for (int r = 0; r < ROW_TILE; ++r) {
+                int r_idx = row + r;
+                if (ROW_TILE == 1 || r_idx < out_stride) {
+                    const BlockQ6_K_Gpu* blk = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + ((size_t)r_idx * num_blocks_per_row + b) * 210);
+                    float d;
+                    if (lane_id == 0) {
+                        d = __half2float(*((const half*)&blk->d));
+                    }
+                    d_arr[r] = __shfl_sync(0xFFFFFFFF, d, 0);
+                }
             }
-            d = __shfl_sync(0xFFFFFFFF, d, 0);
 
             #pragma unroll
             for (int half_idx = 0; half_idx < 2; half_idx++) {
-                int ql_offset = half_idx * 64;
-                int qh_offset = half_idx * 32;
-                int sc_offset = half_idx * 8;
-
-                uint8_t qh_byte = blk->qh[qh_offset + lane_id];
-                uint8_t ql0 = blk->ql[ql_offset + lane_id];
-                uint8_t ql32 = blk->ql[ql_offset + lane_id + 32];
-
-                int q1 = (int)((ql0 & 0x0F) | (((qh_byte >> 0) & 3) << 4)) - 32;
-                int q2 = (int)((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) - 32;
-                int q3 = (int)((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) - 32;
-                int q4 = (int)((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) - 32;
-
-                uint32_t my_w = 0;
-                if (lane_id == 0) {
-                    uint16_t p0 = *((const uint16_t*)&blk->scales[sc_offset + 0]);
-                    uint16_t p1 = *((const uint16_t*)&blk->scales[sc_offset + 2]);
-                    my_w = (uint32_t)p0 | ((uint32_t)p1 << 16);
-                } else if (lane_id == 1) {
-                    uint16_t p2 = *((const uint16_t*)&blk->scales[sc_offset + 4]);
-                    uint16_t p3 = *((const uint16_t*)&blk->scales[sc_offset + 6]);
-                    my_w = (uint32_t)p2 | ((uint32_t)p3 << 16);
-                }
-                uint32_t w0 = __shfl_sync(0xFFFFFFFF, my_w, 0);
-                uint32_t w1 = __shfl_sync(0xFFFFFFFF, my_w, 1);
-
-                int shift = is * 8;
-                float sc0 = (float)(int8_t)((w0 >> (shift + 0)) & 0xFF);
-                float sc1 = (float)(int8_t)((w0 >> (shift + 16)) & 0xFF);
-                float sc2 = (float)(int8_t)((w1 >> (shift + 0)) & 0xFF);
-                float sc3 = (float)(int8_t)((w1 >> (shift + 16)) & 0xFF);
-
-                float d_sc0 = d * sc0;
-                float d_sc1 = d * sc1;
-                float d_sc2 = d * sc2;
-                float d_sc3 = d * sc3;
+                int v_signed[ROW_TILE];
+                float d_sc[ROW_TILE];
 
                 #pragma unroll
-                for (int col = 0; col < BATCH_N; ++col) {
-                    if (BATCH_N == 1 || col < num_cols) {
-                        const BlockQ8_1_Gpu* bx = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
-                        const BlockQ8_1_Gpu* bq0 = &bx[half_idx * 4 + 0];
-                        const BlockQ8_1_Gpu* bq1 = &bx[half_idx * 4 + 1];
-                        const BlockQ8_1_Gpu* bq2 = &bx[half_idx * 4 + 2];
-                        const BlockQ8_1_Gpu* bq3 = &bx[half_idx * 4 + 3];
+                for (int r = 0; r < ROW_TILE; ++r) {
+                    int r_idx = row + r;
+                    if (ROW_TILE == 1 || r_idx < out_stride) {
+                        const BlockQ6_K_Gpu* blk = (const BlockQ6_K_Gpu*)((const uint8_t*)raw_blocks + ((size_t)r_idx * num_blocks_per_row + b) * 210);
+                        const uint16_t* ql16 = (const uint16_t*)&blk->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
+                        uint32_t ql4 = (uint32_t)ql16[0] | ((uint32_t)ql16[1] << 16);
+                        const uint16_t* qh16 = (const uint16_t*)&blk->qh[half_idx * 32 + idx * 4];
+                        uint32_t qh4 = (uint32_t)qh16[0] | ((uint32_t)qh16[1] << 16);
 
-                        float c0 = __low2float(bq0->ds) * d_sc0;
-                        float c1 = __low2float(bq1->ds) * d_sc1;
-                        float c2 = __low2float(bq2->ds) * d_sc2;
-                        float c3 = __low2float(bq3->ds) * d_sc3;
+                        uint32_t q_low4 = (ql4 >> ((group & 2) * 2)) & 0x0F0F0F0Fu;
+                        uint32_t q_high4 = ((qh4 >> (group * 2)) & 0x03030303u) << 4;
+                        uint32_t vx = (q_low4 | q_high4) ^ 0x20202020u;
+                        uint32_t vm = vx & 0x20202020u;
+                        v_signed[r] = (int)(vx | (vm << 1) | (vm << 2));
+                        d_sc[r] = d_arr[r] * (float)blk->scales[half_idx * 8 + group * 2 + (idx >> 2)];
+                    } else {
+                        v_signed[r] = 0;
+                        d_sc[r] = 0.0f;
+                    }
+                }
 
-                        int u0 = (int)bq0->qs[lane_id];
-                        int u1 = (int)bq1->qs[lane_id];
-                        int u2 = (int)bq2->qs[lane_id];
-                        int u3 = (int)bq3->qs[lane_id];
+                int bq_offset = b * 8 + half_idx * 4 + group;
 
-                        thread_dot[col] += c0 * (float)(q1 * u0) + c1 * (float)(q2 * u1) + c2 * (float)(q3 * u2) + c3 * (float)(q4 * u3);
+                if (BATCH_N >= 4 && (BATCH_N % 4 == 0)) {
+                    #pragma unroll
+                    for (int col_base = 0; col_base < BATCH_N; col_base += 4) {
+                        int load_col = (col_base + group < num_cols) ? (col_base + group) : 0;
+                        float my_d8 = __low2float(__ldg(&x_q8_1[(col_offset + load_col) * num_q8_blocks_per_col + b * 8 + half_idx * 4 + (idx & 3)].ds));
+                        #pragma unroll
+                        for (int c = 0; c < 4; ++c) {
+                            int col = col_base + c;
+                            float d8 = __shfl_sync(0xFFFFFFFF, my_d8, c * 8 + group);
+                            const BlockQ8_1_Gpu* bq = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + bq_offset];
+                            int u = __ldg(&((const int*)bq->qs)[idx]);
+                            #pragma unroll
+                            for (int r = 0; r < ROW_TILE; ++r) {
+                                int dot = __dp4a(v_signed[r], u, 0);
+                                thread_dot[r][col] += d_sc[r] * (d8 * (float)dot);
+                            }
+                        }
+                    }
+                } else {
+                    #pragma unroll
+                    for (int col = 0; col < BATCH_N; ++col) {
+                        const BlockQ8_1_Gpu* bq = &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + bq_offset];
+                        float d8 = __low2float(__ldg(&bq->ds));
+                        int u = __ldg(&((const int*)bq->qs)[idx]);
+                        #pragma unroll
+                        for (int r = 0; r < ROW_TILE; ++r) {
+                            int dot = __dp4a(v_signed[r], u, 0);
+                            thread_dot[r][col] += d_sc[r] * (d8 * (float)dot);
+                        }
                     }
                 }
             }
@@ -1346,20 +1525,26 @@ __global__ void mmvq_qkv_mixed_cuda_kernel(
     }
 
     #pragma unroll
-    for (int col = 0; col < BATCH_N; ++col) {
-        if (BATCH_N == 1 || col < num_cols) {
-            float val = thread_dot[col];
+    for (int r = 0; r < ROW_TILE; ++r) {
+        int r_idx = row + r;
+        if (ROW_TILE == 1 || r_idx < out_stride) {
             #pragma unroll
-            for (int offset = 16; offset > 0; offset >>= 1) {
-                val += __shfl_down_sync(0xFFFFFFFF, val, offset);
-            }
+            for (int col = 0; col < BATCH_N; ++col) {
+                if (BATCH_N == 1 || col < num_cols) {
+                    float val = thread_dot[r][col];
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset >>= 1) {
+                        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+                    }
 
-            if (lane_id == 0) {
-                if (y != nullptr) {
-                    y[(col_offset + col) * out_stride + row] = val;
-                }
-                if (is_v && v_cache_fp16 != nullptr) {
-                    ((__half*)v_cache_fp16)[(size_t)(start_pos + col_offset + col) * kv_m + row] = __float2half(val);
+                    if (lane_id == 0) {
+                        if (y != nullptr) {
+                            y[(col_offset + col) * out_stride + r_idx] = val;
+                        }
+                        if (is_v && v_cache_fp16 != nullptr) {
+                            ((__half*)v_cache_fp16)[(size_t)(start_pos + col_offset + col) * kv_m + r_idx] = __float2half(val);
+                        }
+                    }
                 }
             }
         }
@@ -2457,10 +2642,74 @@ int launch_cuda_mmvq_q8_0(
     get_gemv_launch_dims(m, grid, block);
     if (batch_size == 1) {
         mmvq_q8_0_cuda_kernel<1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
-    } else {
-        int num_chunks = (batch_size + 7) / 8;
-        dim3 grid_2d(grid, num_chunks);
+    } else if (batch_size <= 2) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 4) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 6) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<6><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 8) {
+        dim3 grid_2d(grid, 1);
         mmvq_q8_0_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 16) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<16><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 20) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<20><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 24) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<24><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else {
+        int num_chunks = (batch_size + 15) / 16;
+        dim3 grid_2d(grid, num_chunks);
+        mmvq_q8_0_cuda_kernel<16><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    }
+    return cudaGetLastError();
+}
+
+int launch_cuda_mmvq_q8_0_fused_add(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0 || batch_size <= 0) return 0;
+    int grid, block;
+    get_gemv_launch_dims(m, grid, block);
+    if (batch_size == 1) {
+        mmvq_q8_0_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
+    } else if (batch_size <= 2) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<2, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 4) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<4, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 6) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<6, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 8) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 16) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<16, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 20) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<20, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 24) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q8_0_cuda_kernel<24, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else {
+        int num_chunks = (batch_size + 15) / 16;
+        dim3 grid_2d(grid, num_chunks);
+        mmvq_q8_0_cuda_kernel<16, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
     }
     return cudaGetLastError();
 }
@@ -2484,11 +2733,7 @@ int launch_cuda_gemv_q8_0_fused_add(
     int k,
     cudaStream_t stream
 ) {
-    if (m <= 0 || k <= 0) return 0;
-    int grid, block;
-    get_gemv_launch_dims(m, grid, block);
-    mmvq_q8_0_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
-    return cudaGetLastError();
+    return launch_cuda_mmvq_q8_0_fused_add(y, raw_blocks, x_q8_1, m, k, 1, stream);
 }
 
 int launch_cuda_mmvq_q6_k(
@@ -2505,10 +2750,74 @@ int launch_cuda_mmvq_q6_k(
     get_gemv_launch_dims(m, grid, block);
     if (batch_size == 1) {
         mmvq_q6_k_cuda_kernel<1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
-    } else {
-        int num_chunks = (batch_size + 7) / 8;
-        dim3 grid_2d(grid, num_chunks);
+    } else if (batch_size <= 2) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q6_k_cuda_kernel<2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 4) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q6_k_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 6) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q6_k_cuda_kernel<6><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 8) {
+        dim3 grid_2d(grid, 1);
         mmvq_q6_k_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 16) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q6_k_cuda_kernel<16, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 20) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q6_k_cuda_kernel<20, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 24) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q6_k_cuda_kernel<24, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else {
+        int num_chunks = (batch_size + 15) / 16;
+        dim3 grid_2d((grid + 1) / 2, num_chunks);
+        mmvq_q6_k_cuda_kernel<16, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    }
+    return cudaGetLastError();
+}
+
+int launch_cuda_mmvq_q6_k_fused_add(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0 || batch_size <= 0) return 0;
+    int grid, block;
+    get_gemv_launch_dims(m, grid, block);
+    if (batch_size == 1) {
+        mmvq_q6_k_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
+    } else if (batch_size <= 2) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q6_k_cuda_kernel<2, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 4) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q6_k_cuda_kernel<4, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 6) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q6_k_cuda_kernel<6, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 8) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q6_k_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 16) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q6_k_cuda_kernel<16, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 20) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q6_k_cuda_kernel<20, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 24) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q6_k_cuda_kernel<24, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
+    } else {
+        int num_chunks = (batch_size + 15) / 16;
+        dim3 grid_2d((grid + 1) / 2, num_chunks);
+        mmvq_q6_k_cuda_kernel<16, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, batch_size);
     }
     return cudaGetLastError();
 }
@@ -2532,11 +2841,7 @@ int launch_cuda_gemv_q6_k_fused_add(
     int k,
     cudaStream_t stream
 ) {
-    if (m <= 0 || k <= 0) return 0;
-    int grid, block;
-    get_gemv_launch_dims(m, grid, block);
-    mmvq_q6_k_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1);
-    return cudaGetLastError();
+    return launch_cuda_mmvq_q6_k_fused_add(y, raw_blocks, x_q8_1, m, k, 1, stream);
 }
 
 int launch_cuda_mmvq_q4_k(
@@ -2553,10 +2858,74 @@ int launch_cuda_mmvq_q4_k(
     get_gemv_launch_dims(m, grid, block);
     if (batch_size == 1) {
         mmvq_q4_k_cuda_kernel<1><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, 1);
-    } else {
-        int num_chunks = (batch_size + 7) / 8;
-        dim3 grid_2d(grid, num_chunks);
+    } else if (batch_size <= 2) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q4_k_cuda_kernel<2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 4) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q4_k_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 6) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q4_k_cuda_kernel<6><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 8) {
+        dim3 grid_2d(grid, 1);
         mmvq_q4_k_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 16) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q4_k_cuda_kernel<16, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 20) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q4_k_cuda_kernel<20, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 24) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q4_k_cuda_kernel<24, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else {
+        int num_chunks = (batch_size + 15) / 16;
+        dim3 grid_2d((grid + 1) / 2, num_chunks);
+        mmvq_q4_k_cuda_kernel<16, 0, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    }
+    return cudaGetLastError();
+}
+
+int launch_cuda_mmvq_q4_k_fused_add(
+    float* y,
+    const void* raw_blocks,
+    const void* x_q8_1,
+    int m,
+    int k,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (m <= 0 || k <= 0 || batch_size <= 0) return 0;
+    int grid, block;
+    get_gemv_launch_dims(m, grid, block);
+    if (batch_size == 1) {
+        mmvq_q4_k_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, 1);
+    } else if (batch_size <= 2) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q4_k_cuda_kernel<2, 1><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 4) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q4_k_cuda_kernel<4, 1><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 6) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q4_k_cuda_kernel<6, 1><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 8) {
+        dim3 grid_2d(grid, 1);
+        mmvq_q4_k_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 16) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q4_k_cuda_kernel<16, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 20) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q4_k_cuda_kernel<20, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else if (batch_size <= 24) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_q4_k_cuda_kernel<24, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
+    } else {
+        int num_chunks = (batch_size + 15) / 16;
+        dim3 grid_2d((grid + 1) / 2, num_chunks);
+        mmvq_q4_k_cuda_kernel<16, 1, 1, 2><<<grid_2d, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, batch_size);
     }
     return cudaGetLastError();
 }
@@ -2580,10 +2949,70 @@ int launch_cuda_gemv_q4_k_fused_add(
     int k,
     cudaStream_t stream
 ) {
-    if (m <= 0 || k <= 0) return 0;
+    return launch_cuda_mmvq_q4_k_fused_add(y, raw_blocks, x_q8_1, m, k, 1, stream);
+}
+
+int launch_cuda_mmvq_gate_up_q4_k(
+    float* y_gate,
+    float* y_up,
+    const void* raw_w1,
+    const void* raw_w3,
+    const void* x_q8_1,
+    int inter_m,
+    int k,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (inter_m <= 0 || k <= 0 || batch_size <= 0) return 0;
+    int total_m = 2 * inter_m;
     int grid, block;
-    get_gemv_launch_dims(m, grid, block);
-    mmvq_q4_k_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(y, (const uint8_t*)raw_blocks, x_q8_1, m, k, 1);
+    get_gemv_launch_dims(total_m, grid, block);
+    if (batch_size == 1) {
+        gemv_gate_up_q4_k_cuda_kernel<<<grid, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k
+        );
+    } else if (batch_size <= 2) {
+        dim3 grid_2d(grid, 1);
+        mmvq_gate_up_q4_k_cuda_kernel<2><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    } else if (batch_size <= 4) {
+        dim3 grid_2d(grid, 1);
+        mmvq_gate_up_q4_k_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    } else if (batch_size <= 6) {
+        dim3 grid_2d(grid, 1);
+        mmvq_gate_up_q4_k_cuda_kernel<6><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    } else if (batch_size <= 8) {
+        dim3 grid_2d(grid, 1);
+        mmvq_gate_up_q4_k_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    } else if (batch_size <= 16) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_gate_up_q4_k_cuda_kernel<16, 1, 2><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    } else if (batch_size <= 20) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_gate_up_q4_k_cuda_kernel<20, 1, 2><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    } else if (batch_size <= 24) {
+        dim3 grid_2d((grid + 1) / 2, 1);
+        mmvq_gate_up_q4_k_cuda_kernel<24, 1, 2><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    } else {
+        int num_chunks = (batch_size + 15) / 16;
+        dim3 grid_2d((grid + 1) / 2, num_chunks);
+        mmvq_gate_up_q4_k_cuda_kernel<16, 1, 2><<<grid_2d, block, 0, stream>>>(
+            y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size
+        );
+    }
     return cudaGetLastError();
 }
 
@@ -2597,13 +3026,126 @@ int launch_cuda_gemv_gate_up_q4_k(
     int k,
     cudaStream_t stream
 ) {
-    if (inter_m <= 0 || k <= 0) return 0;
-    int total_m = 2 * inter_m;
+    return launch_cuda_mmvq_gate_up_q4_k(y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, 1, stream);
+}
+
+int launch_cuda_mmvq_qkv_mixed(
+    float* y_q,
+    float* y_k,
+    float* y_v,
+    void* v_cache_fp16,
+    int start_pos,
+    const void* raw_wq,
+    const void* raw_wk,
+    const void* raw_wv,
+    const void* x_q8_1,
+    int q_m,
+    int kv_m,
+    int k,
+    int v_quant,
+    int batch_size,
+    cudaStream_t stream
+) {
+    if (q_m <= 0 || kv_m <= 0 || k <= 0 || batch_size <= 0) return 0;
+    int total_m = q_m + 2 * kv_m;
     int grid, block;
     get_gemv_launch_dims(total_m, grid, block);
-    gemv_gate_up_q4_k_cuda_kernel<<<grid, block, 0, stream>>>(
-        y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k
-    );
+
+    if (v_quant == 1) {
+        if (batch_size == 1) {
+            mmvq_qkv_mixed_cuda_kernel<1, 1><<<grid, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, 1
+            );
+        } else if (batch_size <= 2) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<2, 1><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 4) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<4, 1><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 6) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<6, 1><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 8) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 16) {
+            dim3 grid_2d((grid + 1) / 2, 1);
+            mmvq_qkv_mixed_cuda_kernel<16, 1, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 20) {
+            dim3 grid_2d((grid + 1) / 2, 1);
+            mmvq_qkv_mixed_cuda_kernel<20, 1, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 24) {
+            dim3 grid_2d((grid + 1) / 2, 1);
+            mmvq_qkv_mixed_cuda_kernel<24, 1, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else {
+            int num_chunks = (batch_size + 15) / 16;
+            dim3 grid_2d((grid + 1) / 2, num_chunks);
+            mmvq_qkv_mixed_cuda_kernel<16, 1, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        }
+    } else {
+        if (batch_size == 1) {
+            mmvq_qkv_mixed_cuda_kernel<1, 2><<<grid, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, 1
+            );
+        } else if (batch_size <= 2) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<2, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 4) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<4, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 6) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<6, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 8) {
+            dim3 grid_2d(grid, 1);
+            mmvq_qkv_mixed_cuda_kernel<8, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 16) {
+            dim3 grid_2d((grid + 1) / 2, 1);
+            mmvq_qkv_mixed_cuda_kernel<16, 2, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 20) {
+            dim3 grid_2d((grid + 1) / 2, 1);
+            mmvq_qkv_mixed_cuda_kernel<20, 2, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else if (batch_size <= 24) {
+            dim3 grid_2d((grid + 1) / 2, 1);
+            mmvq_qkv_mixed_cuda_kernel<24, 2, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        } else {
+            int num_chunks = (batch_size + 15) / 16;
+            dim3 grid_2d((grid + 1) / 2, num_chunks);
+            mmvq_qkv_mixed_cuda_kernel<16, 2, 1, 2><<<grid_2d, block, 0, stream>>>(
+                y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m, k, batch_size
+            );
+        }
+    }
     return cudaGetLastError();
 }
 
@@ -2982,6 +3524,120 @@ __global__ void qk_norm_f32_kernel(
     }
 }
 
+/**
+ * Fused Per-Head QK-Norm + RoPE + Direct FP16 K-Cache Write Kernel.
+ * 1 warp (32 threads) per head, 0 shared memory, 0 __syncthreads().
+ * Grid: dim3(num_heads + num_kv_heads, batch_size), Block: 32.
+ */
+__global__ void fused_qknorm_rope_batch_kernel(
+    float* __restrict__ q,
+    float* __restrict__ k,
+    const float* __restrict__ q_norm_weight,
+    const float* __restrict__ k_norm_weight,
+    void* __restrict__ k_cache,
+    int start_pos,
+    int batch_size,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    float eps,
+    float theta,
+    int is_fp16,
+    float scaling_factor,
+    int orig_ctx
+) {
+    int total_head = blockIdx.x;
+    int b = blockIdx.y;
+    if (b >= batch_size || total_head >= (num_heads + num_kv_heads)) return;
+
+    int lane_id = threadIdx.x;
+    bool is_k = (total_head >= num_heads);
+    int head_idx = is_k ? (total_head - num_heads) : total_head;
+    int stride_heads = is_k ? num_kv_heads : num_heads;
+    float* base_ptr = is_k ? k : q;
+    if (base_ptr == nullptr) return;
+
+    float* head_vec = base_ptr + ((size_t)b * stride_heads + head_idx) * head_dim;
+    const float* norm_w = is_k ? k_norm_weight : q_norm_weight;
+
+    float inv_rms = 1.0f;
+    if (norm_w != nullptr) {
+        float sum_sq = 0.0f;
+        for (int i = lane_id; i < head_dim; i += 32) {
+            float v = head_vec[i];
+            sum_sq += v * v;
+        }
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum_sq += __shfl_xor_sync(0xFFFFFFFF, sum_sq, offset);
+        }
+        inv_rms = rsqrtf((sum_sq / (float)head_dim) + eps);
+    }
+
+    int half_dim = head_dim / 2;
+    int token_pos = start_pos + b;
+
+    for (int d = lane_id; d < half_dim; d += 32) {
+        float v0 = head_vec[d];
+        float v1 = head_vec[d + half_dim];
+        if (norm_w != nullptr) {
+            v0 = v0 * inv_rms * norm_w[d];
+            v1 = v1 * inv_rms * norm_w[d + half_dim];
+        }
+
+        float freq = compute_rope_freq_yarn(d, head_dim, theta, scaling_factor, orig_ctx);
+        float angle = (float)token_pos * freq;
+        float sin_val, cos_val;
+        __sincosf(angle, &sin_val, &cos_val);
+
+        float rot0 = v0 * cos_val - v1 * sin_val;
+        float rot1 = v0 * sin_val + v1 * cos_val;
+
+        head_vec[d]            = rot0;
+        head_vec[d + half_dim] = rot1;
+
+        if (is_k && k_cache != nullptr) {
+            size_t cache_base = ((size_t)token_pos * num_kv_heads + head_idx) * head_dim;
+            if (is_fp16) {
+                __half* dst_h = (__half*)k_cache;
+                dst_h[cache_base + d]            = __float2half(rot0);
+                dst_h[cache_base + d + half_dim] = __float2half(rot1);
+            } else {
+                float* dst_f = (float*)k_cache;
+                dst_f[cache_base + d]            = rot0;
+                dst_f[cache_base + d + half_dim] = rot1;
+            }
+        }
+    }
+}
+
+int launch_cuda_fused_qknorm_rope_batch(
+    float* q,
+    float* k,
+    const float* q_norm_weight,
+    const float* k_norm_weight,
+    void* k_cache,
+    int start_pos,
+    int batch_size,
+    int num_heads,
+    int num_kv_heads,
+    int head_dim,
+    float eps,
+    float theta,
+    int is_fp16,
+    float scaling_factor,
+    int orig_ctx,
+    cudaStream_t stream
+) {
+    if (batch_size <= 0 || head_dim <= 0 || (num_heads + num_kv_heads) <= 0) return 0;
+    dim3 grid(num_heads + num_kv_heads, batch_size);
+    fused_qknorm_rope_batch_kernel<<<grid, 32, 0, stream>>>(
+        q, k, q_norm_weight, k_norm_weight, k_cache, start_pos, batch_size,
+        num_heads, num_kv_heads, head_dim, eps, theta, is_fp16, scaling_factor, orig_ctx
+    );
+    return cudaGetLastError();
+}
+
 int launch_cuda_qk_norm(
     float* qk,
     const float* weight,
@@ -3117,16 +3773,63 @@ int launch_cuda_argmax(
 void init_cuda_kernel_attributes() {
     cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
     cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<4>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<6>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<8>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<16, 0, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<20, 0, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<24, 0, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<1, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<2, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<4, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<6, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<8, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<16, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<20, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q4_k_cuda_kernel<24, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<4>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<6>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<8>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<16, 0, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<20, 0, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<24, 0, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<1, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<2, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<4, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<6, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<8, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<16, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<20, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q6_k_cuda_kernel<24, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<4>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<6>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<8>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<16>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<24>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(mmvq_q8_0_cuda_kernel<1, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<1, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<6, 1>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<16, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<20, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<24, 1, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<6, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<16, 2, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<20, 2, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_qkv_mixed_cuda_kernel<24, 2, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_gate_up_q4_k_cuda_kernel<2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_gate_up_q4_k_cuda_kernel<6>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_gate_up_q4_k_cuda_kernel<16, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_gate_up_q4_k_cuda_kernel<20, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(mmvq_gate_up_q4_k_cuda_kernel<24, 1, 2>, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_rmsnorm_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(fused_swiglu_q8_1_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
+    cudaFuncSetAttribute(fused_qknorm_rope_batch_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(gemv_gate_up_q4_k_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(gemv_qkv_q4_k_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);
     cudaFuncSetAttribute(gemv_qk_q4_k_cuda_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 0);

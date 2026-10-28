@@ -173,7 +173,27 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_q8_0_fused_add(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_mmvq_q6_k(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_mmvq_q6_k_fused_add(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
         x: *const std::ffi::c_void,
@@ -211,6 +231,16 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_q4_k_fused_add(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_gemv_q4_k(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
@@ -229,6 +259,18 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_gate_up_q4_k(
+        y_gate: *mut f32,
+        y_up: *mut f32,
+        raw_w1: *const std::ffi::c_void,
+        raw_w3: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        inter_m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_gemv_gate_up_q4_k(
         y_gate: *mut f32,
         y_up: *mut f32,
@@ -237,6 +279,43 @@ unsafe extern "C" {
         x_q8_1: *const std::ffi::c_void,
         inter_m: i32,
         k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_mmvq_qkv_mixed(
+        y_q: *mut f32,
+        y_k: *mut f32,
+        y_v: *mut f32,
+        v_cache_fp16: *mut std::ffi::c_void,
+        start_pos: i32,
+        raw_wq: *const std::ffi::c_void,
+        raw_wk: *const std::ffi::c_void,
+        raw_wv: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        q_m: i32,
+        kv_m: i32,
+        k: i32,
+        v_quant: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_fused_qknorm_rope_batch(
+        q: *mut f32,
+        k: *mut f32,
+        q_norm_weight: *const f32,
+        k_norm_weight: *const f32,
+        k_cache: *mut std::ffi::c_void,
+        start_pos: i32,
+        batch_size: i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        eps: f32,
+        theta: f32,
+        is_fp16: i32,
+        scaling_factor: f32,
+        orig_ctx: i32,
         stream: cudaStream_t,
     ) -> i32;
 

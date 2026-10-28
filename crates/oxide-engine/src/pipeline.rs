@@ -472,6 +472,9 @@ impl SpecializedPipeline {
                     seed,
                     greedy,
                 );
+                if engine.backend.seq_pos == 0 {
+                    engine.backend.warmup_gpu();
+                }
             }
             Self::Needle3Cuda(engine) => {
                 engine.backend.configure_sampling(

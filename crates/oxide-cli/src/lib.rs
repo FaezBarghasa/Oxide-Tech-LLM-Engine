@@ -426,12 +426,12 @@ pub struct ChatArgs {
     #[arg(long)]
     pub greedy: bool,
 
-    /// Speculative decoding strategy ("auto", "ensemble", "ngram", "prompt-lookup", "none", default: "none")
-    #[arg(long, default_value = "none")]
+    /// Speculative decoding strategy ("auto", "ensemble", "ngram", "prompt-lookup", "none", default: "auto")
+    #[arg(long, default_value = "auto")]
     pub speculative: String,
 
     /// Initial draft tokens to propose per speculative step (dynamically adapted between 2 and 5)
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 5)]
     pub draft_tokens: usize,
 
     /// Companion draft model path or alias for speculative decoding (llama.cpp -md / --model-draft compatible)
@@ -636,12 +636,12 @@ pub struct Cli {
     #[arg(long)]
     pub greedy: bool,
 
-    /// Speculative decoding strategy ("auto", "ensemble", "dynamic", "ngram", "prompt-lookup", "none", default: "none")
-    #[arg(long, default_value = "none")]
+    /// Speculative decoding strategy ("auto", "ensemble", "dynamic", "ngram", "prompt-lookup", "none", default: "auto")
+    #[arg(long, default_value = "auto")]
     pub speculative: String,
 
     /// Initial draft tokens to propose per speculative step (dynamically adapted between 2 and 5)
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 5)]
     pub draft_tokens: usize,
 
     /// Companion draft model path or alias for speculative decoding (llama.cpp -md / --model-draft compatible)
@@ -887,16 +887,6 @@ fn run_chat_session(
     );
     let mut pipeline =
         SpecializedPipeline::from_model_or_path(&current_model, backend_str, gpu, 1, weights)?;
-    pipeline.configure_sampling(
-        temp,
-        top_p,
-        top_k,
-        min_p,
-        repeat_penalty,
-        repeat_last_n,
-        seed,
-        greedy,
-    );
 
     println!(
         "Oxide-Tech-LLM-Engine | Model: {current_model} | Backend: {backend_str} | Threads: {threads} | MaxTokens: {max_tokens} | Temp: {temp} | TopP: {top_p} | TopK: {top_k} | MinP: {min_p} | RepeatPenalty: {repeat_penalty} | Greedy: {greedy}"
@@ -923,6 +913,17 @@ fn run_chat_session(
             oxide_models::GgufTokenizer::default()
         }
     };
+
+    pipeline.configure_sampling(
+        temp,
+        top_p,
+        top_k,
+        min_p,
+        repeat_penalty,
+        repeat_last_n,
+        seed,
+        greedy,
+    );
 
     let mut stop_tokens = vec![106u32, 107, 128_001, 128_008, 128_009, 151_643, 151_645];
     if tokenizer.bos_id != Some(2) {
@@ -978,30 +979,12 @@ fn run_chat_session(
         }
         let prompt_tokens = if tokens.is_empty() { vec![1] } else { tokens };
 
-        print!("Assistant: ");
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-
-        let t_start = std::time::Instant::now();
-
-        // 1. Prefill prompt tokens through high-throughput chunked batched forward pass
-        let mut cur_token = pipeline.prefill_prompt(&prompt_tokens)?;
-        let ttft = Some(t_start.elapsed());
-
-        // 2. Decode first sampled token and continuation tokens
-        let mut gen_count = 0usize;
-        let first_text = tokenizer.decode_token(cur_token);
-        print!("{first_text}");
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        gen_count += 1;
-
-        let mut all_tokens = prompt_tokens.clone();
-        all_tokens.push(cur_token);
-
         let is_speculative = draft_model.is_some()
-            || matches!(
-                speculative,
-                "auto" | "ensemble" | "dynamic" | "ngram" | "prompt-lookup"
-            );
+            || match speculative {
+                "auto" => greedy || temp <= 0.2,
+                "ensemble" | "dynamic" | "ngram" | "prompt-lookup" => true,
+                _ => false,
+            };
 
         let mut companion_draft_pipeline = if let Some(dm) = draft_model {
             println!("Initializing Companion Draft Pipeline from: {dm}...");
@@ -1068,11 +1051,36 @@ fn run_chat_session(
 
         let mut ensemble = if is_speculative {
             let mut ens = oxide_engine::DrafterEnsemble::new(draft_tokens.clamp(2, 5), 2, 5);
-            ens.warm_up(&all_tokens);
+            ens.warm_up(&prompt_tokens);
+            ens.seed_with_prompt_and_encoder(p, |s| tokenizer.encode(s));
             Some(ens)
         } else {
             None
         };
+
+        print!("Assistant: ");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+
+        let t_start = std::time::Instant::now();
+
+        // 1. Prefill prompt tokens through high-throughput chunked batched forward pass
+        let mut cur_token = pipeline.prefill_prompt(&prompt_tokens)?;
+        let ttft = Some(t_start.elapsed());
+
+        // 2. Decode first sampled token and continuation tokens
+        let mut gen_count = 0usize;
+        let first_text = tokenizer.decode_token(cur_token);
+        print!("{first_text}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        gen_count += 1;
+
+        let mut all_tokens = prompt_tokens.clone();
+        all_tokens.push(cur_token);
+        if let Some(ref mut ens) = ensemble {
+            if let Some(&last_prompt_tok) = prompt_tokens.last() {
+                ens.record_token(last_prompt_tok, cur_token);
+            }
+        }
 
         let mut spec_drafted_count = 0usize;
         let mut spec_accepted_count = 0usize;
