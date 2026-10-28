@@ -17,6 +17,7 @@ pub enum SpeculativeStrategy {
     EagleTreeDraft,
     DFlashDiffusion,
     NativeMtp,
+    DynamicEnsemble,
 }
 
 /// Configuration for Speculative Decoding.
@@ -368,9 +369,231 @@ impl NativeMtpModule {
     }
 }
 
+/// Dynamically regulates the speculation horizon based on rolling acceptance rates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdaptiveSpeculator {
+    pub current_k: usize,
+    pub min_k: usize,
+    pub max_k: usize,
+    pub rolling_window: usize,
+    pub history: Vec<(usize, usize)>, // (accepted, drafted)
+    pub consecutive_rejections: usize,
+    pub backoff_cooldown: usize,
+}
+
+impl AdaptiveSpeculator {
+    #[must_use]
+    pub fn new(initial_k: usize, min_k: usize, max_k: usize, window: usize) -> Self {
+        Self {
+            current_k: initial_k.clamp(min_k, max_k),
+            min_k,
+            max_k,
+            rolling_window: window.max(1),
+            history: Vec::new(),
+            consecutive_rejections: 0,
+            backoff_cooldown: 0,
+        }
+    }
+
+    /// Records the verification outcome of a speculative step and dynamically adapts K.
+    pub fn record_step(&mut self, accepted: usize, drafted: usize) {
+        if drafted == 0 {
+            return;
+        }
+        self.history.push((accepted, drafted));
+        if self.history.len() > self.rolling_window {
+            self.history.remove(0);
+        }
+
+        if accepted == 0 {
+            self.consecutive_rejections += 1;
+            // Back off for 2 cycles if 3 consecutive rejections occur
+            if self.consecutive_rejections >= 3 {
+                self.backoff_cooldown = 2;
+                self.current_k = self.min_k;
+            }
+        } else {
+            self.consecutive_rejections = 0;
+        }
+
+        let rate = self.rolling_acceptance_rate();
+
+        if self.history.len() >= 3 {
+            // Expand horizon if acceptance >= 75%
+            if rate >= 0.75 && self.consecutive_rejections == 0 {
+                self.current_k = (self.current_k + 1).min(self.max_k);
+            }
+            // Contract horizon if acceptance < 40%
+            else if rate < 0.40 {
+                self.current_k = self.current_k.saturating_sub(1).max(self.min_k);
+            }
+        }
+    }
+
+    /// Returns the active draft horizon, accounting for backoff cooldowns.
+    pub fn current_horizon(&mut self) -> usize {
+        if self.backoff_cooldown > 0 {
+            self.backoff_cooldown -= 1;
+            0 // Skip drafting during backoff
+        } else {
+            self.current_k
+        }
+    }
+
+    /// Read-only inspection of the current speculation horizon K.
+    #[must_use]
+    pub fn active_k(&self) -> usize {
+        self.current_k
+    }
+
+    /// Calculates the rolling acceptance rate across the active window.
+    #[must_use]
+    pub fn rolling_acceptance_rate(&self) -> f32 {
+        let (tot_acc, tot_draft) = self
+            .history
+            .iter()
+            .fold((0usize, 0usize), |(acc, drf), &(a, d)| (acc + a, drf + d));
+        if tot_draft > 0 {
+            tot_acc as f32 / tot_draft as f32
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Dual-Tier Drafter Ensemble for autonomous speculation:
+/// - Tier 1: Fast N-gram Prompt Lookup (low-latency match against prompt/recent context).
+/// - Tier 2: Online Markov N-gram / Suffix Matching fallback (for novel, creative continuations).
+#[derive(Debug, Clone)]
+pub struct DrafterEnsemble {
+    pub ngram_min: usize,
+    pub ngram_max: usize,
+    pub adaptive: AdaptiveSpeculator,
+    /// Fast bigram/trigram transition graph: from_tok -> { to_tok -> count }
+    pub transitions: HashMap<u32, HashMap<u32, u32>>,
+}
+
+impl DrafterEnsemble {
+    #[must_use]
+    pub fn new(initial_k: usize, min_k: usize, max_k: usize) -> Self {
+        Self {
+            ngram_min: 2,
+            ngram_max: 4,
+            adaptive: AdaptiveSpeculator::new(initial_k, min_k, max_k, 6),
+            transitions: HashMap::new(),
+        }
+    }
+
+    /// Ingests a new token transition into the online Markov graph.
+    pub fn record_token(&mut self, prev: u32, next: u32) {
+        let entry = self.transitions.entry(prev).or_default();
+        *entry.entry(next).or_insert(0) += 1;
+    }
+
+    /// Ingests a slice of tokens to warm up the transition graph from prompt.
+    pub fn warm_up(&mut self, tokens: &[u32]) {
+        for window in tokens.windows(2) {
+            self.record_token(window[0], window[1]);
+        }
+    }
+
+    /// Proposes draft tokens using the dual-tier ensemble strategy.
+    pub fn propose_draft(
+        &mut self,
+        context: &[u32],
+        lookup_engine: &SpeculativeDecoderEngine,
+    ) -> (Vec<u32>, &'static str) {
+        let k = self.adaptive.current_horizon();
+        if k == 0 || context.is_empty() {
+            return (Vec::new(), "none");
+        }
+
+        // Tier 1: Try N-Gram Prompt Lookup first
+        let ngram_draft = lookup_engine.draft_ngram_lookup(context, k);
+        if !ngram_draft.is_empty() {
+            return (ngram_draft, "ngram_prompt_lookup");
+        }
+
+        // Tier 2: Markov continuation fallback
+        let mut markov_draft = Vec::with_capacity(k);
+        let mut cur = *context.last().unwrap();
+        for _ in 0..k {
+            if let Some(next_counts) = self.transitions.get(&cur) {
+                // Find most frequent next token with at least 2 occurrences
+                if let Some((&best_next, &count)) = next_counts.iter().max_by_key(|(_, cnt)| *cnt) {
+                    if count >= 2 && !markov_draft.contains(&best_next) {
+                        markov_draft.push(best_next);
+                        cur = best_next;
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+
+        if markov_draft.is_empty() {
+            (Vec::new(), "none")
+        } else {
+            (markov_draft, "markov_transition_fallback")
+        }
+    }
+
+    /// Updates the ensemble with step acceptance metrics.
+    pub fn update_acceptance(&mut self, accepted: usize, drafted: usize) {
+        self.adaptive.record_step(accepted, drafted);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_adaptive_speculator_expansion_and_contraction() {
+        let mut spec = AdaptiveSpeculator::new(3, 2, 5, 4);
+        assert_eq!(spec.current_k, 3);
+
+        // High acceptance steps: 3/3, 3/3, 3/3 (100%) -> should expand
+        spec.record_step(3, 3);
+        spec.record_step(3, 3);
+        spec.record_step(3, 3);
+        assert_eq!(spec.current_k, 4);
+
+        // Another high acceptance: 4/4 -> expand to max_k (5)
+        spec.record_step(4, 4);
+        assert_eq!(spec.current_k, 5);
+
+        // Low acceptance: 0/5, 0/5, 1/5 -> contract
+        spec.record_step(0, 5);
+        spec.record_step(0, 5);
+        spec.record_step(1, 5);
+        assert!(spec.current_k < 5);
+    }
+
+    #[test]
+    fn test_drafter_ensemble_tier1_and_tier2() {
+        let lookup_engine = SpeculativeDecoderEngine::new(SpeculativeConfig {
+            ngram_min: 2,
+            ngram_max: 4,
+            ..Default::default()
+        });
+        let mut ensemble = DrafterEnsemble::new(3, 2, 5);
+
+        // Warm up with repeating tokens
+        let tokens = vec![10, 20, 30, 40, 10, 20, 30, 40];
+        ensemble.warm_up(&tokens);
+
+        // Query with context ending in [10, 20] -> Tier 1 (N-gram) should propose [30, 40]
+        let context1 = vec![10, 20, 30, 40, 10, 20];
+        let (draft1, tier1) = ensemble.propose_draft(&context1, &lookup_engine);
+        assert_eq!(tier1, "ngram_prompt_lookup");
+        assert_eq!(draft1, vec![30, 40, 10]);
+
+        // Query with unseen prefix [99, 10] -> N-gram fails, but 10 has Markov transitions to 20
+        let (draft2, tier2) = ensemble.propose_draft(&[99, 10], &lookup_engine);
+        assert_eq!(tier2, "markov_transition_fallback");
+        assert_eq!(draft2[0], 20);
+    }
 
     #[test]
     fn test_native_mtp_prediction_lifecycle() {

@@ -73,8 +73,8 @@ pub use sparse_context::{
     SparsePrefillPolicy, TOKENS_PER_SPARSE_BLOCK,
 };
 pub use speculative::{
-    NativeMtpModule, SpeculativeConfig, SpeculativeDecoderEngine, SpeculativeStrategy,
-    SpeculativeVerificationResult,
+    AdaptiveSpeculator, DrafterEnsemble, NativeMtpModule, SpeculativeConfig,
+    SpeculativeDecoderEngine, SpeculativeStrategy, SpeculativeVerificationResult,
 };
 pub use tensor_split::{
     AcceleratorKind, TensorSliceDescriptor, TensorSplitDistributionEngine, TensorSplitMode,

@@ -426,11 +426,11 @@ pub struct ChatArgs {
     #[arg(long)]
     pub greedy: bool,
 
-    /// Speculative decoding strategy ("ngram", "prompt-lookup", "none", default: "none")
+    /// Speculative decoding strategy ("auto", "ensemble", "ngram", "prompt-lookup", "none", default: "none")
     #[arg(long, default_value = "none")]
     pub speculative: String,
 
-    /// Maximum draft tokens to propose per speculative step
+    /// Initial draft tokens to propose per speculative step (dynamically adapted between 2 and 5)
     #[arg(long, default_value_t = 4)]
     pub draft_tokens: usize,
 }
@@ -624,11 +624,11 @@ pub struct Cli {
     #[arg(long)]
     pub greedy: bool,
 
-    /// Speculative decoding strategy ("ngram", "prompt-lookup", "none", default: "none")
+    /// Speculative decoding strategy ("auto", "ensemble", "dynamic", "ngram", "prompt-lookup", "none", default: "none")
     #[arg(long, default_value = "none")]
     pub speculative: String,
 
-    /// Maximum draft tokens to propose per speculative step
+    /// Initial draft tokens to propose per speculative step (dynamically adapted between 2 and 5)
     #[arg(long, default_value_t = 4)]
     pub draft_tokens: usize,
 }
@@ -929,12 +929,15 @@ fn run_chat_session(
         let mut all_tokens = prompt_tokens.clone();
         all_tokens.push(cur_token);
 
-        let is_speculative = speculative == "ngram" || speculative == "prompt-lookup";
+        let is_speculative = matches!(
+            speculative,
+            "auto" | "ensemble" | "dynamic" | "ngram" | "prompt-lookup"
+        );
         let spec_engine = if is_speculative {
             Some(oxide_engine::SpeculativeDecoderEngine::new(
                 oxide_engine::SpeculativeConfig {
-                    strategy: oxide_engine::SpeculativeStrategy::NGramPromptLookup,
-                    max_draft_tokens: draft_tokens,
+                    strategy: oxide_engine::SpeculativeStrategy::DynamicEnsemble,
+                    max_draft_tokens: draft_tokens.clamp(2, 5),
                     ngram_min: 2,
                     ngram_max: 4,
                     ..Default::default()
@@ -944,18 +947,31 @@ fn run_chat_session(
             None
         };
 
+        let mut ensemble = if is_speculative {
+            let mut ens = oxide_engine::DrafterEnsemble::new(draft_tokens.clamp(2, 5), 2, 5);
+            ens.warm_up(&all_tokens);
+            Some(ens)
+        } else {
+            None
+        };
+
         let mut spec_drafted_count = 0usize;
         let mut spec_accepted_count = 0usize;
 
         while gen_count < max_tokens {
-            if let Some(ref spec) = spec_engine {
-                let draft = spec.draft_ngram_lookup(&all_tokens, draft_tokens);
+            if let (Some(spec), Some(ens)) = (&spec_engine, &mut ensemble) {
+                let (draft, _tier) = ens.propose_draft(&all_tokens, spec);
                 if !draft.is_empty() {
                     spec_drafted_count += draft.len();
                     let verified_tokens = pipeline.step_speculative(cur_token, &draft)?;
-                    if !verified_tokens.is_empty() {
+                    if verified_tokens.is_empty() {
+                        ens.update_acceptance(0, draft.len());
+                    } else {
                         let mut reached_eos = false;
+                        let mut prev_t = cur_token;
                         for &tok in &verified_tokens {
+                            ens.record_token(prev_t, tok);
+                            prev_t = tok;
                             cur_token = tok;
                             gen_count += 1;
                             all_tokens.push(cur_token);
@@ -988,6 +1004,7 @@ fn run_chat_session(
                             .take_while(|&(v, d)| v == d)
                             .count();
                         spec_accepted_count += matching;
+                        ens.update_acceptance(matching, draft.len());
 
                         if reached_eos {
                             break;
@@ -997,11 +1014,15 @@ fn run_chat_session(
                 }
             }
 
+            let prev_token = cur_token;
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
             gen_count += 1;
             cur_token = step_res.sampled_token;
             all_tokens.push(cur_token);
+            if let Some(ref mut ens) = ensemble {
+                ens.record_token(prev_token, cur_token);
+            }
             if stop_tokens.contains(&cur_token)
                 || Some(cur_token) == tokenizer.eos_id
                 || step_res.is_terminal
@@ -1047,8 +1068,11 @@ fn run_chat_session(
                 } else {
                     0.0
                 };
+                let final_k = ensemble
+                    .as_ref()
+                    .map_or(draft_tokens, |e| e.adaptive.active_k());
                 format!(
-                    "\nSpeculative Mode : NGram Prompt-Lookup (Drafted: {spec_drafted_count}, Accepted: {spec_accepted_count}, Acceptance: {acc_pct:.1}%)"
+                    "\nSpeculative Mode : Autonomous Drafter Ensemble (Drafted: {spec_drafted_count}, Accepted: {spec_accepted_count}, Acceptance: {acc_pct:.1}%, Final Horizon K: {final_k})"
                 )
             } else {
                 String::new()

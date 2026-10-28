@@ -992,7 +992,7 @@ impl CudaBackend {
         })?;
         let s = stream.raw();
 
-        let max_draft = 4usize;
+        let max_draft = 5usize;
         let num_draft = draft_tokens.len().min(max_draft);
         let mut candidate_tokens = Vec::with_capacity(1 + num_draft);
         candidate_tokens.push(cur_token);
