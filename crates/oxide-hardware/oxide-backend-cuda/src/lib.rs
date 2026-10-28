@@ -2393,6 +2393,7 @@ impl HardwareBackend for CudaBackend {
                 unsafe {
                     self.graph_manager.launch_graph(handle, s)?;
                 }
+                tracing::debug!("CUDA decode graph replayed: id={}", handle.graph_id);
 
                 if let Some(ref d_sampled) = self.d_sampled_token {
                     let mut sampled_res = [0u32, 0u32];
@@ -2737,6 +2738,11 @@ impl HardwareBackend for CudaBackend {
 
                     match end_res {
                         Ok(handle) => {
+                            tracing::info!(
+                                "CUDA decode graph captured successfully (id={}, nodes={})",
+                                handle.graph_id,
+                                handle.node_count
+                            );
                             self.decode_graph_handle = Some(handle);
                             unsafe {
                                 self.graph_manager.launch_graph(handle, s)?;
