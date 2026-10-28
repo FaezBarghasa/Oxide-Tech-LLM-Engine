@@ -858,23 +858,41 @@ __device__ __forceinline__ void get_scale_min_k4_cuda(int j, const uint8_t* scal
     }
 }
 
-__device__ __forceinline__ void get_scale_min_k4_pair_cuda(
+__device__ __forceinline__ void get_scale_min_k4_from_regs(
     int chunk,
-    const uint8_t* scales,
+    uint32_t sc_0_3,
+    uint32_t sc_4_7,
+    uint32_t sc_8_11,
     float* sc0, float* min0,
     float* sc1, float* min1
 ) {
-    int j = 2 * chunk;
     if (chunk < 2) {
-        *sc0  = (float)(scales[j] & 63);
-        *min0 = (float)(scales[j + 4] & 63);
-        *sc1  = (float)(scales[j + 1] & 63);
-        *min1 = (float)(scales[j + 5] & 63);
+        int shift = chunk * 16;
+        uint32_t w0 = sc_0_3 >> shift;
+        uint32_t w1 = sc_4_7 >> shift;
+        uint8_t s0 = w0 & 0xFF;
+        uint8_t s1 = (w0 >> 8) & 0xFF;
+        uint8_t m0 = w1 & 0xFF;
+        uint8_t m1 = (w1 >> 8) & 0xFF;
+        *sc0  = (float)(s0 & 63);
+        *min0 = (float)(m0 & 63);
+        *sc1  = (float)(s1 & 63);
+        *min1 = (float)(m1 & 63);
     } else {
-        *sc0  = (float)((scales[j + 4] & 0x0F) | ((scales[j - 4] >> 6) << 4));
-        *min0 = (float)((scales[j + 4] >> 4)   | ((scales[j] >> 6) << 4));
-        *sc1  = (float)((scales[j + 5] & 0x0F) | ((scales[j - 3] >> 6) << 4));
-        *min1 = (float)((scales[j + 5] >> 4)   | ((scales[j + 1] >> 6) << 4));
+        int shift = (chunk - 2) * 16;
+        uint32_t w2 = sc_8_11 >> shift;
+        uint32_t w0 = sc_0_3 >> shift;
+        uint32_t w1 = sc_4_7 >> shift;
+        uint8_t s8 = w2 & 0xFF;
+        uint8_t s9 = (w2 >> 8) & 0xFF;
+        uint8_t s0 = w0 & 0xFF;
+        uint8_t s1 = (w0 >> 8) & 0xFF;
+        uint8_t s4 = w1 & 0xFF;
+        uint8_t s5 = (w1 >> 8) & 0xFF;
+        *sc0  = (float)((s8 & 0x0F) | ((s0 >> 6) << 4));
+        *min0 = (float)((s8 >> 4)   | ((s4 >> 6) << 4));
+        *sc1  = (float)((s9 & 0x0F) | ((s1 >> 6) << 4));
+        *min1 = (float)((s9 >> 4)   | ((s5 >> 6) << 4));
     }
 }
 
@@ -916,12 +934,12 @@ __global__ void mmvq_q4_k_cuda_kernel(
     #pragma unroll 2
     for (int b = 0; b < num_blocks_per_row; b++) {
         const BlockQ4_K_Gpu* blk = &row_blocks[b];
-        half2 d_dmin = *((const half2*)&blk->d);
-        float d = __low2float(d_dmin);
-        float dmin = __high2float(d_dmin);
+        uint4 hdr = ((const uint4*)blk)[0];
+        float d = __low2float(*((const half2*)&hdr.x));
+        float dmin = __high2float(*((const half2*)&hdr.x));
 
         float sc0, min0, sc1, min1;
-        get_scale_min_k4_pair_cuda(chunk, blk->scales, &sc0, &min0, &sc1, &min1);
+        get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1, &min1);
 
         float d_sc0 = d * sc0;
         float d_sc1 = d * sc1;
