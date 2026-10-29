@@ -1766,7 +1766,11 @@ impl CudaBackend {
 
         // 1. Initial embedding lookup for all B candidate tokens on GPU
         if let Some(d_emb) = &self.d_token_embd {
-            let emb_scale = if self.is_gemma { (h as f32).sqrt() } else { 1.0f32 };
+            let emb_scale = if self.is_gemma {
+                (h as f32).sqrt()
+            } else {
+                1.0f32
+            };
             for (i, &tok) in chunk_tokens.iter().enumerate() {
                 let tok_idx = (tok as usize) % self.vocab_size.max(1);
                 let dst_offset = i * h;
@@ -2348,6 +2352,7 @@ impl CudaBackend {
 impl HardwareBackend for CudaBackend {
     type Event = CudaEventHandle;
 
+    #[allow(clippy::unnecessary_unwrap)]
     fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
         self.current_event_id += 1;
         let event = CudaEventHandle {
@@ -2425,7 +2430,11 @@ impl HardwareBackend for CudaBackend {
                 let capture_res = unsafe { self.graph_manager.begin_capture(s) };
                 if capture_res.is_ok() {
                     let h = self.hidden_dim;
-                    let emb_scale = if self.is_gemma { (h as f32).sqrt() } else { 1.0f32 };
+                    let emb_scale = if self.is_gemma {
+                        (h as f32).sqrt()
+                    } else {
+                        1.0f32
+                    };
                     let d_sp_ptr = self.d_seq_pos.as_ref().unwrap().as_typed_ptr::<i32>();
                     let d_in_tok_ptr = self.d_input_token.as_ref().unwrap().as_typed_ptr::<i32>();
                     let d_emb_ptr = self.d_token_embd.as_ref().unwrap().as_raw_ptr();
@@ -2434,11 +2443,16 @@ impl HardwareBackend for CudaBackend {
                     let d_q_ptr = self.d_scratch_q.as_ref().unwrap().as_typed_ptr::<f32>();
                     let d_k_ptr = self.d_scratch_k.as_ref().unwrap().as_typed_ptr::<f32>();
                     let d_v_ptr = self.d_scratch_v.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_out_ptr = self.d_scratch_attn_out.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_out_ptr = self
+                        .d_scratch_attn_out
+                        .as_ref()
+                        .unwrap()
+                        .as_typed_ptr::<f32>();
                     let d_gate_ptr = self.d_scratch_gate.as_ref().unwrap().as_typed_ptr::<f32>();
                     let d_up_ptr = self.d_scratch_up.as_ref().unwrap().as_typed_ptr::<f32>();
                     let d_logits_ptr = self.d_logits.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_sampled_ptr = self.d_sampled_token.as_ref().unwrap().as_raw_ptr() as *mut u32;
+                    let d_sampled_ptr =
+                        self.d_sampled_token.as_ref().unwrap().as_raw_ptr() as *mut u32;
                     let d_val_ptr = unsafe { d_sampled_ptr.add(1) as *mut f32 };
                     let d_q8_1_ptr = if let Some(ref buf) = self.d_scratch_q8_1_a {
                         buf.as_raw_ptr()
@@ -2586,14 +2600,13 @@ impl HardwareBackend for CudaBackend {
 
                         // Output Projection + Fused Residual 1
                         let o_m = if layer.o_m > 0 { layer.o_m } else { h };
-                        let o_k = if layer.o_k > 0 { layer.o_k } else { cur_num_heads * cur_head_dim };
+                        let o_k = if layer.o_k > 0 {
+                            layer.o_k
+                        } else {
+                            cur_num_heads * cur_head_dim
+                        };
                         unsafe {
-                            driver::launch_cuda_quantize_q8_1(
-                                d_out_ptr,
-                                d_q8_1_ptr,
-                                o_k as i32,
-                                s,
-                            );
+                            driver::launch_cuda_quantize_q8_1(d_out_ptr, d_q8_1_ptr, o_k as i32, s);
                             if layer.o_quant == 1 {
                                 driver::launch_cuda_gemv_q4_k_fused_add(
                                     d_hid_ptr,
@@ -2770,12 +2783,17 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("CUDA graph capture failed: {}, falling back to uncaptured stream dispatch", e);
+                            tracing::warn!(
+                                "CUDA graph capture failed: {}, falling back to uncaptured stream dispatch",
+                                e
+                            );
                             self.cuda_graph_enabled = false;
                         }
                     }
                 } else {
-                    tracing::warn!("cudaStreamBeginCapture failed, falling back to uncaptured stream dispatch");
+                    tracing::warn!(
+                        "cudaStreamBeginCapture failed, falling back to uncaptured stream dispatch"
+                    );
                     self.cuda_graph_enabled = false;
                 }
             }
@@ -2789,7 +2807,11 @@ impl HardwareBackend for CudaBackend {
             // 1. Initial embedding lookup on GPU (or dequantized from host)
             if let Some(d_emb) = &self.d_token_embd {
                 let tok_idx = (cmd.input_token as usize) % self.vocab_size.max(1);
-                let emb_scale = if self.is_gemma { (h as f32).sqrt() } else { 1.0f32 };
+                let emb_scale = if self.is_gemma {
+                    (h as f32).sqrt()
+                } else {
+                    1.0f32
+                };
                 if let Some(d_hid) = &mut self.d_hidden {
                     if self.token_embd_quant_type == 1 {
                         unsafe {

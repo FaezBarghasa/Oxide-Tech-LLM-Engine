@@ -565,6 +565,7 @@ impl SpecializedPipeline {
                     let token_embd_raw = if let Some(ref emb_tensor) = model.token_embd_tensor {
                         emb_tensor.as_raw_bytes()
                     } else if !model.token_embedding.is_empty() {
+                        // SAFETY: Reinterpreting f32 slice as raw byte slice of valid length
                         unsafe {
                             std::slice::from_raw_parts(
                                 model.token_embedding.as_ptr().cast::<u8>(),
@@ -834,6 +835,7 @@ impl SpecializedPipeline {
                 let token_embd_raw = if let Some(ref emb_tensor) = model.token_embd_tensor {
                     emb_tensor.as_raw_bytes()
                 } else if !model.token_embedding.is_empty() {
+                    // SAFETY: Reinterpreting f32 slice as raw byte slice of valid length
                     unsafe {
                         std::slice::from_raw_parts(
                             model.token_embedding.as_ptr().cast::<u8>(),
