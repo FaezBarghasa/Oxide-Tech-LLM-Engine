@@ -134,6 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "99",
             "--temp",
             "0",
+            "--chat-template",
+            "none",
+            "--no-warmup",
         ])
         .output();
 
@@ -143,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let oxide_judge_out = Command::new("target/release/oxide-engine")
+        .env("RUST_LOG", "warn")
         .args([
             "-m",
             &args.model.to_string_lossy(),
