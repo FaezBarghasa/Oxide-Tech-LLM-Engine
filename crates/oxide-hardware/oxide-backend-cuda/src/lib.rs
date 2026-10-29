@@ -1220,22 +1220,38 @@ impl CudaBackend {
                 }
             }
         } else if let Some(d_emb) = &self.d_token_embd {
+            let emb_scale = if self.is_gemma {
+                (h as f32).sqrt()
+            } else {
+                1.0f32
+            };
             for (i, &tok) in candidate_tokens.iter().enumerate() {
                 let tok_idx = (tok as usize) % self.vocab_size.max(1);
-                let src_offset = tok_idx * h * std::mem::size_of::<f32>();
-                let dst_offset = i * h * std::mem::size_of::<f32>();
-                if src_offset + h * 4 <= d_emb.size_bytes() {
-                    if let Some(d_hid) = &self.d_hidden {
-                        unsafe {
-                            let dst_ptr = (d_hid.as_raw_ptr() as *mut u8).add(dst_offset);
-                            let src_ptr = (d_emb.as_raw_ptr() as *const u8).add(src_offset);
-                            let _ = driver::cudaMemcpyAsync(
-                                dst_ptr as *mut std::ffi::c_void,
-                                src_ptr as *const std::ffi::c_void,
-                                h * std::mem::size_of::<f32>(),
-                                driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                let dst_offset = i * h;
+                if let Some(d_hid) = &self.d_hidden {
+                    unsafe {
+                        let dst_ptr = d_hid.as_typed_ptr::<f32>().add(dst_offset);
+                        if self.token_embd_quant_type == 1 {
+                            driver::launch_cuda_dequantize_token_embd_q4_k(
+                                dst_ptr,
+                                d_emb.as_raw_ptr(),
+                                tok_idx as i32,
+                                h as i32,
+                                emb_scale,
                                 s,
                             );
+                        } else {
+                            let src_offset = tok_idx * h * std::mem::size_of::<f32>();
+                            if src_offset + h * 4 <= d_emb.size_bytes() {
+                                let src_ptr = (d_emb.as_raw_ptr() as *const u8).add(src_offset);
+                                let _ = driver::cudaMemcpyAsync(
+                                    dst_ptr as *mut std::ffi::c_void,
+                                    src_ptr as *const std::ffi::c_void,
+                                    h * std::mem::size_of::<f32>(),
+                                    driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                    s,
+                                );
+                            }
                         }
                     }
                 }
@@ -2524,22 +2540,55 @@ impl HardwareBackend for CudaBackend {
 
                         // Grouped QKV GEMV writing V-cache directly
                         unsafe {
-                            driver::launch_cuda_mmvq_qkv_mixed_ptr(
-                                d_q_ptr,
-                                d_k_ptr,
-                                d_v_ptr,
-                                v_cache_ptr,
-                                d_sp_ptr,
-                                layer.d_wq.as_raw_ptr(),
-                                layer.d_wk.as_raw_ptr(),
-                                layer.d_wv.as_raw_ptr(),
-                                d_q8_1_ptr,
-                                layer.q_m as i32,
-                                layer.kv_m as i32,
-                                layer.q_k as i32,
-                                layer.v_quant as i32,
-                                s,
-                            );
+                            if layer.q_quant == 1 && layer.k_quant == 1 && (layer.v_quant == 1 || layer.v_quant == 2) {
+                                driver::launch_cuda_mmvq_qkv_mixed_ptr(
+                                    d_q_ptr,
+                                    d_k_ptr,
+                                    d_v_ptr,
+                                    v_cache_ptr,
+                                    d_sp_ptr,
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    s,
+                                );
+                            } else {
+                                Self::dispatch_gemv(
+                                    d_q_ptr,
+                                    &layer.d_wq,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.q_m,
+                                    layer.q_k,
+                                    layer.q_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_k_ptr,
+                                    &layer.d_wk,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.k_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_v_ptr,
+                                    &layer.d_wv,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.v_quant,
+                                    s,
+                                );
+                            }
                         }
 
                         // RoPE writing K-cache directly
@@ -2625,6 +2674,23 @@ impl HardwareBackend for CudaBackend {
                                     o_k as i32,
                                     s,
                                 );
+                            } else {
+                                Self::dispatch_gemv(
+                                    d_out_ptr,
+                                    &layer.d_wo,
+                                    d_out_ptr,
+                                    d_q8_1_ptr,
+                                    o_m,
+                                    o_k,
+                                    layer.o_quant,
+                                    s,
+                                );
+                                driver::launch_cuda_vector_add(
+                                    d_hid_ptr,
+                                    d_out_ptr,
+                                    o_m as i32,
+                                    s,
+                                );
                             }
                         }
 
@@ -2647,16 +2713,39 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN Gate + Up GEMV
                         unsafe {
-                            driver::launch_cuda_gemv_gate_up_q4_k(
-                                d_gate_ptr,
-                                d_up_ptr,
-                                layer.d_w1.as_raw_ptr(),
-                                layer.d_w3.as_raw_ptr(),
-                                d_q8_1_ptr,
-                                layer.inter_m as i32,
-                                h as i32,
-                                s,
-                            );
+                            if layer.gate_quant == 1 && layer.up_quant == 1 {
+                                driver::launch_cuda_gemv_gate_up_q4_k(
+                                    d_gate_ptr,
+                                    d_up_ptr,
+                                    layer.d_w1.as_raw_ptr(),
+                                    layer.d_w3.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m as i32,
+                                    h as i32,
+                                    s,
+                                );
+                            } else {
+                                Self::dispatch_gemv(
+                                    d_gate_ptr,
+                                    &layer.d_w1,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.inter_m,
+                                    h,
+                                    layer.gate_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_up_ptr,
+                                    &layer.d_w3,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.inter_m,
+                                    h,
+                                    layer.up_quant,
+                                    s,
+                                );
+                            }
                             driver::launch_cuda_fused_swiglu_q8_1(
                                 d_q8_1_ptr,
                                 d_gate_ptr,
@@ -2681,6 +2770,23 @@ impl HardwareBackend for CudaBackend {
                                     d_q8_1_ptr,
                                     h as i32,
                                     layer.inter_m as i32,
+                                    s,
+                                );
+                            } else {
+                                Self::dispatch_gemv(
+                                    d_gate_ptr,
+                                    &layer.d_w2,
+                                    d_gate_ptr,
+                                    d_q8_1_ptr,
+                                    h,
+                                    layer.inter_m,
+                                    layer.down_quant,
+                                    s,
+                                );
+                                driver::launch_cuda_vector_add(
+                                    d_hid_ptr,
+                                    d_gate_ptr,
+                                    h as i32,
                                     s,
                                 );
                             }
@@ -2723,6 +2829,27 @@ impl HardwareBackend for CudaBackend {
                                     d_q8_1_ptr,
                                     self.vocab_size as i32,
                                     h as i32,
+                                    s,
+                                );
+                            } else if self.lm_head_quant_type == 0 || self.lm_head_quant_type == 3 {
+                                driver::launch_cuda_mmvq_q8_0(
+                                    d_logits_ptr,
+                                    d_lm.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    self.vocab_size as i32,
+                                    h as i32,
+                                    1,
+                                    s,
+                                );
+                            } else {
+                                Self::dispatch_gemv(
+                                    d_logits_ptr,
+                                    d_lm,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    self.vocab_size,
+                                    h,
+                                    self.lm_head_quant_type,
                                     s,
                                 );
                             }

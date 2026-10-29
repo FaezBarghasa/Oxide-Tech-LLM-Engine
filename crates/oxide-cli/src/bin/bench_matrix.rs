@@ -411,6 +411,7 @@ fn run_oxide_decode(
     speculative: &str,
 ) -> f64 {
     let out = Command::new("target/release/oxide-engine")
+        .env("RUST_LOG", "warn")
         .args([
             "-m",
             &model.to_string_lossy(),
