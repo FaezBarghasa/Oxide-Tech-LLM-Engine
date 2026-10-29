@@ -1316,11 +1316,7 @@ impl CudaBackend {
                             && layer.q_k == layer.kv_k
                             && !d_q8_1_ptr.is_null()
                         {
-                            let y_v_ptr = if v_cache_ptr.is_null() {
-                                d_v.as_typed_ptr::<f32>()
-                            } else {
-                                std::ptr::null_mut()
-                            };
+                            let y_v_ptr = d_v.as_typed_ptr::<f32>();
                             unsafe {
                                 driver::launch_cuda_mmvq_qkv_mixed(
                                     d_q.as_typed_ptr::<f32>(),
@@ -1905,11 +1901,7 @@ impl CudaBackend {
                             && layer.q_k == layer.kv_k
                             && !d_q8_1_ptr.is_null()
                         {
-                            let y_v_ptr = if v_cache_ptr.is_null() {
-                                d_v.as_typed_ptr::<f32>()
-                            } else {
-                                std::ptr::null_mut()
-                            };
+                            let y_v_ptr = d_v.as_typed_ptr::<f32>();
                             unsafe {
                                 driver::launch_cuda_mmvq_qkv_mixed(
                                     d_q.as_typed_ptr::<f32>(),

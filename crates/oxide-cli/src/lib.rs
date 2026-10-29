@@ -925,12 +925,14 @@ fn run_chat_session(
         greedy,
     );
 
-    let mut stop_tokens = vec![106u32, 107, 128_001, 128_008, 128_009, 151_643, 151_645];
-    if tokenizer.bos_id != Some(2) {
-        stop_tokens.push(2);
-    }
+    let mut stop_tokens = Vec::new();
     if let Some(eos) = tokenizer.eos_id {
         stop_tokens.push(eos);
+    }
+    for tok in [128_001u32, 128_008, 128_009, 151_643, 151_645] {
+        if (tok as usize) < tokenizer.id_to_token.len() {
+            stop_tokens.push(tok);
+        }
     }
 
     if let Some(p) = prompt {
