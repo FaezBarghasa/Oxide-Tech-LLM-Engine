@@ -1766,6 +1766,8 @@ impl CudaBackend {
             ));
         }
 
+        let t_prefill_start = std::time::Instant::now();
+
         // 1. Initial embedding lookup for all B candidate tokens on GPU
         if let Some(d_emb) = &self.d_token_embd {
             let emb_scale = if self.is_gemma { (h as f32).sqrt() } else { 1.0f32 };
@@ -1830,6 +1832,7 @@ impl CudaBackend {
         };
 
         let num_layers = self.layers.len();
+        let t_before_layers = std::time::Instant::now();
         // 2. Multi-layer forward pass on physical GPU with Multi-Column MMVQ
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let is_last_final_layer = is_final && (layer_idx + 1 == num_layers) && batch_size > 1;
@@ -2206,12 +2209,15 @@ impl CudaBackend {
             }
         }
 
+        let _ = stream.synchronize();
+        let t_layers = t_before_layers.elapsed();
         self.seq_pos += batch_size;
 
         if !is_final {
             return Ok(None);
         }
 
+        let t_before_lm = std::time::Instant::now();
         // 3. Final Output Norm ONLY for the last token in the final prefill chunk
         let last_b = batch_size - 1;
         if let (Some(d_hid), Some(d_norm), Some(d_out_norm)) = (
@@ -2313,6 +2319,16 @@ impl CudaBackend {
                     .sample_token(host_logits, &mut self.sampler_state, 198)
                     .unwrap_or(best_tok)
             };
+
+            let t_lm = t_before_lm.elapsed();
+            tracing::info!(
+                "CUDA prefill chunk (tokens={}, is_final={}) finished in {:?} (layers: {:?}, lm+sync: {:?})",
+                batch_size,
+                is_final,
+                t_prefill_start.elapsed(),
+                t_layers,
+                t_lm
+            );
 
             Ok(Some(selected_token))
         } else {
