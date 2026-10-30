@@ -555,11 +555,21 @@ impl SpecializedPipeline {
                 "cuda" => {
                     let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
                     let rms_eps = f32::from_bits(model.config.rms_norm_eps);
+                    let rope_theta = model.config.rope_theta_f32();
+                    let rope_scaling_factor = model.config.rope_scaling_factor_f32().unwrap_or(1.0);
+                    let rope_scaling_orig_ctx = model.config.rope_scaling_orig_ctx.unwrap_or(0);
+                    let is_gemma = model.config.is_gemma;
+                    let final_logit_softcapping = model.config.final_logit_softcapping_f32();
                     backend.configure_hyperparameters(
                         rms_eps,
                         model.config.is_qwen,
                         model.config.sliding_window,
                         model.config.max_seq_len.min(8192),
+                        rope_theta,
+                        rope_scaling_factor,
+                        rope_scaling_orig_ctx,
+                        is_gemma,
+                        final_logit_softcapping,
                     );
                     // Host-side embedding lookup via mmap avoids allocating gigabytes of VRAM for token_embd.
                     let token_embd_raw = if let Some(ref emb_tensor) = model.token_embd_tensor {
@@ -676,6 +686,9 @@ impl SpecializedPipeline {
                             &layer.attn_k_norm,
                             &layer.post_attn_norm,
                             &layer.post_ffn_norm,
+                            &layer.q_bias,
+                            &layer.k_bias,
+                            &layer.v_bias,
                             layer.q_proj.rows(),
                             layer.q_proj.cols(),
                             layer.k_proj.rows(),
@@ -826,11 +839,21 @@ impl SpecializedPipeline {
             "cuda" => {
                 let mut backend = CudaBackend::new_with_profile(0, max_slots, gpu_profile);
                 let rms_eps = f32::from_bits(model.config.rms_norm_eps);
+                let rope_theta = model.config.rope_theta_f32();
+                let rope_scaling_factor = model.config.rope_scaling_factor_f32().unwrap_or(1.0);
+                let rope_scaling_orig_ctx = model.config.rope_scaling_orig_ctx.unwrap_or(0);
+                let is_gemma = model.config.is_gemma;
+                let final_logit_softcapping = model.config.final_logit_softcapping_f32();
                 backend.configure_hyperparameters(
                     rms_eps,
                     model.config.is_qwen,
                     model.config.sliding_window,
                     model.config.max_seq_len.min(8192),
+                    rope_theta,
+                    rope_scaling_factor,
+                    rope_scaling_orig_ctx,
+                    is_gemma,
+                    final_logit_softcapping,
                 );
                 let token_embd_raw = if let Some(ref emb_tensor) = model.token_embd_tensor {
                     emb_tensor.as_raw_bytes()
@@ -948,6 +971,9 @@ impl SpecializedPipeline {
                         &layer.attn_k_norm,
                         &layer.post_attn_norm,
                         &layer.post_ffn_norm,
+                        &layer.q_bias,
+                        &layer.k_bias,
+                        &layer.v_bias,
                         layer.q_proj.rows(),
                         layer.q_proj.cols(),
                         layer.k_proj.rows(),

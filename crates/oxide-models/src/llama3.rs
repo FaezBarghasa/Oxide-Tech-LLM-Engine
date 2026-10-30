@@ -1471,6 +1471,9 @@ pub struct Llama3LayerWeights {
     pub attn_k_norm: Vec<f32>,           // [head_dim] (QK-Norm)
     pub post_attn_norm: Vec<f32>,        // [hidden_dim] (Gemma 2 / Gemma 4 / Nemotron)
     pub post_ffn_norm: Vec<f32>,         // [hidden_dim] (Gemma 2 / Gemma 4 / Nemotron)
+    pub q_bias: Vec<f32>,                // [num_heads * head_dim] (Qwen2 / Qwen2.5 Attention Q-bias)
+    pub k_bias: Vec<f32>,                // [num_kv_heads * head_dim] (Qwen2 / Qwen2.5 Attention K-bias)
+    pub v_bias: Vec<f32>,                // [num_kv_heads * head_dim] (Qwen2 / Qwen2.5 Attention V-bias)
     pub layer_output_scale: Option<f32>, // (Gemma 4 / Nemotron layer scalar multiplier)
     pub inp_gate: Option<QuantizedTensor>, // [256, hidden_dim] (Gemma 4 PLE input gate)
     pub proj: Option<QuantizedTensor>,   // [hidden_dim, 256] (Gemma 4 PLE projection)
@@ -1494,6 +1497,9 @@ impl Llama3LayerWeights {
             attn_k_norm: Vec::new(),
             post_attn_norm: Vec::new(),
             post_ffn_norm: Vec::new(),
+            q_bias: Vec::new(),
+            k_bias: Vec::new(),
+            v_bias: Vec::new(),
             layer_output_scale: None,
             inp_gate: None,
             proj: None,
@@ -1557,6 +1563,9 @@ impl Llama3LayerWeights {
             attn_k_norm: Vec::new(),
             post_attn_norm: Vec::new(),
             post_ffn_norm: Vec::new(),
+            q_bias: Vec::new(),
+            k_bias: Vec::new(),
+            v_bias: Vec::new(),
             layer_output_scale: None,
             inp_gate: None,
             proj: None,
@@ -2773,6 +2782,41 @@ impl Llama3Model {
                 let k_norm_name = format!("blk.{i}.attn_k_norm.weight");
                 let post_attn_norm_name = format!("blk.{i}.post_attention_norm.weight");
                 let post_ffw_norm_name = format!("blk.{i}.post_ffw_norm.weight");
+
+                let q_bias_name = format!("blk.{i}.attn_q.bias");
+                let k_bias_name = format!("blk.{i}.attn_k.bias");
+                let v_bias_name = format!("blk.{i}.attn_v.bias");
+
+                if let Some(t) = gguf.tensors.get(&q_bias_name) {
+                    let len = t.dimensions[0] as usize;
+                    layer.q_bias.resize(len, 0.0);
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &q_bias_name,
+                        data_slice,
+                        &mut layer.q_bias,
+                    );
+                }
+                if let Some(t) = gguf.tensors.get(&k_bias_name) {
+                    let len = t.dimensions[0] as usize;
+                    layer.k_bias.resize(len, 0.0);
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &k_bias_name,
+                        data_slice,
+                        &mut layer.k_bias,
+                    );
+                }
+                if let Some(t) = gguf.tensors.get(&v_bias_name) {
+                    let len = t.dimensions[0] as usize;
+                    layer.v_bias.resize(len, 0.0);
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &v_bias_name,
+                        data_slice,
+                        &mut layer.v_bias,
+                    );
+                }
 
                 if let Some(t) = gguf.tensors.get(&q_norm_name) {
                     let len = t.dimensions[0] as usize;

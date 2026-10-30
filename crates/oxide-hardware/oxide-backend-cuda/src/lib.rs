@@ -80,6 +80,9 @@ pub struct CudaLayerWeights {
     pub d_attn_k_norm: Option<CudaDeviceBuffer>,
     pub d_post_attn_norm: Option<CudaDeviceBuffer>,
     pub d_post_ffn_norm: Option<CudaDeviceBuffer>,
+    pub d_q_bias: Option<CudaDeviceBuffer>,
+    pub d_k_bias: Option<CudaDeviceBuffer>,
+    pub d_v_bias: Option<CudaDeviceBuffer>,
     pub q_m: usize,
     pub q_k: usize,
     pub kv_m: usize,
@@ -306,12 +309,18 @@ impl CudaBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn configure_hyperparameters(
         &mut self,
         rms_norm_eps: f32,
         is_qwen: bool,
         sliding_window: Option<usize>,
         kv_capacity: usize,
+        rope_theta: f32,
+        rope_scaling_factor: f32,
+        rope_scaling_orig_ctx: usize,
+        is_gemma: bool,
+        final_logit_softcapping: Option<f32>,
     ) {
         if rms_norm_eps > 0.0 {
             self.rms_norm_eps = rms_norm_eps;
@@ -321,6 +330,13 @@ impl CudaBackend {
         if kv_capacity > 0 {
             self.kv_capacity = kv_capacity;
         }
+        if rope_theta > 0.0 {
+            self.rope_theta = rope_theta;
+        }
+        self.rope_scaling_factor = rope_scaling_factor;
+        self.rope_scaling_orig_ctx = rope_scaling_orig_ctx;
+        self.is_gemma = is_gemma;
+        self.final_logit_softcapping = final_logit_softcapping;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -895,16 +911,28 @@ impl CudaBackend {
         }
 
         if !token_embd_bytes.is_empty() {
-            let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
-                .map_err(EngineError::BackendError)?;
-            d_emb
-                .copy_from_host_async(token_embd_bytes, s)
-                .map_err(EngineError::BackendError)?;
-            self.d_token_embd = Some(d_emb);
             let q4_k_expected = vocab_size * (hidden_dim / 256) * 144;
-            if token_embd_bytes.len() == q4_k_expected {
+            let fp32_expected = vocab_size * hidden_dim * std::mem::size_of::<f32>();
+            if token_embd_bytes.len() == q4_k_expected && (hidden_dim % 256 == 0) {
+                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
+                    .map_err(EngineError::BackendError)?;
+                d_emb
+                    .copy_from_host_async(token_embd_bytes, s)
+                    .map_err(EngineError::BackendError)?;
+                self.d_token_embd = Some(d_emb);
                 self.token_embd_quant_type = 1;
+            } else if token_embd_bytes.len() == fp32_expected {
+                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
+                    .map_err(EngineError::BackendError)?;
+                d_emb
+                    .copy_from_host_async(token_embd_bytes, s)
+                    .map_err(EngineError::BackendError)?;
+                self.d_token_embd = Some(d_emb);
+                self.token_embd_quant_type = 0;
             } else {
+                // Non-Q4_K quantized embedding (e.g. Q5_0, Q8_0) where no GPU dequant kernel is present.
+                // Leave d_token_embd as None so that embedding_lookup executes on host with zero-copy mmap.
+                self.d_token_embd = None;
                 self.token_embd_quant_type = 0;
             }
         }
@@ -931,6 +959,9 @@ impl CudaBackend {
         attn_k_norm: &[f32],
         post_attn_norm: &[f32],
         post_ffn_norm: &[f32],
+        q_bias: &[f32],
+        k_bias: &[f32],
+        v_bias: &[f32],
         q_m: usize,
         q_k: usize,
         kv_m: usize,
@@ -1049,6 +1080,36 @@ impl CudaBackend {
             Some(buf)
         };
 
+        let d_q_bias = if q_bias.is_empty() {
+            None
+        } else {
+            let mut buf = CudaDeviceBuffer::allocate(q_bias.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
+            buf.copy_from_host_async(q_bias, s)
+                .map_err(EngineError::BackendError)?;
+            Some(buf)
+        };
+
+        let d_k_bias = if k_bias.is_empty() {
+            None
+        } else {
+            let mut buf = CudaDeviceBuffer::allocate(k_bias.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
+            buf.copy_from_host_async(k_bias, s)
+                .map_err(EngineError::BackendError)?;
+            Some(buf)
+        };
+
+        let d_v_bias = if v_bias.is_empty() {
+            None
+        } else {
+            let mut buf = CudaDeviceBuffer::allocate(v_bias.len() * std::mem::size_of::<f32>())
+                .map_err(EngineError::BackendError)?;
+            buf.copy_from_host_async(v_bias, s)
+                .map_err(EngineError::BackendError)?;
+            Some(buf)
+        };
+
         let kv_cap = self.kv_capacity.max(64);
         let layer_kv_dim = if kv_m > 0 {
             kv_m
@@ -1085,6 +1146,9 @@ impl CudaBackend {
             d_attn_k_norm,
             d_post_attn_norm,
             d_post_ffn_norm,
+            d_q_bias,
+            d_k_bias,
+            d_v_bias,
             q_m,
             q_k,
             kv_m,
@@ -1405,6 +1469,47 @@ impl CudaBackend {
                                     layer.kv_k,
                                     layer.v_quant,
                                     batch_size,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+
+                    // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
+                    if let Some(ref d_bias) = layer.d_q_bias {
+                        if let Some(d_q) = &mut self.d_scratch_q {
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.q_m as i32,
+                                    batch_size as i32,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+                    if let Some(ref d_bias) = layer.d_k_bias {
+                        if let Some(d_k) = &mut self.d_scratch_k {
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    batch_size as i32,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+                    if let Some(ref d_bias) = layer.d_v_bias {
+                        if let Some(d_v) = &mut self.d_scratch_v {
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_v.as_typed_ptr::<f32>(),
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    batch_size as i32,
                                     s,
                                 );
                             }
@@ -2000,6 +2105,47 @@ impl CudaBackend {
                         }
                     }
 
+                    // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
+                    if let Some(ref d_bias) = layer.d_q_bias {
+                        if let Some(d_q) = &mut self.d_scratch_q {
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.q_m as i32,
+                                    batch_size as i32,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+                    if let Some(ref d_bias) = layer.d_k_bias {
+                        if let Some(d_k) = &mut self.d_scratch_k {
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    batch_size as i32,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+                    if let Some(ref d_bias) = layer.d_v_bias {
+                        if let Some(d_v) = &mut self.d_scratch_v {
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_v.as_typed_ptr::<f32>(),
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    batch_size as i32,
+                                    s,
+                                );
+                            }
+                        }
+                    }
+
                     let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
                         10_000.0f32
                     } else {
@@ -2586,6 +2732,32 @@ impl HardwareBackend for CudaBackend {
                                     layer.kv_m,
                                     layer.kv_k,
                                     layer.v_quant,
+                                    s,
+                                );
+                            }
+
+                            // Add Q, K, V biases for single-token decode if present (e.g. Qwen2 / Qwen2.5)
+                            if let Some(ref d_bias) = layer.d_q_bias {
+                                driver::launch_cuda_vector_add(
+                                    d_q_ptr,
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.q_m as i32,
+                                    s,
+                                );
+                            }
+                            if let Some(ref d_bias) = layer.d_k_bias {
+                                driver::launch_cuda_vector_add(
+                                    d_k_ptr,
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    s,
+                                );
+                            }
+                            if let Some(ref d_bias) = layer.d_v_bias {
+                                driver::launch_cuda_vector_add(
+                                    d_v_ptr,
+                                    d_bias.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
                                     s,
                                 );
                             }
@@ -3303,7 +3475,53 @@ impl HardwareBackend for CudaBackend {
                                         layer.v_quant,
                                         s,
                                     );
-                                    if !v_dst_ptr.is_null() {
+                                }
+                                check_cuda("v_proj", layer_idx)?;
+                            }
+                        }
+
+                        // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
+                        if let Some(ref d_bias) = layer.d_q_bias {
+                            if let Some(d_q) = &mut self.d_scratch_q {
+                                unsafe {
+                                    driver::launch_cuda_vector_add(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        d_bias.as_typed_ptr::<f32>(),
+                                        layer.q_m as i32,
+                                        s,
+                                    );
+                                }
+                            }
+                        }
+                        if let Some(ref d_bias) = layer.d_k_bias {
+                            if let Some(d_k) = &mut self.d_scratch_k {
+                                unsafe {
+                                    driver::launch_cuda_vector_add(
+                                        d_k.as_typed_ptr::<f32>(),
+                                        d_bias.as_typed_ptr::<f32>(),
+                                        layer.kv_m as i32,
+                                        s,
+                                    );
+                                }
+                            }
+                        }
+                        if let Some(ref d_bias) = layer.d_v_bias {
+                            if let Some(d_v) = &mut self.d_scratch_v {
+                                unsafe {
+                                    driver::launch_cuda_vector_add(
+                                        d_v.as_typed_ptr::<f32>(),
+                                        d_bias.as_typed_ptr::<f32>(),
+                                        layer.kv_m as i32,
+                                        s,
+                                    );
+                                }
+                            }
+                        }
+
+                        if !v_done {
+                            if let Some(d_v) = &self.d_scratch_v {
+                                if !v_dst_ptr.is_null() {
+                                    unsafe {
                                         driver::launch_cuda_convert_f32_to_f16(
                                             v_dst_ptr,
                                             d_v.as_typed_ptr::<f32>(),
@@ -3312,7 +3530,6 @@ impl HardwareBackend for CudaBackend {
                                         );
                                     }
                                 }
-                                check_cuda("v_proj", layer_idx)?;
                             }
                         }
 

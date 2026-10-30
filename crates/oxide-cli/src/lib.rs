@@ -977,7 +977,7 @@ fn run_chat_session(
             parser.render_chat(&messages)
         };
         let mut tokens = tokenizer.encode(&formatted);
-        if chat_format != "raw" {
+        if chat_format != "raw" && tokenizer.add_bos_token {
             if let Some(bos) = tokenizer.bos_id
                 && tokens.first().copied() != Some(bos)
             {
@@ -1117,9 +1117,6 @@ fn run_chat_session(
             if !draft.is_empty() {
                 spec_drafted_count += draft.len();
                 let verified_tokens = pipeline.step_speculative(cur_token, &draft)?;
-                if gen_count == 1 {
-                    eprintln!("DEBUG SPEC: cur_token={}, draft={:?}, verified={:?}", cur_token, draft, verified_tokens);
-                }
                 if verified_tokens.is_empty() {
                     if let Some(ref mut ens) = ensemble {
                         ens.update_acceptance(0, draft.len());

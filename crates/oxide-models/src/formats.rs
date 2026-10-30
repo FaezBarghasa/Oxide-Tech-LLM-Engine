@@ -475,6 +475,17 @@ impl GgufFile {
     }
 
     #[must_use]
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        match self.metadata.get(key) {
+            Some(GgufValue::Bool(v)) => Some(*v),
+            Some(GgufValue::Uint32(v)) => Some(*v != 0),
+            Some(GgufValue::Int32(v)) => Some(*v != 0),
+            Some(GgufValue::Uint8(v)) => Some(*v != 0),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn architecture(&self) -> &str {
         self.get_string("general.architecture").unwrap_or("llama")
     }

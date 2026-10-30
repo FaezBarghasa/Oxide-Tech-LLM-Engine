@@ -2158,6 +2158,16 @@ __global__ void vector_add_f32_kernel(float *__restrict__ a,
   }
 }
 
+__global__ void vector_bias_add_batch_f32_kernel(float *__restrict__ a,
+                                                const float *__restrict__ bias,
+                                                int m, int total_elements) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < total_elements) {
+    int col = idx % m;
+    a[idx] += bias[col];
+  }
+}
+
 __global__ void vector_scale_f32_kernel(float *__restrict__ x, float scale,
                                         int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -3897,6 +3907,17 @@ int launch_cuda_vector_add(float *a, const float *b, int n,
   int block_size = 256;
   int grid = (n + block_size - 1) / block_size;
   vector_add_f32_kernel<<<grid, block_size, 0, stream>>>(a, b, n);
+  return cudaGetLastError();
+}
+
+int launch_cuda_vector_bias_add_batch(float *a, const float *bias, int m,
+                                      int batch_size, cudaStream_t stream) {
+  if (m <= 0 || batch_size <= 0 || a == nullptr || bias == nullptr)
+    return 0;
+  int total = m * batch_size;
+  int block_size = 256;
+  int grid = (total + block_size - 1) / block_size;
+  vector_bias_add_batch_f32_kernel<<<grid, block_size, 0, stream>>>(a, bias, m, total);
   return cudaGetLastError();
 }
 

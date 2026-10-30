@@ -409,6 +409,13 @@ unsafe extern "C" {
     ) -> i32;
 
     pub fn launch_cuda_vector_add(a: *mut f32, b: *const f32, n: i32, stream: cudaStream_t) -> i32;
+    pub fn launch_cuda_vector_bias_add_batch(
+        a: *mut f32,
+        bias: *const f32,
+        m: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
     pub fn launch_cuda_vector_scale(x: *mut f32, scale: f32, n: i32, stream: cudaStream_t) -> i32;
 
     pub fn launch_cuda_swiglu(

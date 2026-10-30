@@ -22,6 +22,8 @@ pub struct GgufTokenizer {
     pub eos_id: Option<u32>,
     pub unk_id: Option<u32>,
     pub pad_id: Option<u32>,
+    pub add_bos_token: bool,
+    pub special_tokens: Vec<String>,
 }
 
 impl Default for GgufTokenizer {
@@ -55,6 +57,8 @@ impl GgufTokenizer {
             eos_id: Some(2),
             unk_id: Some(0),
             pad_id: None,
+            add_bos_token: true,
+            special_tokens: Vec::new(),
         }
     }
 
@@ -99,6 +103,46 @@ impl GgufTokenizer {
         let eos_id = gguf.get_u32("tokenizer.ggml.eos_token_id");
         let unk_id = gguf.get_u32("tokenizer.ggml.unknown_token_id");
         let pad_id = gguf.get_u32("tokenizer.ggml.padding_token_id");
+        let add_bos_token = gguf
+            .get_bool("tokenizer.ggml.add_bos_token")
+            .unwrap_or_else(|| {
+                // If the model is ChatML / Qwen, default add_bos_token is false
+                !token_to_id.contains_key("<|im_start|>")
+            });
+
+        let mut special_tokens: Vec<String> = Vec::new();
+        if let Some(GgufValue::Array(types_arr)) = gguf.metadata.get("tokenizer.ggml.token_type") {
+            for (idx, val) in types_arr.iter().enumerate() {
+                let is_special = match val {
+                    GgufValue::Int32(t) => *t == 3 || *t == 4,
+                    GgufValue::Uint32(t) => *t == 3 || *t == 4,
+                    _ => false,
+                };
+                if is_special
+                    && let Some(s) = id_to_token.get(idx)
+                    && !s.starts_with("<0x")
+                    && s.len() > 1
+                {
+                    special_tokens.push(s.clone());
+                }
+            }
+        }
+
+        // Guarantee all <|...|>, <tool_...>, <s>, </s>, etc. are registered
+        for s in &id_to_token {
+            if ((s.starts_with("<|") && s.ends_with("|>"))
+                || (s.starts_with("<tool_") && s.ends_with(">"))
+                || s == "<s>"
+                || s == "</s>"
+                || s == "<unk>"
+                || s == "<pad>")
+                && !special_tokens.contains(s)
+            {
+                special_tokens.push(s.clone());
+            }
+        }
+
+        special_tokens.sort_by(|a, b| b.len().cmp(&a.len()));
 
         Self {
             id_to_token,
@@ -108,6 +152,8 @@ impl GgufTokenizer {
             eos_id,
             unk_id,
             pad_id,
+            add_bos_token,
+            special_tokens,
         }
     }
 
@@ -166,14 +212,11 @@ impl GgufTokenizer {
         }
     }
 
-    /// Encode input text into a sequence of token IDs using vocabulary lookup and BPE merging.
-    #[must_use]
-    pub fn encode(&self, text: &str) -> Vec<u32> {
+    /// Encode normal text without special tokens.
+    fn encode_normal(&self, text: &str, tokens: &mut Vec<u32>, is_gpt2: bool) {
         if text.is_empty() {
-            return Vec::new();
+            return;
         }
-
-        let mut tokens = Vec::new();
         let bytes = text.as_bytes();
         let mut i = 0;
 
@@ -190,35 +233,38 @@ impl GgufTokenizer {
                         matched = true;
                         break;
                     }
-                    // 2. SentencePiece with spaces replaced by \u{2581} (e.g. " is" -> " is")
-                    let sp_sub = sub.replace(' ', "\u{2581}");
-                    if let Some(&id) = self.token_to_id.get(&sp_sub) {
-                        tokens.push(id);
-                        i += len;
-                        matched = true;
-                        break;
-                    }
-                    // 3. SentencePiece leading underscore prefix (e.g. first word "What" -> " What")
-                    if !sub.starts_with(' ') {
-                        let sp_prefixed = format!("\u{2581}{sp_sub}");
-                        if let Some(&id) = self.token_to_id.get(&sp_prefixed) {
+                    if !is_gpt2 {
+                        // 2. SentencePiece with spaces replaced by \u{2581} (e.g. " is" -> " is")
+                        let sp_sub = sub.replace(' ', "\u{2581}");
+                        if let Some(&id) = self.token_to_id.get(&sp_sub) {
                             tokens.push(id);
                             i += len;
                             matched = true;
                             break;
                         }
-                    }
-                    // 4. GPT-2 / Qwen byte BPE mapping
-                    let gpt2_sub = sub
-                        .replace(' ', "\u{0120}")
-                        .replace('\n', "\u{010A}")
-                        .replace('\t', "\u{0109}")
-                        .replace('\r', "\u{010D}");
-                    if let Some(&id) = self.token_to_id.get(&gpt2_sub) {
-                        tokens.push(id);
-                        i += len;
-                        matched = true;
-                        break;
+                        // 3. SentencePiece leading underscore prefix (e.g. first word "What" -> " What")
+                        if !sub.starts_with(' ') {
+                            let sp_prefixed = format!("\u{2581}{sp_sub}");
+                            if let Some(&id) = self.token_to_id.get(&sp_prefixed) {
+                                tokens.push(id);
+                                i += len;
+                                matched = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        // 4. GPT-2 / Qwen byte BPE mapping
+                        let gpt2_sub = sub
+                            .replace(' ', "\u{0120}")
+                            .replace('\n', "\u{010A}")
+                            .replace('\t', "\u{0109}")
+                            .replace('\r', "\u{010D}");
+                        if let Some(&id) = self.token_to_id.get(&gpt2_sub) {
+                            tokens.push(id);
+                            i += len;
+                            matched = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -230,10 +276,12 @@ impl GgufTokenizer {
                 if let Some(&id) = self.token_to_id.get(&hex_tok) {
                     tokens.push(id);
                 } else if b == b' '
+                    && !is_gpt2
                     && let Some(&id) = self.token_to_id.get("\u{2581}")
                 {
                     tokens.push(id);
                 } else if b == b' '
+                    && is_gpt2
                     && let Some(&id) = self.token_to_id.get("\u{0120}")
                 {
                     tokens.push(id);
@@ -249,6 +297,54 @@ impl GgufTokenizer {
                     tokens.push(u32::from(b));
                 }
                 i += 1;
+            }
+        }
+    }
+
+    /// Encode input text into a sequence of token IDs using vocabulary lookup and BPE merging.
+    #[must_use]
+    pub fn encode(&self, text: &str) -> Vec<u32> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+
+        let is_gpt2 =
+            self.token_to_id.contains_key("<|im_start|>") || self.token_to_id.contains_key("Ġ");
+        let mut tokens = Vec::new();
+
+        if self.special_tokens.is_empty() {
+            self.encode_normal(text, &mut tokens, is_gpt2);
+            return tokens;
+        }
+
+        let mut rem = text;
+        while !rem.is_empty() {
+            // Find earliest occurrence of any special token
+            let mut earliest: Option<(usize, &str)> = None;
+            for spec in &self.special_tokens {
+                if let Some(pos) = rem.find(spec.as_str()) {
+                    match earliest {
+                        None => earliest = Some((pos, spec.as_str())),
+                        Some((cur_pos, cur_spec)) => {
+                            if pos < cur_pos || (pos == cur_pos && spec.len() > cur_spec.len()) {
+                                earliest = Some((pos, spec.as_str()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some((pos, spec)) = earliest {
+                if pos > 0 {
+                    self.encode_normal(&rem[..pos], &mut tokens, is_gpt2);
+                }
+                if let Some(&id) = self.token_to_id.get(spec) {
+                    tokens.push(id);
+                }
+                rem = &rem[pos + spec.len()..];
+            } else {
+                self.encode_normal(rem, &mut tokens, is_gpt2);
+                break;
             }
         }
 
