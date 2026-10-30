@@ -4534,6 +4534,234 @@ int launch_cuda_advance_decode_step(int *d_seq_pos,
   return cudaGetLastError();
 }
 
+__global__ void
+rope_continuous_batch_kernel(float *__restrict__ q, float *__restrict__ k,
+                             void *__restrict__ k_cache,
+                             const int *__restrict__ d_seq_positions,
+                             const int *__restrict__ d_slot_mapping,
+                             int batch_size, int num_heads, int num_kv_heads,
+                             int head_dim, int slot_stride_tokens, float theta,
+                             int is_fp16, float scaling_factor,
+                             int orig_ctx) {
+  int head_idx = blockIdx.x;
+  int b = blockIdx.y;
+  if (b >= batch_size)
+    return;
+
+  int half_dim = head_dim / 2;
+  int d = threadIdx.x;
+  if (d >= half_dim)
+    return;
+
+  int token_pos = d_seq_positions[b];
+  float freq =
+      compute_rope_freq_yarn(d, head_dim, theta, scaling_factor, orig_ctx);
+  float angle = (float)token_pos * freq;
+  float sin_val, cos_val;
+  __sincosf(angle, &sin_val, &cos_val);
+
+  if (head_idx < num_heads && q != nullptr) {
+    int q_base = b * (num_heads * head_dim) + head_idx * head_dim;
+    float q0 = q[q_base + d];
+    float q1 = q[q_base + d + half_dim];
+    q[q_base + d] = q0 * cos_val - q1 * sin_val;
+    q[q_base + d + half_dim] = q0 * sin_val + q1 * cos_val;
+  }
+
+  if (head_idx < num_kv_heads && k != nullptr) {
+    int k_base = b * (num_kv_heads * head_dim) + head_idx * head_dim;
+    float k0 = k[k_base + d];
+    float k1 = k[k_base + d + half_dim];
+    float rot0 = k0 * cos_val - k1 * sin_val;
+    float rot1 = k0 * sin_val + k1 * cos_val;
+    k[k_base + d] = rot0;
+    k[k_base + d + half_dim] = rot1;
+
+    if (k_cache != nullptr) {
+      int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
+      size_t cache_base = (size_t)(slot_idx * slot_stride_tokens + token_pos) *
+                              (num_kv_heads * head_dim) +
+                          head_idx * head_dim;
+      if (is_fp16) {
+        __half *dst_h = (__half *)k_cache;
+        dst_h[cache_base + d] = __float2half(rot0);
+        dst_h[cache_base + d + half_dim] = __float2half(rot1);
+      } else {
+        float *dst_f = (float *)k_cache;
+        dst_f[cache_base + d] = rot0;
+        dst_f[cache_base + d + half_dim] = rot1;
+      }
+    }
+  }
+}
+
+__global__ void
+write_v_cache_continuous_batch_kernel(void *__restrict__ v_cache,
+                                      const float *__restrict__ v_src,
+                                      const int *__restrict__ d_seq_positions,
+                                      const int *__restrict__ d_slot_mapping,
+                                      int batch_size, int kv_dim,
+                                      int slot_stride_tokens, int is_fp16) {
+  int b = blockIdx.y;
+  if (b >= batch_size)
+    return;
+  int d = blockIdx.x * blockDim.x + threadIdx.x;
+  if (d >= kv_dim)
+    return;
+
+  int token_pos = d_seq_positions[b];
+  int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
+  size_t cache_base =
+      (size_t)(slot_idx * slot_stride_tokens + token_pos) * kv_dim + d;
+  float val = v_src[b * kv_dim + d];
+
+  if (is_fp16) {
+    ((__half *)v_cache)[cache_base] = __float2half(val);
+  } else {
+    ((float *)v_cache)[cache_base] = val;
+  }
+}
+
+__global__ void flash_decode_continuous_batch_kernel(
+    float *__restrict__ output, const float *__restrict__ q,
+    const void *__restrict__ k_cache, const void *__restrict__ v_cache,
+    const int *__restrict__ d_seq_positions,
+    const int *__restrict__ d_slot_mapping,
+    int num_heads, int num_kv_heads, int head_dim,
+    int slot_stride_tokens, float sm_scale, int is_fp16) {
+  int head_idx = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+  if (head_idx >= num_heads)
+    return;
+  int b = blockIdx.y;
+  int lane_id = threadIdx.x % 32;
+
+  int actual_tokens = d_seq_positions[b] + 1;
+  if (actual_tokens <= 0 || head_dim <= 0)
+    return;
+
+  int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
+  const float *q_ptr = q + (b * num_heads + head_idx) * head_dim;
+  float *out_ptr = output + (b * num_heads + head_idx) * head_dim;
+
+  int kv_heads = num_kv_heads > 0 ? num_kv_heads : num_heads;
+  int heads_per_kv = (num_heads / kv_heads) > 0 ? (num_heads / kv_heads) : 1;
+  int kv_head_idx = head_idx / heads_per_kv;
+  if (kv_head_idx >= kv_heads)
+    kv_head_idx = kv_heads - 1;
+
+  float max_score = -1e20f;
+  float sum_exp = 0.0f;
+  float acc_v[16];
+#pragma unroll
+  for (int i = 0; i < 16; ++i)
+    acc_v[i] = 0.0f;
+
+  float q_reg[16];
+  int q_items = 0;
+  for (int d = lane_id; d < head_dim && q_items < 16; d += 32, q_items++) {
+    q_reg[q_items] = q_ptr[d];
+  }
+
+  size_t slot_base_offset =
+      (size_t)slot_idx * slot_stride_tokens * kv_heads * head_dim;
+
+  for (int t = 0; t < actual_tokens; t++) {
+    size_t tok_offset =
+        slot_base_offset + (size_t)(t * kv_heads + kv_head_idx) * head_dim;
+
+    float score = 0.0f;
+    if (is_fp16) {
+      const __half *k_tok = (const __half *)k_cache + tok_offset;
+      for (int i = 0; i < q_items; i++) {
+        score += q_reg[i] * __half2float(k_tok[lane_id + i * 32]);
+      }
+    } else {
+      const float *k_tok = (const float *)k_cache + tok_offset;
+      for (int i = 0; i < q_items; i++) {
+        score += q_reg[i] * k_tok[lane_id + i * 32];
+      }
+    }
+
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      score += __shfl_down_sync(0xFFFFFFFF, score, offset);
+    }
+
+    float cur_score = __shfl_sync(0xFFFFFFFF, score, 0) * sm_scale;
+    float new_max = fmaxf(max_score, cur_score);
+    float alpha = (t == 0) ? 0.0f
+                           : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
+    float beta = expf(cur_score - new_max);
+
+    max_score = new_max;
+    sum_exp = sum_exp * alpha + beta;
+
+    if (is_fp16) {
+      const __half *v_tok = (const __half *)v_cache + tok_offset;
+      for (int i = 0; i < q_items; i++) {
+        acc_v[i] =
+            acc_v[i] * alpha + beta * __half2float(v_tok[lane_id + i * 32]);
+      }
+    } else {
+      const float *v_tok = (const float *)v_cache + tok_offset;
+      for (int i = 0; i < q_items; i++) {
+        acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
+      }
+    }
+  }
+
+  float inv_sum = sum_exp > 0.0f ? (1.0f / sum_exp) : 0.0f;
+  for (int i = 0; i < q_items; i++) {
+    out_ptr[lane_id + i * 32] = acc_v[i] * inv_sum;
+  }
+}
+
+int launch_cuda_rope_continuous_batch(
+    float *q, float *k, void *k_cache, const int *d_seq_positions,
+    const int *d_slot_mapping, int batch_size, int num_heads, int num_kv_heads,
+    int head_dim, int slot_stride_tokens, float theta, int is_fp16,
+    float scaling_factor, int orig_ctx, cudaStream_t stream) {
+  if (batch_size <= 0 || head_dim <= 0)
+    return 0;
+  int max_heads = num_heads > num_kv_heads ? num_heads : num_kv_heads;
+  dim3 grid(max_heads, batch_size);
+  int block_size = head_dim / 2;
+  rope_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
+      q, k, k_cache, d_seq_positions, d_slot_mapping, batch_size, num_heads,
+      num_kv_heads, head_dim, slot_stride_tokens, theta, is_fp16,
+      scaling_factor, orig_ctx);
+  return cudaGetLastError();
+}
+
+int launch_cuda_write_v_cache_continuous_batch(
+    void *v_cache, const float *v_src, const int *d_seq_positions,
+    const int *d_slot_mapping, int batch_size, int kv_dim,
+    int slot_stride_tokens, int is_fp16, cudaStream_t stream) {
+  if (batch_size <= 0 || kv_dim <= 0)
+    return 0;
+  int block_size = 256;
+  dim3 grid((kv_dim + block_size - 1) / block_size, batch_size);
+  write_v_cache_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
+      v_cache, v_src, d_seq_positions, d_slot_mapping, batch_size, kv_dim,
+      slot_stride_tokens, is_fp16);
+  return cudaGetLastError();
+}
+
+int launch_cuda_flash_decode_continuous_batch(
+    float *output, const float *q, const void *k_cache, const void *v_cache,
+    const int *d_seq_positions, const int *d_slot_mapping, int batch_size,
+    int num_heads, int num_kv_heads, int head_dim, int slot_stride_tokens,
+    float sm_scale, int is_fp16, cudaStream_t stream) {
+  if (batch_size <= 0 || num_heads <= 0 || head_dim <= 0)
+    return 0;
+  const int block_size = 32;
+  dim3 grid(num_heads, batch_size);
+  flash_decode_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
+      output, q, k_cache, v_cache, d_seq_positions, d_slot_mapping, num_heads,
+      num_kv_heads, head_dim, slot_stride_tokens, sm_scale, is_fp16);
+  return cudaGetLastError();
+}
+
 void init_cuda_kernel_attributes() {
   cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
   cudaFuncSetAttribute(fused_rmsnorm_q8_1_cuda_kernel,

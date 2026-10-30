@@ -612,6 +612,53 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_rope_continuous_batch(
+        q: *mut f32,
+        k: *mut f32,
+        k_cache: *mut std::ffi::c_void,
+        d_seq_positions: *const i32,
+        d_slot_mapping: *const i32,
+        batch_size: i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        slot_stride_tokens: i32,
+        theta: f32,
+        is_fp16: i32,
+        scaling_factor: f32,
+        orig_ctx: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_write_v_cache_continuous_batch(
+        v_cache: *mut std::ffi::c_void,
+        v_src: *const f32,
+        d_seq_positions: *const i32,
+        d_slot_mapping: *const i32,
+        batch_size: i32,
+        kv_dim: i32,
+        slot_stride_tokens: i32,
+        is_fp16: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_flash_decode_continuous_batch(
+        output: *mut f32,
+        q: *const f32,
+        k_cache: *const std::ffi::c_void,
+        v_cache: *const std::ffi::c_void,
+        d_seq_positions: *const i32,
+        d_slot_mapping: *const i32,
+        batch_size: i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        slot_stride_tokens: i32,
+        sm_scale: f32,
+        is_fp16: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn fwht_kernel_128(d_out: *mut f32, d_in: *const f32, num_blocks: i32);
     pub fn init_cuda_kernel_attributes();
 }

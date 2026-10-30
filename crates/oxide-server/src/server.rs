@@ -36,10 +36,11 @@ impl MockEngineContext {
         let dfa_grammar = Arc::new(crate::dfa::DfaSchemaGrammar::new_simple_json_validator());
         let slot_manager = Arc::new(Mutex::new(ContinuousBatchingSlotManager::new(16)));
 
+        let pipeline_arc = Arc::new(Mutex::new(pipeline));
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let engine_handle = oxide_engine::EngineHandle::new(cmd_tx);
         let mut batch_engine =
-            oxide_engine::ContinuousBatchingEngine::new(Arc::clone(&model), 16, 128, cmd_rx);
+            oxide_engine::ContinuousBatchingEngine::new_with_pipeline(Arc::clone(&pipeline_arc), 16, cmd_rx);
 
         if tokio::runtime::Handle::try_current().is_ok() {
             batch_engine.spawn();
@@ -59,7 +60,7 @@ impl MockEngineContext {
         }
 
         let state = ServerState {
-            pipeline: Arc::new(Mutex::new(pipeline)),
+            pipeline: Arc::clone(&pipeline_arc),
             model_manager: None,
             batch_engine: Some(engine_handle),
             dfa_grammar,

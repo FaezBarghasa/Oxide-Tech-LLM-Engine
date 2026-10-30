@@ -5,12 +5,13 @@
 //! - Paged KV-Cache block management: zero heap allocation during decoding.
 //! - Lock-free multi-client streaming: transmits sampled tokens directly into client channels.
 
+use crate::pipeline::SpecializedPipeline;
 use oxide_alloc::{PagedKvArena, RadixPrefixCache, SequenceBlockTable};
 use oxide_core::sampler::{AcademicSamplerEngine, SamplerState, SamplingConfig};
 use oxide_models::{Llama3Model, Llama3ScratchBuffers};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 /// Command sent from HTTP/SSE/gRPC request handlers to the background iteration engine.
 #[derive(Debug)]
@@ -91,10 +92,11 @@ impl ChunkedPrefillConfig {
 /// Background Continuous Batching & Radix Cache Actor.
 #[derive(Debug)]
 pub struct ContinuousBatchingEngine {
-    model: Arc<Llama3Model>,
-    paged_arena: PagedKvArena,
+    model: Option<Arc<Llama3Model>>,
+    pipeline: Option<Arc<Mutex<SpecializedPipeline>>>,
+    paged_arena: Option<PagedKvArena>,
     radix_cache: RadixPrefixCache,
-    scratch: Llama3ScratchBuffers,
+    scratch: Option<Llama3ScratchBuffers>,
     active_sequences: HashMap<usize, ActiveSequence>,
     max_slots: usize,
     cmd_receiver: mpsc::UnboundedReceiver<EngineCommand>,
@@ -119,10 +121,30 @@ impl ContinuousBatchingEngine {
         let scratch = model.create_scratch();
 
         Self {
-            model,
-            paged_arena,
+            model: Some(model),
+            pipeline: None,
+            paged_arena: Some(paged_arena),
             radix_cache,
-            scratch,
+            scratch: Some(scratch),
+            active_sequences: HashMap::with_capacity(max_slots),
+            max_slots,
+            cmd_receiver,
+            prefill_config: ChunkedPrefillConfig::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn new_with_pipeline(
+        pipeline: Arc<Mutex<SpecializedPipeline>>,
+        max_slots: usize,
+        cmd_receiver: mpsc::UnboundedReceiver<EngineCommand>,
+    ) -> Self {
+        Self {
+            model: None,
+            pipeline: Some(pipeline),
+            paged_arena: None,
+            radix_cache: RadixPrefixCache::new(),
+            scratch: None,
             active_sequences: HashMap::with_capacity(max_slots),
             max_slots,
             cmd_receiver,
@@ -233,6 +255,51 @@ impl ContinuousBatchingEngine {
             return Err("Cannot enqueue empty prompt".to_string());
         }
 
+        if let Some(ref pipe_mutex) = self.pipeline {
+            let mut pipe = pipe_mutex.try_lock().map_err(|_| "Pipeline busy".to_string())?;
+            let prefill_tokens = if prompt_tokens.len() > 1 {
+                &prompt_tokens[..prompt_tokens.len() - 1]
+            } else {
+                &[]
+            };
+            if !prefill_tokens.is_empty() {
+                pipe.prefill(slot_id as u64, prefill_tokens, slot_id as u16)
+                    .map_err(|e| format!("Prefill failed: {e}"))?;
+            }
+
+            let initial_token = *prompt_tokens.last().unwrap_or(&1);
+            let initial_pos = prompt_tokens.len().saturating_sub(1);
+
+            let sampling_config = SamplingConfig {
+                temperature,
+                top_p,
+                ..Default::default()
+            };
+            let sampler = AcademicSamplerEngine::new(sampling_config);
+            let sampler_state = SamplerState::new(5.0);
+
+            let seq = ActiveSequence {
+                request_id,
+                block_table: SequenceBlockTable::new(),
+                prompt_tokens,
+                current_token: initial_token,
+                current_position: initial_pos,
+                generated_count: 0,
+                max_tokens,
+                temperature,
+                sender: token_sender,
+                sampler,
+                sampler_state,
+            };
+
+            self.active_sequences.insert(slot_id, seq);
+            return Ok(slot_id);
+        }
+
+        let model = self.model.as_ref().ok_or("No model configured")?;
+        let arena = self.paged_arena.as_mut().ok_or("No paged arena")?;
+        let scratch = self.scratch.as_mut().ok_or("No scratch buffer")?;
+
         // SGLang Radix Tree Prefix Cache Lookup:
         let (matched_len, cached_blocks) = self.radix_cache.match_longest_prefix(&prompt_tokens);
 
@@ -244,14 +311,14 @@ impl ContinuousBatchingEngine {
         let uncomputed_tokens = &prompt_tokens[matched_len..];
         for (i, &tok) in uncomputed_tokens.iter().enumerate() {
             let pos = matched_len + i;
-            if let Err(e) = self.model.forward_step_paged(
+            if let Err(e) = model.forward_step_paged(
                 tok,
                 pos,
-                &mut self.paged_arena,
+                arena,
                 &mut block_table,
-                &mut self.scratch,
+                scratch,
             ) {
-                block_table.release_all(&self.paged_arena);
+                block_table.release_all(arena);
                 return Err(format!("Prefill step failed: {e}"));
             }
         }
@@ -299,7 +366,9 @@ impl ContinuousBatchingEngine {
 
         if let Some(slot_id) = slot_to_remove {
             if let Some(mut seq) = self.active_sequences.remove(&slot_id) {
-                seq.block_table.release_all(&self.paged_arena);
+                if let Some(ref arena) = self.paged_arena {
+                    seq.block_table.release_all(arena);
+                }
             }
         }
     }
@@ -307,6 +376,98 @@ impl ContinuousBatchingEngine {
     /// Single-pass forward decode iteration over all active sequences.
     fn step_batch(&mut self) {
         let mut finished_slots = Vec::new();
+
+        if let Some(ref pipe_mutex) = self.pipeline {
+            let slot_keys: Vec<usize> = self.active_sequences.keys().copied().collect();
+            if slot_keys.is_empty() {
+                return;
+            }
+
+            let mut batch_tokens = Vec::with_capacity(slot_keys.len());
+            let mut batch_positions = Vec::with_capacity(slot_keys.len());
+            let mut slot_indices = Vec::with_capacity(slot_keys.len());
+
+            for &slot_id in &slot_keys {
+                if let Some(seq) = self.active_sequences.get(&slot_id) {
+                    batch_tokens.push(seq.current_token);
+                    batch_positions.push(seq.current_position);
+                    slot_indices.push(slot_id);
+                }
+            }
+
+            let next_tokens = {
+                let mut guard = match pipe_mutex.try_lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                guard.step_continuous_batch(&batch_tokens, &batch_positions, &slot_indices)
+            };
+
+            let next_tokens = match next_tokens {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!("step_continuous_batch failed: {e}");
+                    return;
+                }
+            };
+
+            for (i, &slot_id) in slot_keys.iter().enumerate() {
+                let next_token = next_tokens[i];
+                let is_eos = next_token == 0
+                    || next_token == 2
+                    || next_token == 128_001
+                    || next_token == 128_008
+                    || next_token == 128_009
+                    || next_token == 151_643
+                    || next_token == 151_645;
+
+                if let Some(seq) = self.active_sequences.get_mut(&slot_id) {
+                    seq.current_token = next_token;
+                    seq.current_position += 1;
+                    seq.generated_count += 1;
+
+                    let reached_max = seq.generated_count >= seq.max_tokens;
+                    let is_terminal = is_eos || reached_max;
+
+                    let finish_reason = if is_eos {
+                        Some("stop".to_string())
+                    } else if reached_max {
+                        Some("length".to_string())
+                    } else {
+                        None
+                    };
+
+                    let event = TokenEvent {
+                        token_id: next_token,
+                        is_terminal,
+                        finish_reason,
+                    };
+
+                    let send_ok = seq.sender.send(event).is_ok();
+                    if is_terminal || !send_ok {
+                        finished_slots.push(slot_id);
+                    }
+                }
+            }
+
+            for slot_id in finished_slots {
+                self.active_sequences.remove(&slot_id);
+            }
+            return;
+        }
+
+        let model = match self.model.as_ref() {
+            Some(m) => m,
+            None => return,
+        };
+        let arena = match self.paged_arena.as_mut() {
+            Some(a) => a,
+            None => return,
+        };
+        let scratch = match self.scratch.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
 
         let slot_keys: Vec<usize> = self.active_sequences.keys().copied().collect();
 
@@ -316,12 +477,12 @@ impl ContinuousBatchingEngine {
             };
 
             // Run zero-allocation forward decode step
-            let step_res = self.model.forward_step_paged(
+            let step_res = model.forward_step_paged(
                 seq.current_token,
                 seq.current_position,
-                &mut self.paged_arena,
+                arena,
                 &mut seq.block_table,
-                &mut self.scratch,
+                scratch,
             );
 
             match step_res {
@@ -330,7 +491,7 @@ impl ContinuousBatchingEngine {
                     let next_token = if seq.temperature <= 1e-6 {
                         let mut max_idx = 0;
                         let mut max_val = f32::NEG_INFINITY;
-                        for (i, &logit) in self.scratch.logits.iter().enumerate() {
+                        for (i, &logit) in scratch.logits.iter().enumerate() {
                             if logit > max_val {
                                 max_val = logit;
                                 max_idx = i;
@@ -339,7 +500,7 @@ impl ContinuousBatchingEngine {
                         max_idx as u32
                     } else {
                         seq.sampler
-                            .sample_token(&mut self.scratch.logits, &mut seq.sampler_state, 10)
+                            .sample_token(&mut scratch.logits, &mut seq.sampler_state, 10)
                             .unwrap_or(0)
                     };
                     seq.current_token = next_token;
@@ -382,7 +543,7 @@ impl ContinuousBatchingEngine {
         // Clean up finished sequences and release physical KV blocks
         for slot_id in finished_slots {
             if let Some(mut seq) = self.active_sequences.remove(&slot_id) {
-                seq.block_table.release_all(&self.paged_arena);
+                seq.block_table.release_all(arena);
             }
         }
     }

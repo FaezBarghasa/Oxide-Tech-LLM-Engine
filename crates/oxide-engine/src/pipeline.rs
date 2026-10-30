@@ -113,6 +113,29 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Dispatches a continuous batch decode step across multiple active slots in a single GPU pass.
+    pub fn step_continuous_batch(
+        &mut self,
+        batch_tokens: &[u32],
+        batch_positions: &[usize],
+        slot_indices: &[usize],
+    ) -> Result<Vec<u32>> {
+        match self {
+            Self::Llama3Cuda(engine) => engine
+                .backend
+                .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices),
+            _ => {
+                let mut out = Vec::with_capacity(batch_tokens.len());
+                for i in 0..batch_tokens.len() {
+                    let cmd = StepCommand::new(0, batch_tokens[i], slot_indices[i] as u16, false);
+                    let completion = self.step(&cmd)?;
+                    out.push(completion.sampled_token);
+                }
+                Ok(out)
+            }
+        }
+    }
+
     /// Returns current sequence position in KV cache.
     #[inline(always)]
     pub fn get_seq_pos(&self, sequence_id: u64) -> usize {
