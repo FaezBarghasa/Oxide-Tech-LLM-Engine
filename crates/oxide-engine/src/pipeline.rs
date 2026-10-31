@@ -120,19 +120,18 @@ impl SpecializedPipeline {
         batch_positions: &[usize],
         slot_indices: &[usize],
     ) -> Result<Vec<u32>> {
-        match self {
-            Self::Llama3Cuda(engine) => engine
+        if let Self::Llama3Cuda(engine) = self {
+            engine
                 .backend
-                .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices),
-            _ => {
-                let mut out = Vec::with_capacity(batch_tokens.len());
-                for i in 0..batch_tokens.len() {
-                    let cmd = StepCommand::new(0, batch_tokens[i], slot_indices[i] as u16, false);
-                    let completion = self.step(&cmd)?;
-                    out.push(completion.sampled_token);
-                }
-                Ok(out)
+                .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices)
+        } else {
+            let mut out = Vec::with_capacity(batch_tokens.len());
+            for i in 0..batch_tokens.len() {
+                let cmd = StepCommand::new(0, batch_tokens[i], slot_indices[i] as u16, false);
+                let completion = self.step(&cmd)?;
+                out.push(completion.sampled_token);
             }
+            Ok(out)
         }
     }
 
@@ -549,11 +548,26 @@ impl SpecializedPipeline {
 
     /// Prefills prompt tokens into the sequence KV cache before autoregressive token generation.
     pub fn prefill(&mut self, sequence_id: u64, tokens: &[u32], slot_idx: u16) -> Result<()> {
-        for &tok in tokens {
-            let cmd = StepCommand::new(sequence_id, tok, slot_idx, true);
-            self.step(&cmd)?;
+        if let Self::Llama3Cuda(engine) = self {
+            let chunk_size = 512usize;
+            let chunks: Vec<&[u32]> = tokens.chunks(chunk_size).collect();
+            let total_chunks = chunks.len();
+            for (idx, chunk) in chunks.into_iter().enumerate() {
+                let is_final = idx + 1 == total_chunks;
+                let _ = engine.backend.dispatch_prefill_chunk_slot(
+                    chunk,
+                    is_final,
+                    slot_idx as usize,
+                )?;
+            }
+            Ok(())
+        } else {
+            for &tok in tokens {
+                let cmd = StepCommand::new(sequence_id, tok, slot_idx, true);
+                self.step(&cmd)?;
+            }
+            Ok(())
         }
-        Ok(())
     }
 
     /// Universal model loader resolving from a local file path (GGUF/SafeTensors),

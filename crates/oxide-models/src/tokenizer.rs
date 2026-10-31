@@ -131,7 +131,7 @@ impl GgufTokenizer {
         // Guarantee all <|...|>, <tool_...>, <s>, </s>, etc. are registered
         for s in &id_to_token {
             if ((s.starts_with("<|") && s.ends_with("|>"))
-                || (s.starts_with("<tool_") && s.ends_with(">"))
+                || (s.starts_with("<tool_") && s.ends_with('>'))
                 || s == "<s>"
                 || s == "</s>"
                 || s == "<unk>"
@@ -142,7 +142,7 @@ impl GgufTokenizer {
             }
         }
 
-        special_tokens.sort_by(|a, b| b.len().cmp(&a.len()));
+        special_tokens.sort_by_key(|a| std::cmp::Reverse(a.len()));
 
         Self {
             id_to_token,

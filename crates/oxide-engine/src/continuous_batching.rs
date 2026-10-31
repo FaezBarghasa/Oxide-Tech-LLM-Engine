@@ -11,7 +11,7 @@ use oxide_core::sampler::{AcademicSamplerEngine, SamplerState, SamplingConfig};
 use oxide_models::{Llama3Model, Llama3ScratchBuffers};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Command sent from HTTP/SSE/gRPC request handlers to the background iteration engine.
 #[derive(Debug)]
@@ -256,7 +256,9 @@ impl ContinuousBatchingEngine {
         }
 
         if let Some(ref pipe_mutex) = self.pipeline {
-            let mut pipe = pipe_mutex.try_lock().map_err(|_| "Pipeline busy".to_string())?;
+            let mut pipe = pipe_mutex
+                .try_lock()
+                .map_err(|_| "Pipeline busy".to_string())?;
             let prefill_tokens = if prompt_tokens.len() > 1 {
                 &prompt_tokens[..prompt_tokens.len() - 1]
             } else {
@@ -311,13 +313,7 @@ impl ContinuousBatchingEngine {
         let uncomputed_tokens = &prompt_tokens[matched_len..];
         for (i, &tok) in uncomputed_tokens.iter().enumerate() {
             let pos = matched_len + i;
-            if let Err(e) = model.forward_step_paged(
-                tok,
-                pos,
-                arena,
-                &mut block_table,
-                scratch,
-            ) {
+            if let Err(e) = model.forward_step_paged(tok, pos, arena, &mut block_table, scratch) {
                 block_table.release_all(arena);
                 return Err(format!("Prefill step failed: {e}"));
             }
@@ -396,9 +392,8 @@ impl ContinuousBatchingEngine {
             }
 
             let next_tokens = {
-                let mut guard = match pipe_mutex.try_lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
+                let Ok(mut guard) = pipe_mutex.try_lock() else {
+                    return;
                 };
                 guard.step_continuous_batch(&batch_tokens, &batch_positions, &slot_indices)
             };
@@ -456,17 +451,14 @@ impl ContinuousBatchingEngine {
             return;
         }
 
-        let model = match self.model.as_ref() {
-            Some(m) => m,
-            None => return,
+        let Some(model) = self.model.as_ref() else {
+            return;
         };
-        let arena = match self.paged_arena.as_mut() {
-            Some(a) => a,
-            None => return,
+        let Some(arena) = self.paged_arena.as_mut() else {
+            return;
         };
-        let scratch = match self.scratch.as_mut() {
-            Some(s) => s,
-            None => return,
+        let Some(scratch) = self.scratch.as_mut() else {
+            return;
         };
 
         let slot_keys: Vec<usize> = self.active_sequences.keys().copied().collect();

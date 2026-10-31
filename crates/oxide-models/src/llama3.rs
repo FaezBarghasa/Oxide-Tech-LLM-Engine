@@ -1471,13 +1471,13 @@ pub struct Llama3LayerWeights {
     pub attn_k_norm: Vec<f32>,           // [head_dim] (QK-Norm)
     pub post_attn_norm: Vec<f32>,        // [hidden_dim] (Gemma 2 / Gemma 4 / Nemotron)
     pub post_ffn_norm: Vec<f32>,         // [hidden_dim] (Gemma 2 / Gemma 4 / Nemotron)
-    pub q_bias: Vec<f32>,                // [num_heads * head_dim] (Qwen2 / Qwen2.5 Attention Q-bias)
-    pub k_bias: Vec<f32>,                // [num_kv_heads * head_dim] (Qwen2 / Qwen2.5 Attention K-bias)
-    pub v_bias: Vec<f32>,                // [num_kv_heads * head_dim] (Qwen2 / Qwen2.5 Attention V-bias)
+    pub q_bias: Vec<f32>, // [num_heads * head_dim] (Qwen2 / Qwen2.5 Attention Q-bias)
+    pub k_bias: Vec<f32>, // [num_kv_heads * head_dim] (Qwen2 / Qwen2.5 Attention K-bias)
+    pub v_bias: Vec<f32>, // [num_kv_heads * head_dim] (Qwen2 / Qwen2.5 Attention V-bias)
     pub layer_output_scale: Option<f32>, // (Gemma 4 / Nemotron layer scalar multiplier)
     pub inp_gate: Option<QuantizedTensor>, // [256, hidden_dim] (Gemma 4 PLE input gate)
-    pub proj: Option<QuantizedTensor>,   // [hidden_dim, 256] (Gemma 4 PLE projection)
-    pub post_norm: Vec<f32>,             // [hidden_dim] (Gemma 4 layer end norm)
+    pub proj: Option<QuantizedTensor>, // [hidden_dim, 256] (Gemma 4 PLE projection)
+    pub post_norm: Vec<f32>, // [hidden_dim] (Gemma 4 layer end norm)
 }
 
 impl Llama3LayerWeights {

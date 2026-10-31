@@ -1,8 +1,8 @@
+use memmap2::Mmap;
+use oxide_engine::SpecializedPipeline;
+use oxide_models::{GgufFile, GgufTokenizer};
 use std::fs::File;
 use std::path::PathBuf;
-use memmap2::Mmap;
-use oxide_models::{GgufFile, GgufTokenizer};
-use oxide_engine::SpecializedPipeline;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let model_path = PathBuf::from("/home/jrad/models/Huihui-Qwen3-8B-abliterated-v2.Q4_K_M.gguf");
@@ -18,7 +18,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for len in [1, 2, 4, 8, 15, 16, 17, 31, 32, 33, 48, 53] {
         let sub = &tokens[..len];
         // Step
-        let mut pipe_s = SpecializedPipeline::from_model_or_path(&model_path.to_string_lossy(), "cuda", None, 1, None)?;
+        let mut pipe_s = SpecializedPipeline::from_model_or_path(
+            &model_path.to_string_lossy(),
+            "cuda",
+            None,
+            1,
+            None,
+        )?;
         pipe_s.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
         let mut s_tok = 0u32;
         for (i, &tok) in sub.iter().enumerate() {
@@ -30,7 +36,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         drop(pipe_s);
 
         // Chunk
-        let mut pipe_c = SpecializedPipeline::from_model_or_path(&model_path.to_string_lossy(), "cuda", None, 1, None)?;
+        let mut pipe_c = SpecializedPipeline::from_model_or_path(
+            &model_path.to_string_lossy(),
+            "cuda",
+            None,
+            1,
+            None,
+        )?;
         pipe_c.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
         let mut c_tok = 0u32;
         let mut ret_some = false;
@@ -50,8 +62,16 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         drop(pipe_c);
 
-        println!("len {}: step {} ({:?}), chunk {} ({:?}) [ret_some={}] - match: {}",
-            len, s_tok, tokenizer.decode_token(s_tok), c_tok, tokenizer.decode_token(c_tok), ret_some, s_tok == c_tok);
+        println!(
+            "len {}: step {} ({:?}), chunk {} ({:?}) [ret_some={}] - match: {}",
+            len,
+            s_tok,
+            tokenizer.decode_token(s_tok),
+            c_tok,
+            tokenizer.decode_token(c_tok),
+            ret_some,
+            s_tok == c_tok
+        );
         if s_tok != c_tok {
             break;
         }
