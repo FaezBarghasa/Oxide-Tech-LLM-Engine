@@ -2566,40 +2566,63 @@ __global__ void flash_causal_batched_prefill_kernel(
   }
 
   // Grid-stride over past KV cached tokens (causal: up to token_pos)
-  // Vectorized 4-token unrolled chunk loop for high-throughput prefill
+  // Vectorized 8-token unrolled chunk loop for high-throughput prefill
   int t = 0;
-  for (; t + 3 < num_kv_tokens; t += 4) {
+  for (; t + 7 < num_kv_tokens; t += 8) {
     size_t tok_offset0 = (size_t)((t + 0) * kv_heads + kv_head_idx) * head_dim;
     size_t tok_offset1 = (size_t)((t + 1) * kv_heads + kv_head_idx) * head_dim;
     size_t tok_offset2 = (size_t)((t + 2) * kv_heads + kv_head_idx) * head_dim;
     size_t tok_offset3 = (size_t)((t + 3) * kv_heads + kv_head_idx) * head_dim;
+    size_t tok_offset4 = (size_t)((t + 4) * kv_heads + kv_head_idx) * head_dim;
+    size_t tok_offset5 = (size_t)((t + 5) * kv_heads + kv_head_idx) * head_dim;
+    size_t tok_offset6 = (size_t)((t + 6) * kv_heads + kv_head_idx) * head_dim;
+    size_t tok_offset7 = (size_t)((t + 7) * kv_heads + kv_head_idx) * head_dim;
 
     float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+    float s4 = 0.0f, s5 = 0.0f, s6 = 0.0f, s7 = 0.0f;
     if (is_fp16) {
       const __half *k0 = (const __half *)k_cache + tok_offset0;
       const __half *k1 = (const __half *)k_cache + tok_offset1;
       const __half *k2 = (const __half *)k_cache + tok_offset2;
       const __half *k3 = (const __half *)k_cache + tok_offset3;
+      const __half *k4 = (const __half *)k_cache + tok_offset4;
+      const __half *k5 = (const __half *)k_cache + tok_offset5;
+      const __half *k6 = (const __half *)k_cache + tok_offset6;
+      const __half *k7 = (const __half *)k_cache + tok_offset7;
 #pragma unroll
       for (int i = 0; i < q_items; i++) {
         int idx = lane_id + i * 32;
-        s0 += q_reg[i] * __half2float(k0[idx]);
-        s1 += q_reg[i] * __half2float(k1[idx]);
-        s2 += q_reg[i] * __half2float(k2[idx]);
-        s3 += q_reg[i] * __half2float(k3[idx]);
+        float qr = q_reg[i];
+        s0 += qr * __half2float(k0[idx]);
+        s1 += qr * __half2float(k1[idx]);
+        s2 += qr * __half2float(k2[idx]);
+        s3 += qr * __half2float(k3[idx]);
+        s4 += qr * __half2float(k4[idx]);
+        s5 += qr * __half2float(k5[idx]);
+        s6 += qr * __half2float(k6[idx]);
+        s7 += qr * __half2float(k7[idx]);
       }
     } else {
       const float *k0 = (const float *)k_cache + tok_offset0;
       const float *k1 = (const float *)k_cache + tok_offset1;
       const float *k2 = (const float *)k_cache + tok_offset2;
       const float *k3 = (const float *)k_cache + tok_offset3;
+      const float *k4 = (const float *)k_cache + tok_offset4;
+      const float *k5 = (const float *)k_cache + tok_offset5;
+      const float *k6 = (const float *)k_cache + tok_offset6;
+      const float *k7 = (const float *)k_cache + tok_offset7;
 #pragma unroll
       for (int i = 0; i < q_items; i++) {
         int idx = lane_id + i * 32;
-        s0 += q_reg[i] * k0[idx];
-        s1 += q_reg[i] * k1[idx];
-        s2 += q_reg[i] * k2[idx];
-        s3 += q_reg[i] * k3[idx];
+        float qr = q_reg[i];
+        s0 += qr * k0[idx];
+        s1 += qr * k1[idx];
+        s2 += qr * k2[idx];
+        s3 += qr * k3[idx];
+        s4 += qr * k4[idx];
+        s5 += qr * k5[idx];
+        s6 += qr * k6[idx];
+        s7 += qr * k7[idx];
       }
     }
 
@@ -2609,14 +2632,24 @@ __global__ void flash_causal_batched_prefill_kernel(
       s1 += __shfl_down_sync(0xFFFFFFFF, s1, offset);
       s2 += __shfl_down_sync(0xFFFFFFFF, s2, offset);
       s3 += __shfl_down_sync(0xFFFFFFFF, s3, offset);
+      s4 += __shfl_down_sync(0xFFFFFFFF, s4, offset);
+      s5 += __shfl_down_sync(0xFFFFFFFF, s5, offset);
+      s6 += __shfl_down_sync(0xFFFFFFFF, s6, offset);
+      s7 += __shfl_down_sync(0xFFFFFFFF, s7, offset);
     }
 
     float c0 = __shfl_sync(0xFFFFFFFF, s0, 0) * sm_scale;
     float c1 = __shfl_sync(0xFFFFFFFF, s1, 0) * sm_scale;
     float c2 = __shfl_sync(0xFFFFFFFF, s2, 0) * sm_scale;
     float c3 = __shfl_sync(0xFFFFFFFF, s3, 0) * sm_scale;
+    float c4 = __shfl_sync(0xFFFFFFFF, s4, 0) * sm_scale;
+    float c5 = __shfl_sync(0xFFFFFFFF, s5, 0) * sm_scale;
+    float c6 = __shfl_sync(0xFFFFFFFF, s6, 0) * sm_scale;
+    float c7 = __shfl_sync(0xFFFFFFFF, s7, 0) * sm_scale;
 
-    float cur_max = fmaxf(fmaxf(c0, c1), fmaxf(c2, c3));
+    float cur_max03 = fmaxf(fmaxf(c0, c1), fmaxf(c2, c3));
+    float cur_max47 = fmaxf(fmaxf(c4, c5), fmaxf(c6, c7));
+    float cur_max = fmaxf(cur_max03, cur_max47);
     float new_max = fmaxf(max_score, cur_max);
     float alpha = (max_score == -1e20f)
                       ? 0.0f
@@ -2625,15 +2658,23 @@ __global__ void flash_causal_batched_prefill_kernel(
     float beta1 = expf(c1 - new_max);
     float beta2 = expf(c2 - new_max);
     float beta3 = expf(c3 - new_max);
+    float beta4 = expf(c4 - new_max);
+    float beta5 = expf(c5 - new_max);
+    float beta6 = expf(c6 - new_max);
+    float beta7 = expf(c7 - new_max);
 
     max_score = new_max;
-    sum_exp = sum_exp * alpha + (beta0 + beta1 + beta2 + beta3);
+    sum_exp = sum_exp * alpha + (beta0 + beta1 + beta2 + beta3 + beta4 + beta5 + beta6 + beta7);
 
     if (is_fp16) {
       const __half *v0 = (const __half *)v_cache + tok_offset0;
       const __half *v1 = (const __half *)v_cache + tok_offset1;
       const __half *v2 = (const __half *)v_cache + tok_offset2;
       const __half *v3 = (const __half *)v_cache + tok_offset3;
+      const __half *v4 = (const __half *)v_cache + tok_offset4;
+      const __half *v5 = (const __half *)v_cache + tok_offset5;
+      const __half *v6 = (const __half *)v_cache + tok_offset6;
+      const __half *v7 = (const __half *)v_cache + tok_offset7;
 #pragma unroll
       for (int i = 0; i < q_items; i++) {
         int idx = lane_id + i * 32;
@@ -2641,13 +2682,21 @@ __global__ void flash_causal_batched_prefill_kernel(
             (beta0 * __half2float(v0[idx]) +
              beta1 * __half2float(v1[idx]) +
              beta2 * __half2float(v2[idx]) +
-             beta3 * __half2float(v3[idx]));
+             beta3 * __half2float(v3[idx]) +
+             beta4 * __half2float(v4[idx]) +
+             beta5 * __half2float(v5[idx]) +
+             beta6 * __half2float(v6[idx]) +
+             beta7 * __half2float(v7[idx]));
       }
     } else {
       const float *v0 = (const float *)v_cache + tok_offset0;
       const float *v1 = (const float *)v_cache + tok_offset1;
       const float *v2 = (const float *)v_cache + tok_offset2;
       const float *v3 = (const float *)v_cache + tok_offset3;
+      const float *v4 = (const float *)v_cache + tok_offset4;
+      const float *v5 = (const float *)v_cache + tok_offset5;
+      const float *v6 = (const float *)v_cache + tok_offset6;
+      const float *v7 = (const float *)v_cache + tok_offset7;
 #pragma unroll
       for (int i = 0; i < q_items; i++) {
         int idx = lane_id + i * 32;
@@ -2655,7 +2704,11 @@ __global__ void flash_causal_batched_prefill_kernel(
             (beta0 * v0[idx] +
              beta1 * v1[idx] +
              beta2 * v2[idx] +
-             beta3 * v3[idx]);
+             beta3 * v3[idx] +
+             beta4 * v4[idx] +
+             beta5 * v5[idx] +
+             beta6 * v6[idx] +
+             beta7 * v7[idx]);
       }
     }
   }
