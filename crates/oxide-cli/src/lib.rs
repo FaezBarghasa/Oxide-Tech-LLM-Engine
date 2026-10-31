@@ -1550,6 +1550,8 @@ async fn run_server_with_options(
         }
     };
 
+    let tok_arc = Arc::new(tokenizer);
+
     let batch_engine = {
         let p = std::path::Path::new(model);
         if p.exists() {
@@ -1560,7 +1562,8 @@ async fn run_server_with_options(
                     max_slots,
                     kv_device_blocks.max(1024),
                     cmd_rx,
-                );
+                )
+                .with_tokenizer(Arc::clone(&tok_arc));
                 engine.spawn();
                 Some(oxide_engine::EngineHandle::new(cmd_tx))
             } else {
@@ -1578,7 +1581,7 @@ async fn run_server_with_options(
         dfa_grammar,
         slot_manager,
         kv_cache,
-        tokenizer: Arc::new(tokenizer),
+        tokenizer: tok_arc,
     };
 
     start_server(serve, state).await?;

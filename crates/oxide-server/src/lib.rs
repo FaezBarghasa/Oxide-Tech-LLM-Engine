@@ -445,15 +445,22 @@ async fn chat_completions_handler(
     let tokenizer = Arc::clone(&state.tokenizer);
     let initial_token = prompt_tokens.last().copied().unwrap_or(1);
 
+    let dfa_opt = if payload.json_schema == Some(true) {
+        Some(Arc::clone(&state.dfa_grammar))
+    } else {
+        None
+    };
+
     // High-throughput Continuous Batching path (zero lock contention on hot loop)
     if let Some(engine) = &state.batch_engine {
         match engine
-            .generate_stream(
+            .generate_stream_with_grammar(
                 req_id.clone(),
                 slot_request.prompt_tokens.clone(),
                 max_tokens,
                 slot_request.temperature,
                 slot_request.top_p,
+                dfa_opt,
             )
             .await
         {

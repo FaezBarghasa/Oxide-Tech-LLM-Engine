@@ -40,7 +40,7 @@ pub use cskv::{
     VERSION_HYBRID_F16, VERSION_MLA, VERSION_MLA_F16,
 };
 pub use dag::{PhysicalBlockId, SharedPhysicalBlock, TreeNode};
-pub use dfa::{DfaSchemaGrammar, DFA_ERROR_STATE};
+pub use dfa::{DFA_ERROR_STATE, DfaSchemaGrammar};
 pub use error::{EngineError, OxideError, Result};
 pub use hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,

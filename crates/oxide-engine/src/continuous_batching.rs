@@ -250,6 +250,7 @@ impl ContinuousBatchingEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_enqueue(
         &mut self,
         request_id: String,
@@ -257,6 +258,7 @@ impl ContinuousBatchingEngine {
         max_tokens: usize,
         temperature: f32,
         top_p: f32,
+        dfa: Option<Arc<DfaSchemaGrammar>>,
         token_sender: mpsc::UnboundedSender<TokenEvent>,
     ) -> Result<usize, String> {
         if self.active_sequences.len() >= self.max_slots {
@@ -304,7 +306,7 @@ impl ContinuousBatchingEngine {
             let sampler = AcademicSamplerEngine::new(sampling_config);
             let sampler_state = SamplerState::new(5.0);
 
-            let seq = ActiveSequence {
+            let mut seq = ActiveSequence {
                 request_id,
                 block_table: SequenceBlockTable::new(),
                 prompt_tokens,
@@ -316,7 +318,58 @@ impl ContinuousBatchingEngine {
                 sender: token_sender,
                 sampler,
                 sampler_state,
+                dfa,
+                dfa_state: 0,
             };
+
+            // Initial DFA jump-forward if grammar begins with deterministic syntax
+            if let Some(ref grammar) = seq.dfa.clone() {
+                let (jump_bytes, next_state) = grammar.find_jump_forward_bytes(seq.dfa_state, 16);
+                if !jump_bytes.is_empty() {
+                    let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
+                        if let Ok(s) = std::str::from_utf8(&jump_bytes) {
+                            tok.encode(s)
+                        } else {
+                            jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                        }
+                    } else {
+                        jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                    };
+
+                    for &jump_tok in &jump_tokens {
+                        if seq.generated_count >= seq.max_tokens {
+                            break;
+                        }
+                        let is_accepting = grammar
+                            .accepting_states
+                            .get(next_state as usize)
+                            .copied()
+                            .unwrap_or(false);
+                        let reached_max = seq.generated_count + 1 >= seq.max_tokens;
+                        let is_terminal = reached_max || is_accepting;
+                        let finish_reason = if is_accepting {
+                            Some("stop".to_string())
+                        } else if reached_max {
+                            Some("length".to_string())
+                        } else {
+                            None
+                        };
+
+                        let event = TokenEvent {
+                            token_id: jump_tok,
+                            is_terminal,
+                            finish_reason,
+                        };
+                        let _ = seq.sender.send(event);
+                        let _ = pipe.prefill(slot_id as u64, &[jump_tok], slot_id as u16);
+
+                        seq.current_token = jump_tok;
+                        seq.current_position += 1;
+                        seq.generated_count += 1;
+                    }
+                    seq.dfa_state = next_state;
+                }
+            }
 
             self.active_sequences.insert(slot_id, seq);
             return Ok(slot_id);
@@ -359,7 +412,7 @@ impl ContinuousBatchingEngine {
         let sampler = AcademicSamplerEngine::new(sampling_config);
         let sampler_state = SamplerState::new(5.0);
 
-        let seq = ActiveSequence {
+        let mut seq = ActiveSequence {
             request_id,
             block_table,
             prompt_tokens,
@@ -371,7 +424,64 @@ impl ContinuousBatchingEngine {
             sender: token_sender,
             sampler,
             sampler_state,
+            dfa,
+            dfa_state: 0,
         };
+
+        // Initial DFA jump-forward if grammar begins with deterministic syntax
+        if let Some(ref grammar) = seq.dfa.clone() {
+            let (jump_bytes, next_state) = grammar.find_jump_forward_bytes(seq.dfa_state, 16);
+            if !jump_bytes.is_empty() {
+                let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
+                    if let Ok(s) = std::str::from_utf8(&jump_bytes) {
+                        tok.encode(s)
+                    } else {
+                        jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                    }
+                } else {
+                    jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                };
+
+                for &jump_tok in &jump_tokens {
+                    if seq.generated_count >= seq.max_tokens {
+                        break;
+                    }
+                    let is_accepting = grammar
+                        .accepting_states
+                        .get(next_state as usize)
+                        .copied()
+                        .unwrap_or(false);
+                    let reached_max = seq.generated_count + 1 >= seq.max_tokens;
+                    let is_terminal = reached_max || is_accepting;
+                    let finish_reason = if is_accepting {
+                        Some("stop".to_string())
+                    } else if reached_max {
+                        Some("length".to_string())
+                    } else {
+                        None
+                    };
+
+                    let event = TokenEvent {
+                        token_id: jump_tok,
+                        is_terminal,
+                        finish_reason,
+                    };
+                    let _ = seq.sender.send(event);
+                    let _ = model.forward_step_paged(
+                        jump_tok,
+                        seq.current_position,
+                        arena,
+                        &mut seq.block_table,
+                        scratch,
+                    );
+
+                    seq.current_token = jump_tok;
+                    seq.current_position += 1;
+                    seq.generated_count += 1;
+                }
+                seq.dfa_state = next_state;
+            }
+        }
 
         self.active_sequences.insert(slot_id, seq);
         Ok(slot_id)
@@ -476,6 +586,76 @@ impl ContinuousBatchingEngine {
                     let send_ok = seq.sender.send(event).is_ok();
                     if is_terminal || !send_ok {
                         finished_slots.push(slot_id);
+                    } else if let Some(ref grammar) = seq.dfa.clone() {
+                        // Update DFA grammar state and trigger deterministic jump-forward
+                        let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {
+                            tok.decode_token(next_token).into_bytes()
+                        } else {
+                            vec![next_token as u8]
+                        };
+                        for b in tok_bytes {
+                            if let Ok(next_s) = grammar.transition(seq.dfa_state, b) {
+                                if next_s != DFA_ERROR_STATE {
+                                    seq.dfa_state = next_s;
+                                }
+                            }
+                        }
+
+                        let (jump_bytes, next_state) =
+                            grammar.find_jump_forward_bytes(seq.dfa_state, 16);
+                        if !jump_bytes.is_empty() {
+                            let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
+                                if let Ok(s) = std::str::from_utf8(&jump_bytes) {
+                                    tok.encode(s)
+                                } else {
+                                    jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                                }
+                            } else {
+                                jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                            };
+
+                            for &jump_tok in &jump_tokens {
+                                if seq.generated_count >= seq.max_tokens {
+                                    break;
+                                }
+                                let is_accepting = grammar
+                                    .accepting_states
+                                    .get(next_state as usize)
+                                    .copied()
+                                    .unwrap_or(false);
+                                let reached_max = seq.generated_count + 1 >= seq.max_tokens;
+                                let is_terminal = reached_max || is_accepting;
+                                let finish_reason = if is_accepting {
+                                    Some("stop".to_string())
+                                } else if reached_max {
+                                    Some("length".to_string())
+                                } else {
+                                    None
+                                };
+
+                                let event = TokenEvent {
+                                    token_id: jump_tok,
+                                    is_terminal,
+                                    finish_reason,
+                                };
+                                let _ = seq.sender.send(event);
+
+                                if let Ok(mut guard) = pipe_mutex.try_lock() {
+                                    let _ =
+                                        guard.prefill(slot_id as u64, &[jump_tok], slot_id as u16);
+                                }
+
+                                seq.current_token = jump_tok;
+                                seq.current_position += 1;
+                                seq.generated_count += 1;
+
+                                if is_terminal {
+                                    finished_slots.push(slot_id);
+                                    break;
+                                }
+                            }
+                            seq.dfa_state = next_state;
+                        }
                     }
                 }
             }
@@ -567,6 +747,79 @@ impl ContinuousBatchingEngine {
                     let send_ok = seq.sender.send(event).is_ok();
                     if is_terminal || !send_ok {
                         finished_slots.push(slot_id);
+                    } else if let Some(ref grammar) = seq.dfa.clone() {
+                        // Update DFA grammar state and trigger deterministic jump-forward
+                        let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {
+                            tok.decode_token(next_token).into_bytes()
+                        } else {
+                            vec![next_token as u8]
+                        };
+                        for b in tok_bytes {
+                            if let Ok(next_s) = grammar.transition(seq.dfa_state, b) {
+                                if next_s != DFA_ERROR_STATE {
+                                    seq.dfa_state = next_s;
+                                }
+                            }
+                        }
+
+                        let (jump_bytes, next_state) =
+                            grammar.find_jump_forward_bytes(seq.dfa_state, 16);
+                        if !jump_bytes.is_empty() {
+                            let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
+                                if let Ok(s) = std::str::from_utf8(&jump_bytes) {
+                                    tok.encode(s)
+                                } else {
+                                    jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                                }
+                            } else {
+                                jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                            };
+
+                            for &jump_tok in &jump_tokens {
+                                if seq.generated_count >= seq.max_tokens {
+                                    break;
+                                }
+                                let is_accepting = grammar
+                                    .accepting_states
+                                    .get(next_state as usize)
+                                    .copied()
+                                    .unwrap_or(false);
+                                let reached_max = seq.generated_count + 1 >= seq.max_tokens;
+                                let is_terminal = reached_max || is_accepting;
+                                let finish_reason = if is_accepting {
+                                    Some("stop".to_string())
+                                } else if reached_max {
+                                    Some("length".to_string())
+                                } else {
+                                    None
+                                };
+
+                                let event = TokenEvent {
+                                    token_id: jump_tok,
+                                    is_terminal,
+                                    finish_reason,
+                                };
+                                let _ = seq.sender.send(event);
+
+                                let _ = model.forward_step_paged(
+                                    jump_tok,
+                                    seq.current_position,
+                                    arena,
+                                    &mut seq.block_table,
+                                    scratch,
+                                );
+
+                                seq.current_token = jump_tok;
+                                seq.current_position += 1;
+                                seq.generated_count += 1;
+
+                                if is_terminal {
+                                    finished_slots.push(slot_id);
+                                    break;
+                                }
+                            }
+                            seq.dfa_state = next_state;
+                        }
                     }
                 }
                 Err(e) => {
@@ -597,14 +850,15 @@ impl EngineHandle {
         Self { sender }
     }
 
-    /// Enqueue a prompt and receive a lock-free streaming receiver of generated tokens.
-    pub async fn generate_stream(
+    /// Enqueue a prompt with an optional DFA schema grammar constraint.
+    pub async fn generate_stream_with_grammar(
         &self,
         request_id: String,
         prompt_tokens: Vec<u32>,
         max_tokens: usize,
         temperature: f32,
         top_p: f32,
+        dfa: Option<Arc<DfaSchemaGrammar>>,
     ) -> Result<mpsc::UnboundedReceiver<TokenEvent>, String> {
         let (token_tx, token_rx) = mpsc::unbounded_channel();
         let (ack_tx, ack_rx) = oneshot::channel();
@@ -616,6 +870,7 @@ impl EngineHandle {
                 max_tokens,
                 temperature,
                 top_p,
+                dfa,
                 token_sender: token_tx,
                 ack_sender: ack_tx,
             })
@@ -626,6 +881,26 @@ impl EngineHandle {
             .map_err(|e| format!("Engine ACK dropped: {e}"))??;
 
         Ok(token_rx)
+    }
+
+    /// Enqueue a prompt and receive a lock-free streaming receiver of generated tokens.
+    pub async fn generate_stream(
+        &self,
+        request_id: String,
+        prompt_tokens: Vec<u32>,
+        max_tokens: usize,
+        temperature: f32,
+        top_p: f32,
+    ) -> Result<mpsc::UnboundedReceiver<TokenEvent>, String> {
+        self.generate_stream_with_grammar(
+            request_id,
+            prompt_tokens,
+            max_tokens,
+            temperature,
+            top_p,
+            None,
+        )
+        .await
     }
 
     /// Cancel a running generation request.
