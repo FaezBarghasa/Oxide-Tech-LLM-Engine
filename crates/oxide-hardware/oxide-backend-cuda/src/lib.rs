@@ -232,12 +232,14 @@ impl CudaBackend {
         let profile = GpuDeviceProfile::from_known_device_name(name).unwrap_or_default();
         let execution_plan = KernelExecutionPlan::for_profile(&profile);
 
-        // Attempt real physical device initialization
+        // Attempt real physical device initialization with zero-latency CPU busy-spin
+        #[allow(clippy::cast_possible_wrap)]
+        unsafe {
+            let _ = driver::cudaSetDeviceFlags(driver::CUDA_DEVICE_SCHEDULE_SPIN);
+            let _ = driver::cudaSetDevice(device_id as i32);
+        }
         let stream = CudaStream::new().ok();
         if stream.is_some() {
-            #[allow(clippy::cast_possible_wrap)]
-            // SAFETY: device_id is a valid integer device index passed to cudaSetDevice.
-            let _ = unsafe { driver::cudaSetDevice(device_id as i32) };
             // SAFETY: Configures physical device cache preferences (L1 preference, 0 shared memory carveout)
             unsafe { driver::init_cuda_kernel_attributes() };
         }
@@ -330,7 +332,9 @@ impl CudaBackend {
             graph_manager: CudaGraphManager::new(),
             decode_graph_handle: None,
             batch_decode_graphs: std::collections::HashMap::new(),
-            cuda_graph_enabled: true,
+            cuda_graph_enabled: std::env::var("OXIDE_CUDA_GRAPH")
+                .map(|v| v != "0" && v.to_lowercase() != "false")
+                .unwrap_or(true),
             last_sampled_token: None,
             last_gpu_seq_pos: None,
             d_split_k_partial_out: None,
@@ -4198,38 +4202,60 @@ impl HardwareBackend for CudaBackend {
                             std::ptr::null_mut()
                         };
 
-                        // High-throughput Split-K Q, K, V GEMVs
+                        // Grouped QKV GEMV writing V-cache directly
                         unsafe {
-                            Self::dispatch_gemv(
-                                d_q_ptr,
-                                &layer.d_wq,
-                                d_norm_ptr,
-                                d_q8_1_ptr,
-                                layer.q_m,
-                                layer.q_k,
-                                layer.q_quant,
-                                s,
-                            );
-                            Self::dispatch_gemv(
-                                d_k_ptr,
-                                &layer.d_wk,
-                                d_norm_ptr,
-                                d_q8_1_ptr,
-                                layer.kv_m,
-                                layer.kv_k,
-                                layer.k_quant,
-                                s,
-                            );
-                            Self::dispatch_gemv(
-                                d_v_ptr,
-                                &layer.d_wv,
-                                d_norm_ptr,
-                                d_q8_1_ptr,
-                                layer.kv_m,
-                                layer.kv_k,
-                                layer.v_quant,
-                                s,
-                            );
+                            if layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && (layer.v_quant == 1 || layer.v_quant == 2)
+                            {
+                                driver::launch_cuda_mmvq_qkv_mixed_ptr(
+                                    d_q_ptr,
+                                    d_k_ptr,
+                                    d_v_ptr,
+                                    v_cache_ptr,
+                                    d_sp_ptr,
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    s,
+                                );
+                            } else {
+                                Self::dispatch_gemv(
+                                    d_q_ptr,
+                                    &layer.d_wq,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.q_m,
+                                    layer.q_k,
+                                    layer.q_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_k_ptr,
+                                    &layer.d_wk,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.k_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_v_ptr,
+                                    &layer.d_wv,
+                                    d_norm_ptr,
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.v_quant,
+                                    s,
+                                );
+                            }
 
                             // Add Q, K, V biases for single-token decode if present (e.g. Qwen2 / Qwen2.5)
                             if let Some(ref d_bias) = layer.d_q_bias {
@@ -4252,17 +4278,6 @@ impl HardwareBackend for CudaBackend {
                                 driver::launch_cuda_vector_add(
                                     d_v_ptr,
                                     d_bias.as_typed_ptr::<f32>(),
-                                    layer.kv_m as i32,
-                                    s,
-                                );
-                            }
-
-                            // Write V directly to V-cache
-                            if !v_cache_ptr.is_null() {
-                                driver::launch_cuda_write_v_cache_ptr(
-                                    v_cache_ptr,
-                                    d_v_ptr,
-                                    d_sp_ptr,
                                     layer.kv_m as i32,
                                     s,
                                 );
@@ -4306,11 +4321,12 @@ impl HardwareBackend for CudaBackend {
                             );
                         }
 
-                        // Flash Decode
+                        // Flash Decode + Direct Q8_1 Output
                         let sm_scale = 1.0 / (cur_head_dim.max(1) as f32).sqrt();
                         unsafe {
                             driver::launch_cuda_flash_decode_ptr(
                                 d_out_ptr,
+                                d_q8_1_ptr,
                                 d_q_ptr,
                                 k_cache_ptr,
                                 v_cache_ptr,
@@ -4333,7 +4349,6 @@ impl HardwareBackend for CudaBackend {
                             cur_num_heads * cur_head_dim
                         };
                         unsafe {
-                            driver::launch_cuda_quantize_q8_1(d_out_ptr, d_q8_1_ptr, o_k as i32, s);
                             if layer.o_quant == 1 {
                                 driver::launch_cuda_gemv_q4_k_fused_add(
                                     d_hid_ptr,
@@ -4353,6 +4368,7 @@ impl HardwareBackend for CudaBackend {
                                     s,
                                 );
                             } else {
+                                driver::launch_cuda_quantize_q8_1(d_out_ptr, d_q8_1_ptr, o_k as i32, s);
                                 Self::dispatch_gemv(
                                     d_out_ptr,
                                     &layer.d_wo,
@@ -4882,49 +4898,36 @@ impl HardwareBackend for CudaBackend {
                             &mut self.d_scratch_k,
                             &mut self.d_scratch_v,
                         ) {
-                            unsafe {
-                                Self::dispatch_gemv(
-                                    d_q.as_typed_ptr::<f32>(),
-                                    &layer.d_wq,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.q_m,
-                                    layer.q_k,
-                                    layer.q_quant,
-                                    s,
-                                );
-                                Self::dispatch_gemv(
-                                    d_k.as_typed_ptr::<f32>(),
-                                    &layer.d_wk,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.kv_m,
-                                    layer.kv_k,
-                                    layer.k_quant,
-                                    s,
-                                );
-                                Self::dispatch_gemv(
-                                    d_v.as_typed_ptr::<f32>(),
-                                    &layer.d_wv,
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    layer.kv_m,
-                                    layer.kv_k,
-                                    layer.v_quant,
-                                    s,
-                                );
-                                if !v_cache_ptr.is_null() {
-                                    driver::launch_cuda_write_v_cache(
-                                        v_cache_ptr,
+                            if layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && (layer.v_quant == 1 || layer.v_quant == 2)
+                                && layer.q_k == layer.kv_k
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                unsafe {
+                                    driver::launch_cuda_mmvq_qkv_mixed(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        d_k.as_typed_ptr::<f32>(),
                                         d_v.as_typed_ptr::<f32>(),
+                                        v_cache_ptr,
                                         pos as i32,
+                                        layer.d_wq.as_raw_ptr(),
+                                        layer.d_wk.as_raw_ptr(),
+                                        layer.d_wv.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.q_m as i32,
                                         layer.kv_m as i32,
+                                        layer.q_k as i32,
+                                        layer.v_quant as i32,
+                                        1,
                                         s,
                                     );
                                 }
+                                check_cuda("qkv_grouped_proj", layer_idx)?;
+                                (true, true, !v_cache_ptr.is_null())
+                            } else {
+                                (false, false, false)
                             }
-                            check_cuda("qkv_splitk_proj", layer_idx)?;
-                            (true, true, !v_cache_ptr.is_null())
                         } else {
                             (false, false, false)
                         };
@@ -5101,6 +5104,7 @@ impl HardwareBackend for CudaBackend {
                                 unsafe {
                                     driver::launch_cuda_flash_decode(
                                         d_out.as_typed_ptr::<f32>(),
+                                        d_q8_1_ptr,
                                         d_q.as_typed_ptr::<f32>(),
                                         self.kv_k[layer_idx].as_raw_ptr(),
                                         self.kv_v[layer_idx].as_raw_ptr(),

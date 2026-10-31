@@ -21,13 +21,20 @@ pub const CUDA_MEMCPY_HOST_TO_DEVICE: u32 = 1;
 pub const CUDA_MEMCPY_DEVICE_TO_HOST: u32 = 2;
 pub const CUDA_MEMCPY_DEVICE_TO_DEVICE: u32 = 3;
 
+pub const CUDA_DEVICE_SCHEDULE_SPIN: u32 = 0x01;
+pub const CUDA_HOST_ALLOC_PORTABLE: u32 = 0x01;
+pub const CUDA_HOST_ALLOC_MAPPED: u32 = 0x02;
+
 #[link(name = "cudart")]
 unsafe extern "C" {
+    pub fn cudaSetDeviceFlags(flags: u32) -> cudaError_t;
     pub fn cudaSetDevice(device: i32) -> cudaError_t;
     pub fn cudaGetDevice(device: *mut i32) -> cudaError_t;
     pub fn cudaGetDeviceCount(count: *mut i32) -> cudaError_t;
     pub fn cudaMalloc(dev_ptr: *mut *mut c_void, size: usize) -> cudaError_t;
     pub fn cudaFree(dev_ptr: *mut c_void) -> cudaError_t;
+    pub fn cudaHostAlloc(pHost: *mut *mut c_void, size: usize, flags: u32) -> cudaError_t;
+    pub fn cudaFreeHost(pHost: *mut c_void) -> cudaError_t;
     pub fn cudaMemcpy(dst: *mut c_void, src: const_ptr, count: usize, kind: u32) -> cudaError_t;
     pub fn cudaMemcpyAsync(
         dst: *mut c_void,
@@ -62,6 +69,11 @@ unsafe extern "C" {
         flags: u64,
     ) -> cudaError_t;
     pub fn cudaGraphLaunch(graphExec: cudaGraphExec_t, stream: cudaStream_t) -> cudaError_t;
+    pub fn cudaGraphGetNodes(
+        graph: cudaGraph_t,
+        nodes: *mut *mut c_void,
+        numNodes: *mut usize,
+    ) -> cudaError_t;
     pub fn cudaGraphExecDestroy(graphExec: cudaGraphExec_t) -> cudaError_t;
     pub fn cudaGraphDestroy(graph: cudaGraph_t) -> cudaError_t;
 }
@@ -490,6 +502,7 @@ unsafe extern "C" {
 
     pub fn launch_cuda_flash_decode(
         output: *mut f32,
+        out_q8_1: *mut std::ffi::c_void,
         q: *const f32,
         k_cache: *const std::ffi::c_void,
         v_cache: *const std::ffi::c_void,
@@ -646,6 +659,7 @@ unsafe extern "C" {
 
     pub fn launch_cuda_flash_decode_ptr(
         output: *mut f32,
+        out_q8_1: *mut std::ffi::c_void,
         q: *const f32,
         k_cache: *const std::ffi::c_void,
         v_cache: *const std::ffi::c_void,

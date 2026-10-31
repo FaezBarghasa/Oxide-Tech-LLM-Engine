@@ -1543,6 +1543,7 @@ __global__ __launch_bounds__(256, 4) void mmvq_gate_up_q4_k_2warp_kernel(
   }
 }
 
+
 /**
  * Pure Warp Single-Token QKV GEMV Kernel (BATCH_N = 1, 0 Shared Memory, 0 __syncthreads).
  * Computes Q (Q4_K), K (Q4_K), and V (Q4_K when V_QUANT == 1, or Q6_K when V_QUANT == 2)
@@ -2896,7 +2897,8 @@ __global__ void flash_decode_paged_kernel(
  * 8-byte uint2 vectorized loads, 2 tokens per loop iteration, warp-synchronous online softmax.
  */
 __global__ void flash_decode_vectorized_unroll2_kernel(
-    float *__restrict__ output, const float *__restrict__ q,
+    float *__restrict__ output, BlockQ8_1_Gpu *__restrict__ out_q8_1,
+    const float *__restrict__ q,
     const void *__restrict__ k_cache, const void *__restrict__ v_cache,
     int num_heads, int num_kv_heads, int head_dim,
     int num_kv_tokens, int start_token, float sm_scale,
@@ -3004,11 +3006,50 @@ __global__ void flash_decode_vectorized_unroll2_kernel(
   }
 
   float inv_sum = sum_exp > 0.0f ? (1.0f / sum_exp) : 0.0f;
-  float *out_ptr = output + head_idx * head_dim + d_base;
-  out_ptr[0] = acc_v0 * inv_sum;
-  out_ptr[1] = acc_v1 * inv_sum;
-  out_ptr[2] = acc_v2 * inv_sum;
-  out_ptr[3] = acc_v3 * inv_sum;
+  float v0 = acc_v0 * inv_sum;
+  float v1 = acc_v1 * inv_sum;
+  float v2 = acc_v2 * inv_sum;
+  float v3 = acc_v3 * inv_sum;
+
+  if (output != nullptr) {
+    float *out_ptr = output + head_idx * head_dim + d_base;
+    out_ptr[0] = v0;
+    out_ptr[1] = v1;
+    out_ptr[2] = v2;
+    out_ptr[3] = v3;
+  }
+
+  if (out_q8_1 != nullptr) {
+    int sub_block = lane_id / 8;
+    int lane_in_sub = lane_id % 8;
+    int block_idx = head_idx * 4 + sub_block;
+
+    float local_amax = fmaxf(fmaxf(fabsf(v0), fabsf(v1)), fmaxf(fabsf(v2), fabsf(v3)));
+    float local_sum = v0 + v1 + v2 + v3;
+
+    #pragma unroll
+    for (int offset = 4; offset > 0; offset >>= 1) {
+      local_amax = fmaxf(local_amax, __shfl_xor_sync(0xFFFFFFFF, local_amax, offset));
+      local_sum += __shfl_xor_sync(0xFFFFFFFF, local_sum, offset);
+    }
+
+    float d = local_amax / 127.0f;
+    float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+    int8_t q0 = (int8_t)roundf(v0 * id);
+    int8_t q1 = (int8_t)roundf(v1 * id);
+    int8_t q2 = (int8_t)roundf(v2 * id);
+    int8_t q3 = (int8_t)roundf(v3 * id);
+
+    int base_byte = lane_in_sub * 4;
+    out_q8_1[block_idx].qs[base_byte + 0] = q0;
+    out_q8_1[block_idx].qs[base_byte + 1] = q1;
+    out_q8_1[block_idx].qs[base_byte + 2] = q2;
+    out_q8_1[block_idx].qs[base_byte + 3] = q3;
+
+    if (lane_in_sub == 0) {
+      out_q8_1[block_idx].ds = make_half2(__float2half(d), __float2half(local_sum));
+    }
+  }
 }
 
 /**
@@ -5054,7 +5095,7 @@ int launch_cuda_rope_single(float *q, float *k, void *k_out, int pos,
   return cudaGetLastError();
 }
 
-int launch_cuda_flash_decode(float *output, const float *q, const void *k_cache,
+int launch_cuda_flash_decode(float *output, void *out_q8_1, const float *q, const void *k_cache,
                              const void *v_cache, int num_heads,
                              int num_kv_heads, int head_dim, int num_kv_tokens,
                              int start_token, float sm_scale, int is_fp16,
@@ -5063,7 +5104,7 @@ int launch_cuda_flash_decode(float *output, const float *q, const void *k_cache,
     return 0;
   if (head_dim == 128 && is_fp16) {
     flash_decode_vectorized_unroll2_kernel<<<num_heads, 32, 0, stream>>>(
-        output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim,
+        output, (BlockQ8_1_Gpu *)out_q8_1, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim,
         num_kv_tokens, start_token, sm_scale, nullptr);
     return cudaGetLastError();
   }
@@ -5072,6 +5113,9 @@ int launch_cuda_flash_decode(float *output, const float *q, const void *k_cache,
   flash_decode_paged_kernel<<<grid, block_size, 0, stream>>>(
       output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim,
       num_kv_tokens, start_token, sm_scale, is_fp16);
+  if (out_q8_1 != nullptr && output != nullptr) {
+    launch_cuda_quantize_q8_1(output, out_q8_1, num_heads * head_dim, stream);
+  }
   return cudaGetLastError();
 }
 
@@ -5642,7 +5686,7 @@ int launch_cuda_fused_qknorm_rope_batch_ptr(
   return cudaGetLastError();
 }
 
-int launch_cuda_flash_decode_ptr(float *output, const float *q, const void *k_cache,
+int launch_cuda_flash_decode_ptr(float *output, void *out_q8_1, const float *q, const void *k_cache,
                                 const void *v_cache, int num_heads,
                                 int num_kv_heads, int head_dim, const int *d_pos,
                                 int start_token, float sm_scale, int is_fp16,
@@ -5651,7 +5695,7 @@ int launch_cuda_flash_decode_ptr(float *output, const float *q, const void *k_ca
     return 0;
   if (head_dim == 128 && is_fp16) {
     flash_decode_vectorized_unroll2_kernel<<<num_heads, 32, 0, stream>>>(
-        output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim,
+        output, (BlockQ8_1_Gpu *)out_q8_1, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim,
         0, start_token, sm_scale, d_pos);
     return cudaGetLastError();
   }
@@ -5660,6 +5704,9 @@ int launch_cuda_flash_decode_ptr(float *output, const float *q, const void *k_ca
   flash_decode_paged_kernel<<<grid, block_size, 0, stream>>>(
       output, q, k_cache, v_cache, num_heads, num_kv_heads, head_dim,
       0, start_token, sm_scale, is_fp16, d_pos);
+  if (out_q8_1 != nullptr && output != nullptr) {
+    launch_cuda_quantize_q8_1(output, out_q8_1, num_heads * head_dim, stream);
+  }
   return cudaGetLastError();
 }
 

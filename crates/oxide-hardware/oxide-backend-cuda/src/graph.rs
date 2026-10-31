@@ -122,7 +122,9 @@ impl CudaGraphManager {
 
         let graph_id = self.next_graph_id;
         self.next_graph_id += 1;
-        let node_count = num_layers * 7 + 2;
+        let mut real_num_nodes: usize = 0;
+        let _ = unsafe { driver::cudaGraphGetNodes(raw_graph, std::ptr::null_mut(), &raw mut real_num_nodes) };
+        let node_count = if real_num_nodes > 0 { real_num_nodes } else { num_layers * 7 + 2 };
 
         let graph = CapturedCudaGraph {
             graph_id,

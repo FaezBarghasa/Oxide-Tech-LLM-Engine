@@ -1114,6 +1114,8 @@ fn run_chat_session(
 
         let mut decode_start: Option<std::time::Instant> = None;
         let mut decode_start_tokens = 0usize;
+        let mut pure_decode_duration = std::time::Duration::ZERO;
+        let mut pure_decode_tokens = 0usize;
 
         while gen_count < max_tokens {
             let mut draft = Vec::new();
@@ -1149,7 +1151,11 @@ fn run_chat_session(
 
             if !draft.is_empty() {
                 spec_drafted_count += draft.len();
+                let t_spec = std::time::Instant::now();
                 let verified_tokens = pipeline.step_speculative(cur_token, &draft)?;
+                let spec_dt = t_spec.elapsed();
+                pure_decode_duration += spec_dt;
+                pure_decode_tokens += verified_tokens.len();
                 if verified_tokens.is_empty() {
                     if let Some(ref mut ens) = ensemble {
                         ens.update_acceptance(0, draft.len());
@@ -1215,8 +1221,14 @@ fn run_chat_session(
 
             let prev_token = cur_token;
             let cmd = StepCommand::new(1, cur_token, 0, false);
+            let t_step = std::time::Instant::now();
             let step_res = pipeline.step(&cmd)?;
+            let step_dur = t_step.elapsed();
             gen_count += 1;
+            if gen_count >= 2 {
+                pure_decode_duration += step_dur;
+                pure_decode_tokens += 1;
+            }
             if decode_start.is_none() && gen_count >= 2 {
                 decode_start = Some(std::time::Instant::now());
                 decode_start_tokens = gen_count;
@@ -1264,7 +1276,9 @@ fn run_chat_session(
             } else {
                 0.0
             };
-            let (decode_duration, decode_tokens) = if let Some(d_start) = decode_start {
+            let (decode_duration, decode_tokens) = if pure_decode_tokens > 0 {
+                (pure_decode_duration, pure_decode_tokens)
+            } else if let Some(d_start) = decode_start {
                 (d_start.elapsed(), gen_count.saturating_sub(decode_start_tokens))
             } else {
                 (elapsed.saturating_sub(first_tok_time), gen_count.saturating_sub(1))
