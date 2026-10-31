@@ -566,10 +566,31 @@ impl ContinuousBatchingEngine {
                         }
                     }
 
-                    let reached_max = seq.generated_count >= seq.max_tokens;
-                    let is_terminal = is_eos || reached_max;
+                    let mut is_accepting = false;
+                    if let Some(ref grammar) = seq.dfa.clone() {
+                        let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {
+                            tok.decode_token(next_token).into_bytes()
+                        } else {
+                            vec![next_token as u8]
+                        };
+                        for b in tok_bytes {
+                            if let Ok(next_s) = grammar.transition(seq.dfa_state, b) {
+                                if next_s != DFA_ERROR_STATE {
+                                    seq.dfa_state = next_s;
+                                }
+                            }
+                        }
+                        is_accepting = grammar
+                            .accepting_states
+                            .get(seq.dfa_state as usize)
+                            .copied()
+                            .unwrap_or(false);
+                    }
 
-                    let finish_reason = if is_eos {
+                    let reached_max = seq.generated_count >= seq.max_tokens;
+                    let is_terminal = is_eos || reached_max || is_accepting;
+
+                    let finish_reason = if is_eos || is_accepting {
                         Some("stop".to_string())
                     } else if reached_max {
                         Some("length".to_string())
@@ -587,20 +608,6 @@ impl ContinuousBatchingEngine {
                     if is_terminal || !send_ok {
                         finished_slots.push(slot_id);
                     } else if let Some(ref grammar) = seq.dfa.clone() {
-                        // Update DFA grammar state and trigger deterministic jump-forward
-                        let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {
-                            tok.decode_token(next_token).into_bytes()
-                        } else {
-                            vec![next_token as u8]
-                        };
-                        for b in tok_bytes {
-                            if let Ok(next_s) = grammar.transition(seq.dfa_state, b) {
-                                if next_s != DFA_ERROR_STATE {
-                                    seq.dfa_state = next_s;
-                                }
-                            }
-                        }
-
                         let (jump_bytes, next_state) =
                             grammar.find_jump_forward_bytes(seq.dfa_state, 16);
                         if !jump_bytes.is_empty() {
@@ -618,14 +625,14 @@ impl ContinuousBatchingEngine {
                                 if seq.generated_count >= seq.max_tokens {
                                     break;
                                 }
-                                let is_accepting = grammar
+                                let is_jump_accepting = grammar
                                     .accepting_states
                                     .get(next_state as usize)
                                     .copied()
                                     .unwrap_or(false);
                                 let reached_max = seq.generated_count + 1 >= seq.max_tokens;
-                                let is_terminal = reached_max || is_accepting;
-                                let finish_reason = if is_accepting {
+                                let is_terminal = reached_max || is_jump_accepting;
+                                let finish_reason = if is_jump_accepting {
                                     Some("stop".to_string())
                                 } else if reached_max {
                                     Some("length".to_string())
@@ -727,10 +734,31 @@ impl ContinuousBatchingEngine {
                         || next_token == 2
                         || next_token == 128_001
                         || next_token == 128_009;
-                    let reached_max = seq.generated_count >= seq.max_tokens;
-                    let is_terminal = is_eos || reached_max;
+                    let mut is_accepting = false;
+                    if let Some(ref grammar) = seq.dfa.clone() {
+                        let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {
+                            tok.decode_token(next_token).into_bytes()
+                        } else {
+                            vec![next_token as u8]
+                        };
+                        for b in tok_bytes {
+                            if let Ok(next_s) = grammar.transition(seq.dfa_state, b) {
+                                if next_s != DFA_ERROR_STATE {
+                                    seq.dfa_state = next_s;
+                                }
+                            }
+                        }
+                        is_accepting = grammar
+                            .accepting_states
+                            .get(seq.dfa_state as usize)
+                            .copied()
+                            .unwrap_or(false);
+                    }
 
-                    let finish_reason = if is_eos {
+                    let reached_max = seq.generated_count >= seq.max_tokens;
+                    let is_terminal = is_eos || reached_max || is_accepting;
+
+                    let finish_reason = if is_eos || is_accepting {
                         Some("stop".to_string())
                     } else if reached_max {
                         Some("length".to_string())
@@ -748,20 +776,6 @@ impl ContinuousBatchingEngine {
                     if is_terminal || !send_ok {
                         finished_slots.push(slot_id);
                     } else if let Some(ref grammar) = seq.dfa.clone() {
-                        // Update DFA grammar state and trigger deterministic jump-forward
-                        let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {
-                            tok.decode_token(next_token).into_bytes()
-                        } else {
-                            vec![next_token as u8]
-                        };
-                        for b in tok_bytes {
-                            if let Ok(next_s) = grammar.transition(seq.dfa_state, b) {
-                                if next_s != DFA_ERROR_STATE {
-                                    seq.dfa_state = next_s;
-                                }
-                            }
-                        }
-
                         let (jump_bytes, next_state) =
                             grammar.find_jump_forward_bytes(seq.dfa_state, 16);
                         if !jump_bytes.is_empty() {
@@ -779,14 +793,14 @@ impl ContinuousBatchingEngine {
                                 if seq.generated_count >= seq.max_tokens {
                                     break;
                                 }
-                                let is_accepting = grammar
+                                let is_jump_accepting = grammar
                                     .accepting_states
                                     .get(next_state as usize)
                                     .copied()
                                     .unwrap_or(false);
                                 let reached_max = seq.generated_count + 1 >= seq.max_tokens;
-                                let is_terminal = reached_max || is_accepting;
-                                let finish_reason = if is_accepting {
+                                let is_terminal = reached_max || is_jump_accepting;
+                                let finish_reason = if is_jump_accepting {
                                     Some("stop".to_string())
                                 } else if reached_max {
                                     Some("length".to_string())

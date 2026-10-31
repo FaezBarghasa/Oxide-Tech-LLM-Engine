@@ -2566,7 +2566,102 @@ __global__ void flash_causal_batched_prefill_kernel(
   }
 
   // Grid-stride over past KV cached tokens (causal: up to token_pos)
-  for (int t = 0; t < num_kv_tokens; t++) {
+  // Vectorized 4-token unrolled chunk loop for high-throughput prefill
+  int t = 0;
+  for (; t + 3 < num_kv_tokens; t += 4) {
+    size_t tok_offset0 = (size_t)((t + 0) * kv_heads + kv_head_idx) * head_dim;
+    size_t tok_offset1 = (size_t)((t + 1) * kv_heads + kv_head_idx) * head_dim;
+    size_t tok_offset2 = (size_t)((t + 2) * kv_heads + kv_head_idx) * head_dim;
+    size_t tok_offset3 = (size_t)((t + 3) * kv_heads + kv_head_idx) * head_dim;
+
+    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+    if (is_fp16) {
+      const __half *k0 = (const __half *)k_cache + tok_offset0;
+      const __half *k1 = (const __half *)k_cache + tok_offset1;
+      const __half *k2 = (const __half *)k_cache + tok_offset2;
+      const __half *k3 = (const __half *)k_cache + tok_offset3;
+#pragma unroll
+      for (int i = 0; i < q_items; i++) {
+        int idx = lane_id + i * 32;
+        s0 += q_reg[i] * __half2float(k0[idx]);
+        s1 += q_reg[i] * __half2float(k1[idx]);
+        s2 += q_reg[i] * __half2float(k2[idx]);
+        s3 += q_reg[i] * __half2float(k3[idx]);
+      }
+    } else {
+      const float *k0 = (const float *)k_cache + tok_offset0;
+      const float *k1 = (const float *)k_cache + tok_offset1;
+      const float *k2 = (const float *)k_cache + tok_offset2;
+      const float *k3 = (const float *)k_cache + tok_offset3;
+#pragma unroll
+      for (int i = 0; i < q_items; i++) {
+        int idx = lane_id + i * 32;
+        s0 += q_reg[i] * k0[idx];
+        s1 += q_reg[i] * k1[idx];
+        s2 += q_reg[i] * k2[idx];
+        s3 += q_reg[i] * k3[idx];
+      }
+    }
+
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      s0 += __shfl_down_sync(0xFFFFFFFF, s0, offset);
+      s1 += __shfl_down_sync(0xFFFFFFFF, s1, offset);
+      s2 += __shfl_down_sync(0xFFFFFFFF, s2, offset);
+      s3 += __shfl_down_sync(0xFFFFFFFF, s3, offset);
+    }
+
+    float c0 = __shfl_sync(0xFFFFFFFF, s0, 0) * sm_scale;
+    float c1 = __shfl_sync(0xFFFFFFFF, s1, 0) * sm_scale;
+    float c2 = __shfl_sync(0xFFFFFFFF, s2, 0) * sm_scale;
+    float c3 = __shfl_sync(0xFFFFFFFF, s3, 0) * sm_scale;
+
+    float cur_max = fmaxf(fmaxf(c0, c1), fmaxf(c2, c3));
+    float new_max = fmaxf(max_score, cur_max);
+    float alpha = (max_score == -1e20f)
+                      ? 0.0f
+                      : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
+    float beta0 = expf(c0 - new_max);
+    float beta1 = expf(c1 - new_max);
+    float beta2 = expf(c2 - new_max);
+    float beta3 = expf(c3 - new_max);
+
+    max_score = new_max;
+    sum_exp = sum_exp * alpha + (beta0 + beta1 + beta2 + beta3);
+
+    if (is_fp16) {
+      const __half *v0 = (const __half *)v_cache + tok_offset0;
+      const __half *v1 = (const __half *)v_cache + tok_offset1;
+      const __half *v2 = (const __half *)v_cache + tok_offset2;
+      const __half *v3 = (const __half *)v_cache + tok_offset3;
+#pragma unroll
+      for (int i = 0; i < q_items; i++) {
+        int idx = lane_id + i * 32;
+        acc_v[i] = acc_v[i] * alpha +
+            (beta0 * __half2float(v0[idx]) +
+             beta1 * __half2float(v1[idx]) +
+             beta2 * __half2float(v2[idx]) +
+             beta3 * __half2float(v3[idx]));
+      }
+    } else {
+      const float *v0 = (const float *)v_cache + tok_offset0;
+      const float *v1 = (const float *)v_cache + tok_offset1;
+      const float *v2 = (const float *)v_cache + tok_offset2;
+      const float *v3 = (const float *)v_cache + tok_offset3;
+#pragma unroll
+      for (int i = 0; i < q_items; i++) {
+        int idx = lane_id + i * 32;
+        acc_v[i] = acc_v[i] * alpha +
+            (beta0 * v0[idx] +
+             beta1 * v1[idx] +
+             beta2 * v2[idx] +
+             beta3 * v3[idx]);
+      }
+    }
+  }
+
+  // Remainder scalar loop for tail tokens
+  for (; t < num_kv_tokens; t++) {
     size_t tok_offset = (size_t)(t * kv_heads + kv_head_idx) * head_dim;
 
     // Compute Q . K dot product for this head from registers
@@ -2595,8 +2690,9 @@ __global__ void flash_causal_batched_prefill_kernel(
     // Online Softmax update with SFU expf bypass
     float new_max = fmaxf(max_score, cur_score);
     float alpha =
-        (t == 0) ? 0.0f
-                 : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
+        (max_score == -1e20f)
+            ? 0.0f
+            : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
     float beta = expf(cur_score - new_max);
 
     max_score = new_max;
@@ -3903,6 +3999,13 @@ int launch_cuda_mmvq_q6_k(float *y, const void *raw_blocks, const void *x_q8_1,
   if (batch_size == 1) {
     return launch_cuda_gemv_q6_k(y, raw_blocks, x_q8_1, m, k, stream);
   }
+  if (batch_size >= 8) {
+    dim3 grid((m + 63) / 64, (batch_size + 63) / 64);
+    dim3 block(32, 8);
+    mmq_q6_k_cuda_kernel<0><<<grid, block, 0, stream>>>(
+        y, raw_blocks, x_q8_1, m, k, batch_size);
+    return cudaGetLastError();
+  }
   int grid, block;
   get_gemv_launch_dims(m, grid, block);
   if (batch_size <= 2) {
@@ -3913,13 +4016,9 @@ int launch_cuda_mmvq_q6_k(float *y, const void *raw_blocks, const void *x_q8_1,
     dim3 grid_2d(grid, (batch_size + 3) / 4);
     mmvq_q6_k_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 8) {
+  } else {
     dim3 grid_2d(grid, (batch_size + 7) / 8);
     mmvq_q6_k_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else {
-    dim3 grid_2d(grid, (batch_size + 15) / 16);
-    mmvq_q6_k_cuda_kernel<16><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
   }
   return cudaGetLastError();
@@ -3933,6 +4032,13 @@ int launch_cuda_mmvq_q6_k_fused_add(float *y, const void *raw_blocks,
   if (batch_size == 1) {
     return launch_cuda_gemv_q6_k_fused_add(y, raw_blocks, x_q8_1, m, k, stream);
   }
+  if (batch_size >= 8) {
+    dim3 grid((m + 63) / 64, (batch_size + 63) / 64);
+    dim3 block(32, 8);
+    mmq_q6_k_cuda_kernel<1><<<grid, block, 0, stream>>>(
+        y, raw_blocks, x_q8_1, m, k, batch_size);
+    return cudaGetLastError();
+  }
   int grid, block;
   get_gemv_launch_dims(m, grid, block);
   if (batch_size <= 2) {
@@ -3943,13 +4049,9 @@ int launch_cuda_mmvq_q6_k_fused_add(float *y, const void *raw_blocks,
     dim3 grid_2d(grid, (batch_size + 3) / 4);
     mmvq_q6_k_cuda_kernel<4, 1><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 8) {
+  } else {
     dim3 grid_2d(grid, (batch_size + 7) / 8);
     mmvq_q6_k_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else {
-    dim3 grid_2d(grid, (batch_size + 15) / 16);
-    mmvq_q6_k_cuda_kernel<16, 1><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
   }
   return cudaGetLastError();
@@ -4113,6 +4215,32 @@ int launch_cuda_mmvq_qkv_mixed(float *y_q, float *y_k, float *y_v,
   if (q_m <= 0 || kv_m <= 0 || k <= 0 || batch_size <= 0)
     return 0;
 
+  if (batch_size >= 8) {
+    dim3 grid_q((q_m + 63) / 64, (batch_size + 63) / 64);
+    dim3 grid_k((kv_m + 63) / 64, (batch_size + 63) / 64);
+    dim3 grid_v((kv_m + 63) / 64, (batch_size + 63) / 64);
+    dim3 block(32, 8);
+    mmq_q4_k_cuda_kernel<0><<<grid_q, block, 0, stream>>>(
+        y_q, raw_wq, x_q8_1, q_m, k, batch_size);
+    mmq_q4_k_cuda_kernel<0><<<grid_k, block, 0, stream>>>(
+        y_k, raw_wk, x_q8_1, kv_m, k, batch_size);
+    if (v_quant == 1) {
+      mmq_q4_k_cuda_kernel<0><<<grid_v, block, 0, stream>>>(
+          y_v, raw_wv, x_q8_1, kv_m, k, batch_size);
+    } else {
+      mmq_q6_k_cuda_kernel<0><<<grid_v, block, 0, stream>>>(
+          y_v, raw_wv, x_q8_1, kv_m, k, batch_size);
+    }
+    if (v_cache_fp16 != nullptr) {
+      int total_n = batch_size * kv_m;
+      int b_size = 256;
+      int g_size = (total_n + b_size - 1) / b_size;
+      convert_f32_to_f16_kernel<<<g_size, b_size, 0, stream>>>(
+          ((__half *)v_cache_fp16) + (size_t)start_pos * kv_m, y_v, total_n);
+    }
+    return cudaGetLastError();
+  }
+
   int total_m = q_m + 2 * kv_m;
   int grid, block;
   get_gemv_launch_dims(total_m, grid, block);
@@ -4132,14 +4260,9 @@ int launch_cuda_mmvq_qkv_mixed(float *y_q, float *y_k, float *y_v,
       mmvq_qkv_mixed_cuda_kernel<4, 1><<<grid_2d, block, 0, stream>>>(
           y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv,
           x_q8_1, q_m, kv_m, k, batch_size);
-    } else if (batch_size <= 8) {
+    } else {
       dim3 grid_2d(grid, (batch_size + 7) / 8);
       mmvq_qkv_mixed_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(
-          y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv,
-          x_q8_1, q_m, kv_m, k, batch_size);
-    } else {
-      dim3 grid_2d(grid, (batch_size + 15) / 16);
-      mmvq_qkv_mixed_cuda_kernel<16, 1><<<grid_2d, block, 0, stream>>>(
           y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv,
           x_q8_1, q_m, kv_m, k, batch_size);
     }
@@ -4158,14 +4281,9 @@ int launch_cuda_mmvq_qkv_mixed(float *y_q, float *y_k, float *y_v,
       mmvq_qkv_mixed_cuda_kernel<4, 2><<<grid_2d, block, 0, stream>>>(
           y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv,
           x_q8_1, q_m, kv_m, k, batch_size);
-    } else if (batch_size <= 8) {
+    } else {
       dim3 grid_2d(grid, (batch_size + 7) / 8);
       mmvq_qkv_mixed_cuda_kernel<8, 2><<<grid_2d, block, 0, stream>>>(
-          y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv,
-          x_q8_1, q_m, kv_m, k, batch_size);
-    } else {
-      dim3 grid_2d(grid, (batch_size + 15) / 16);
-      mmvq_qkv_mixed_cuda_kernel<16, 2><<<grid_2d, block, 0, stream>>>(
           y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv,
           x_q8_1, q_m, kv_m, k, batch_size);
     }
