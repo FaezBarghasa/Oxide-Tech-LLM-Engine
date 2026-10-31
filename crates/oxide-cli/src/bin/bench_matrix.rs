@@ -119,30 +119,57 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let judge_prompt = "Count from 1 to 10:";
     report.judge.prompt = judge_prompt.to_string();
 
-    let llama_judge_out = Command::new("llama-cli")
-        .args([
-            "-st",
-            "--simple-io",
-            "--no-display-prompt",
-            "-m",
-            &args.model.to_string_lossy(),
-            "-p",
-            judge_prompt,
-            "-n",
-            "16",
-            "-ngl",
-            "99",
-            "--temp",
-            "0",
-            "--chat-template",
-            "none",
-            "--no-warmup",
-        ])
-        .output();
+    let llama_bin = if Command::new("llama-completion").arg("-h").output().is_ok() {
+        "llama-completion"
+    } else {
+        "llama-cli"
+    };
+
+    let llama_judge_out = if llama_bin == "llama-completion" {
+        Command::new("llama-completion")
+            .args([
+                "-m",
+                &args.model.to_string_lossy(),
+                "-p",
+                judge_prompt,
+                "-n",
+                "16",
+                "-ngl",
+                "99",
+                "--temp",
+                "0",
+                "--no-display-prompt",
+            ])
+            .output()
+    } else {
+        Command::new("llama-cli")
+            .args([
+                "-st",
+                "--simple-io",
+                "--no-display-prompt",
+                "-m",
+                &args.model.to_string_lossy(),
+                "-p",
+                judge_prompt,
+                "-n",
+                "16",
+                "-ngl",
+                "99",
+                "--temp",
+                "0",
+                "--no-warmup",
+            ])
+            .output()
+    };
 
     if let Ok(out) = llama_judge_out {
         let text = String::from_utf8_lossy(&out.stdout);
-        report.judge.llamacpp_output = parse_llama_generated_text(&text);
+        let parsed = parse_llama_generated_text(&text);
+        report.judge.llamacpp_output = if !parsed.is_empty() {
+            parsed
+        } else {
+            text.trim().to_string()
+        };
     }
 
     let oxide_judge_out = Command::new("target/release/oxide-engine")

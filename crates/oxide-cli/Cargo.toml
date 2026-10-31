@@ -17,6 +17,10 @@ path = "src/bin/oxide_quantize.rs"
 name = "bench-matrix"
 path = "src/bin/bench_matrix.rs"
 
+[[bin]]
+name = "debug-prefill"
+path = "src/bin/debug_prefill.rs"
+
 
 [lib]
 path = "src/lib.rs"

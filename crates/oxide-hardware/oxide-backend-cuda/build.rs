@@ -88,6 +88,7 @@ fn main() {
                 println!("cargo:rustc-link-search=native={}", out_dir.display());
                 println!("cargo:rustc-link-lib=static=oxide_cuda_kernels");
                 println!("cargo:rustc-link-lib=dylib=cudart");
+                println!("cargo:rustc-link-lib=dylib=cublas");
                 println!("cargo:rustc-link-lib=dylib=cuda");
                 println!("cargo:rustc-link-lib=dylib=stdc++");
                 return;

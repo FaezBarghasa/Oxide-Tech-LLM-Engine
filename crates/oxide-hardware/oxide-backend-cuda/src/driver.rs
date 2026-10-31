@@ -77,6 +77,8 @@ type const_ptr = *const c_void;
 
 #[link(name = "oxide_cuda_kernels", kind = "static")]
 unsafe extern "C" {
+    pub fn oxide_cuda_init_cublas(stream: cudaStream_t) -> i32;
+
     pub fn launch_cuda_rmsnorm(
         output: *mut f32,
         input: *const f32,
@@ -247,6 +249,31 @@ unsafe extern "C" {
         x: *const std::ffi::c_void,
         m: i32,
         k: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_dequantize_q4_k_f16(
+        dst_f16: *mut std::ffi::c_void,
+        src_q4_k: *const std::ffi::c_void,
+        num_elements: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_dequantize_q6_k_f16(
+        dst_f16: *mut std::ffi::c_void,
+        src_q6_k: *const std::ffi::c_void,
+        num_elements: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_cublas_gemm_fp16_f32(
+        d_y: *mut f32,
+        d_w_f16: *const std::ffi::c_void,
+        d_x_f16: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        add_to_y: i32,
         stream: cudaStream_t,
     ) -> i32;
 
