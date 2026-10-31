@@ -4072,16 +4072,20 @@ impl HardwareBackend for CudaBackend {
                     let _ = d_in_tok.copy_from_host_async(&[cmd.input_token as i32], s);
                 }
 
+                let t_graph_start = std::time::Instant::now();
                 unsafe {
                     self.graph_manager.launch_graph(handle, s)?;
                 }
-                tracing::debug!("CUDA decode graph replayed: id={}", handle.graph_id);
 
                 if let Some(ref d_sampled) = self.d_sampled_token {
                     let mut sampled_res = [0u32, 0u32];
                     let _ = d_sampled.copy_to_host_async(&mut sampled_res, s);
                     stream.synchronize().map_err(EngineError::BackendError)?;
+                    let graph_dt = t_graph_start.elapsed();
                     let best_tok = sampled_res[0];
+                    if self.seq_pos % 16 == 0 {
+                        tracing::info!("CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)", graph_dt.as_secs_f64() * 1000.0, 1.0 / graph_dt.as_secs_f64());
+                    }
                     self.last_sampled_token = Some(best_tok);
                     self.seq_pos += 1;
                     self.last_gpu_seq_pos = Some(self.seq_pos);

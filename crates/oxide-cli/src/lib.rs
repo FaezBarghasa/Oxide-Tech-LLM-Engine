@@ -940,7 +940,8 @@ fn run_chat_session(
 
     if let Some(p) = prompt {
         println!("Prompt: {p}");
-        let formatted = if p.starts_with("<|im_start|>")
+        let formatted = if chat_format.eq_ignore_ascii_case("raw")
+            || p.starts_with("<|im_start|>")
             || p.starts_with("<start_of_turn>")
             || p.starts_with("<|begin_of_text|>")
             || p.starts_with("[INST]")
