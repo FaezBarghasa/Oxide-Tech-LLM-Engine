@@ -7,8 +7,9 @@
 
 use crate::pipeline::SpecializedPipeline;
 use oxide_alloc::{PagedKvArena, RadixPrefixCache, SequenceBlockTable};
+use oxide_core::dfa::{DFA_ERROR_STATE, DfaSchemaGrammar};
 use oxide_core::sampler::{AcademicSamplerEngine, SamplerState, SamplingConfig};
-use oxide_models::{Llama3Model, Llama3ScratchBuffers};
+use oxide_models::{GgufTokenizer, Llama3Model, Llama3ScratchBuffers};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -23,6 +24,7 @@ pub enum EngineCommand {
         max_tokens: usize,
         temperature: f32,
         top_p: f32,
+        dfa: Option<Arc<DfaSchemaGrammar>>,
         token_sender: mpsc::UnboundedSender<TokenEvent>,
         ack_sender: oneshot::Sender<Result<usize, String>>,
     },
@@ -55,6 +57,8 @@ struct ActiveSequence {
     sender: mpsc::UnboundedSender<TokenEvent>,
     sampler: AcademicSamplerEngine,
     sampler_state: SamplerState,
+    dfa: Option<Arc<DfaSchemaGrammar>>,
+    dfa_state: u32,
 }
 
 /// SLA-aware dynamic chunked prefill scheduler configuration.
@@ -101,6 +105,7 @@ pub struct ContinuousBatchingEngine {
     max_slots: usize,
     cmd_receiver: mpsc::UnboundedReceiver<EngineCommand>,
     pub prefill_config: ChunkedPrefillConfig,
+    pub tokenizer: Option<Arc<GgufTokenizer>>,
 }
 
 impl ContinuousBatchingEngine {
@@ -130,6 +135,7 @@ impl ContinuousBatchingEngine {
             max_slots,
             cmd_receiver,
             prefill_config: ChunkedPrefillConfig::default(),
+            tokenizer: None,
         }
     }
 
@@ -149,7 +155,14 @@ impl ContinuousBatchingEngine {
             max_slots,
             cmd_receiver,
             prefill_config: ChunkedPrefillConfig::default(),
+            tokenizer: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_tokenizer(mut self, tokenizer: Arc<GgufTokenizer>) -> Self {
+        self.tokenizer = Some(tokenizer);
+        self
     }
 
     /// Spawns the Continuous Batching Engine loop on a dedicated Tokio thread.
@@ -173,6 +186,7 @@ impl ContinuousBatchingEngine {
                         max_tokens,
                         temperature,
                         top_p,
+                        dfa,
                         token_sender,
                         ack_sender,
                     } => {
@@ -182,6 +196,7 @@ impl ContinuousBatchingEngine {
                             max_tokens,
                             temperature,
                             top_p,
+                            dfa,
                             token_sender,
                         );
                         let _ = ack_sender.send(res);
@@ -204,6 +219,7 @@ impl ContinuousBatchingEngine {
                         max_tokens,
                         temperature,
                         top_p,
+                        dfa,
                         token_sender,
                         ack_sender,
                     }) => {
@@ -213,6 +229,7 @@ impl ContinuousBatchingEngine {
                             max_tokens,
                             temperature,
                             top_p,
+                            dfa,
                             token_sender,
                         );
                         let _ = ack_sender.send(res);

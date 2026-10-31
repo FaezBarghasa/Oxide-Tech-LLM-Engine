@@ -63,6 +63,49 @@ impl DfaSchemaGrammar {
         }
     }
 
+    /// Compiles a JSON-validating state machine with a fixed schema prefix (e.g. `{"answer": `).
+    /// All characters in `prefix` are traversed as unambiguous deterministic transitions.
+    #[must_use]
+    pub fn new_json_with_fixed_prefix(prefix: &str) -> Self {
+        let prefix_bytes = prefix.as_bytes();
+        let prefix_len = prefix_bytes.len();
+        let num_states = prefix_len + 4;
+        let mut transitions = vec![DFA_ERROR_STATE; num_states * 256];
+        let mut accepting_states = vec![false; num_states];
+
+        for (i, &b) in prefix_bytes.iter().enumerate() {
+            transitions[i * 256 + usize::from(b)] = (i + 1) as u32;
+        }
+
+        let val_state = prefix_len;
+        let end_state = prefix_len + 1;
+        let str_val_state = prefix_len + 2;
+        let terminal_state = prefix_len + 3;
+
+        for b in b'0'..=b'9' {
+            transitions[val_state * 256 + usize::from(b)] = end_state as u32;
+        }
+        transitions[val_state * 256 + usize::from(b'"')] = str_val_state as u32;
+
+        for b in b'0'..=b'9' {
+            transitions[end_state * 256 + usize::from(b)] = end_state as u32;
+        }
+        transitions[end_state * 256 + usize::from(b'}')] = terminal_state as u32;
+
+        for b in 0..256 {
+            transitions[str_val_state * 256 + b] = str_val_state as u32;
+        }
+        transitions[str_val_state * 256 + usize::from(b'"')] = end_state as u32;
+
+        accepting_states[terminal_state] = true;
+
+        Self {
+            num_states,
+            transitions,
+            accepting_states,
+        }
+    }
+
     /// Evaluates state transition on next input byte.
     pub fn transition(&self, current_state: u32, byte: u8) -> Result<u32> {
         if current_state as usize >= self.num_states {
@@ -169,5 +212,13 @@ mod tests {
         let (jump1, next_state1) = dfa.find_jump_forward_bytes(1, 10);
         assert_eq!(jump1, [] as [u8; 0]);
         assert_eq!(next_state1, 1);
+    }
+
+    #[test]
+    fn test_dfa_fixed_prefix_jump_forward() {
+        let dfa = DfaSchemaGrammar::new_json_with_fixed_prefix("{\"answer\": ");
+        let (jump, next_state) = dfa.find_jump_forward_bytes(0, 32);
+        assert_eq!(jump, b"{\"answer\": ");
+        assert_eq!(next_state, 11);
     }
 }
