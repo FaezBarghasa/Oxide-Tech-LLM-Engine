@@ -146,3 +146,28 @@ impl DfaSchemaGrammar {
         (bytes, current_state)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dfa_json_validator_jump_forward() {
+        let dfa = DfaSchemaGrammar::new_simple_json_validator();
+
+        // State 0 must deterministically expect '{'
+        let (jump, next_state) = dfa.find_jump_forward_bytes(0, 10);
+        assert_eq!(jump, b"{");
+        assert_eq!(next_state, 1);
+
+        // State 3 must deterministically expect ':'
+        let (jump3, next_state3) = dfa.find_jump_forward_bytes(3, 10);
+        assert_eq!(jump3, b":");
+        assert_eq!(next_state3, 4);
+
+        // State 1 has multiple transitions ('"' or '}'), so 0 jump bytes
+        let (jump1, next_state1) = dfa.find_jump_forward_bytes(1, 10);
+        assert_eq!(jump1, [] as [u8; 0]);
+        assert_eq!(next_state1, 1);
+    }
+}

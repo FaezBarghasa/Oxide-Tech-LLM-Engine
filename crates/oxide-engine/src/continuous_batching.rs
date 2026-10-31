@@ -259,8 +259,14 @@ impl ContinuousBatchingEngine {
             let mut pipe = pipe_mutex
                 .try_lock()
                 .map_err(|_| "Pipeline busy".to_string())?;
+
+            let (matched_len, _) = self.radix_cache.match_longest_prefix(&prompt_tokens);
             let prefill_tokens = if prompt_tokens.len() > 1 {
-                &prompt_tokens[..prompt_tokens.len() - 1]
+                if matched_len < prompt_tokens.len() - 1 {
+                    &prompt_tokens[matched_len..prompt_tokens.len() - 1]
+                } else {
+                    &[]
+                }
             } else {
                 &[]
             };
@@ -268,6 +274,7 @@ impl ContinuousBatchingEngine {
                 pipe.prefill(slot_id as u64, prefill_tokens, slot_id as u16)
                     .map_err(|e| format!("Prefill failed: {e}"))?;
             }
+            self.radix_cache.insert(&prompt_tokens, &[slot_id as u32]);
 
             let initial_token = *prompt_tokens.last().unwrap_or(&1);
             let initial_pos = prompt_tokens.len().saturating_sub(1);

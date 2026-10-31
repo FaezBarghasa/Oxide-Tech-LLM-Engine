@@ -4821,6 +4821,8 @@ rope_continuous_batch_kernel(float *__restrict__ q, float *__restrict__ k,
                              void *__restrict__ k_cache,
                              const int *__restrict__ d_seq_positions,
                              const int *__restrict__ d_slot_mapping,
+                             const int *__restrict__ d_block_table,
+                             int max_blocks_per_seq,
                              int batch_size, int num_heads, int num_kv_heads,
                              int head_dim, int slot_stride_tokens, float theta,
                              int is_fp16, float scaling_factor,
@@ -4860,10 +4862,20 @@ rope_continuous_batch_kernel(float *__restrict__ q, float *__restrict__ k,
     k[k_base + d + half_dim] = rot1;
 
     if (k_cache != nullptr) {
-      int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
-      size_t cache_base = (size_t)(slot_idx * slot_stride_tokens + token_pos) *
-                              (num_kv_heads * head_dim) +
-                          head_idx * head_dim;
+      size_t cache_base;
+      if (d_block_table != nullptr) {
+        int block_num = token_pos / 16;
+        int in_block_t = token_pos % 16;
+        int phys_block = d_block_table[b * max_blocks_per_seq + block_num];
+        cache_base = (size_t)(phys_block * 16 + in_block_t) *
+                         (num_kv_heads * head_dim) +
+                     head_idx * head_dim;
+      } else {
+        int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
+        cache_base = (size_t)(slot_idx * slot_stride_tokens + token_pos) *
+                         (num_kv_heads * head_dim) +
+                     head_idx * head_dim;
+      }
       if (is_fp16) {
         __half *dst_h = (__half *)k_cache;
         dst_h[cache_base + d] = __float2half(rot0);
@@ -4882,6 +4894,8 @@ write_v_cache_continuous_batch_kernel(void *__restrict__ v_cache,
                                       const float *__restrict__ v_src,
                                       const int *__restrict__ d_seq_positions,
                                       const int *__restrict__ d_slot_mapping,
+                                      const int *__restrict__ d_block_table,
+                                      int max_blocks_per_seq,
                                       int batch_size, int kv_dim,
                                       int slot_stride_tokens, int is_fp16) {
   int b = blockIdx.y;
@@ -4892,9 +4906,17 @@ write_v_cache_continuous_batch_kernel(void *__restrict__ v_cache,
     return;
 
   int token_pos = d_seq_positions[b];
-  int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
-  size_t cache_base =
-      (size_t)(slot_idx * slot_stride_tokens + token_pos) * kv_dim + d;
+  size_t cache_base;
+  if (d_block_table != nullptr) {
+    int block_num = token_pos / 16;
+    int in_block_t = token_pos % 16;
+    int phys_block = d_block_table[b * max_blocks_per_seq + block_num];
+    cache_base = (size_t)(phys_block * 16 + in_block_t) * kv_dim + d;
+  } else {
+    int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
+    cache_base =
+        (size_t)(slot_idx * slot_stride_tokens + token_pos) * kv_dim + d;
+  }
   float val = v_src[b * kv_dim + d];
 
   if (is_fp16) {
@@ -4904,26 +4926,53 @@ write_v_cache_continuous_batch_kernel(void *__restrict__ v_cache,
   }
 }
 
-__global__ void flash_decode_continuous_batch_kernel(
-    float *__restrict__ output, const float *__restrict__ q,
+__global__ void split_k_flash_decode_continuous_batch_kernel(
+    float *__restrict__ partial_out,
+    float2 *__restrict__ partial_lse,
+    float *__restrict__ final_out,
+    const float *__restrict__ q,
     const void *__restrict__ k_cache, const void *__restrict__ v_cache,
     const int *__restrict__ d_seq_positions,
     const int *__restrict__ d_slot_mapping,
+    const int *__restrict__ d_block_table,
+    int max_blocks_per_seq,
+    int batch_size,
     int num_heads, int num_kv_heads, int head_dim,
-    int slot_stride_tokens, float sm_scale, int is_fp16) {
-  int head_idx = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
-  if (head_idx >= num_heads)
-    return;
+    int slot_stride_tokens, float sm_scale, int is_fp16,
+    int num_splits) {
+  int head_idx = blockIdx.x;
   int b = blockIdx.y;
+  int split_idx = blockIdx.z;
   int lane_id = threadIdx.x % 32;
 
   int actual_tokens = d_seq_positions[b] + 1;
   if (actual_tokens <= 0 || head_dim <= 0)
     return;
 
-  int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
+  int tokens_per_split = (actual_tokens + num_splits - 1) / num_splits;
+  int t_start = split_idx * tokens_per_split;
+  int t_end = (split_idx + 1) * tokens_per_split;
+  if (t_end > actual_tokens) {
+    t_end = actual_tokens;
+  }
+
+  size_t split_lse_idx = (size_t)(split_idx * batch_size + b) * num_heads + head_idx;
+  float *split_part_ptr = partial_out ? (partial_out + split_lse_idx * head_dim) : nullptr;
+
+  if (t_start >= actual_tokens) {
+    if (num_splits > 1 && partial_lse != nullptr) {
+      partial_lse[split_lse_idx] = make_float2(-1e20f, 0.0f);
+      if (split_part_ptr != nullptr) {
+        for (int d = lane_id; d < head_dim; d += 32) {
+          split_part_ptr[d] = 0.0f;
+        }
+      }
+    }
+    return;
+  }
+
   const float *q_ptr = q + (b * num_heads + head_idx) * head_dim;
-  float *out_ptr = output + (b * num_heads + head_idx) * head_dim;
+  float *out_ptr = (num_splits == 1) ? (final_out + (b * num_heads + head_idx) * head_dim) : split_part_ptr;
 
   int kv_heads = num_kv_heads > 0 ? num_kv_heads : num_heads;
   int heads_per_kv = (num_heads / kv_heads) > 0 ? (num_heads / kv_heads) : 1;
@@ -4944,12 +4993,22 @@ __global__ void flash_decode_continuous_batch_kernel(
     q_reg[q_items] = q_ptr[d];
   }
 
+  int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
   size_t slot_base_offset =
       (size_t)slot_idx * slot_stride_tokens * kv_heads * head_dim;
 
-  for (int t = 0; t < actual_tokens; t++) {
-    size_t tok_offset =
-        slot_base_offset + (size_t)(t * kv_heads + kv_head_idx) * head_dim;
+  for (int t = t_start; t < t_end; t++) {
+    size_t tok_offset;
+    if (d_block_table != nullptr) {
+      int block_num = t / 16;
+      int in_block_t = t % 16;
+      int phys_block = d_block_table[b * max_blocks_per_seq + block_num];
+      tok_offset = (size_t)(phys_block * 16 + in_block_t) * (kv_heads * head_dim) +
+                   (size_t)kv_head_idx * head_dim;
+    } else {
+      tok_offset =
+          slot_base_offset + (size_t)(t * kv_heads + kv_head_idx) * head_dim;
+    }
 
     float score = 0.0f;
     if (is_fp16) {
@@ -4971,8 +5030,8 @@ __global__ void flash_decode_continuous_batch_kernel(
 
     float cur_score = __shfl_sync(0xFFFFFFFF, score, 0) * sm_scale;
     float new_max = fmaxf(max_score, cur_score);
-    float alpha = (t == 0) ? 0.0f
-                           : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
+    float alpha = (t == t_start) ? 0.0f
+                                 : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
     float beta = expf(cur_score - new_max);
 
     max_score = new_max;
@@ -4992,15 +5051,78 @@ __global__ void flash_decode_continuous_batch_kernel(
     }
   }
 
-  float inv_sum = sum_exp > 0.0f ? (1.0f / sum_exp) : 0.0f;
-  for (int i = 0; i < q_items; i++) {
-    out_ptr[lane_id + i * 32] = acc_v[i] * inv_sum;
+  if (num_splits == 1) {
+    float inv_sum = sum_exp > 0.0f ? (1.0f / sum_exp) : 0.0f;
+    for (int i = 0; i < q_items; i++) {
+      out_ptr[lane_id + i * 32] = acc_v[i] * inv_sum;
+    }
+  } else {
+    if (partial_lse != nullptr) {
+      partial_lse[split_lse_idx] = make_float2(max_score, sum_exp);
+    }
+    if (out_ptr != nullptr) {
+      for (int i = 0; i < q_items; i++) {
+        out_ptr[lane_id + i * 32] = acc_v[i];
+      }
+    }
   }
 }
 
-int launch_cuda_rope_continuous_batch(
+__global__ void split_k_flash_decode_reduce_kernel(
+    float *__restrict__ final_out,
+    const float *__restrict__ partial_out,
+    const float2 *__restrict__ partial_lse,
+    int batch_size,
+    int num_heads,
+    int head_dim,
+    int num_splits) {
+  int head_idx = blockIdx.x;
+  int b = blockIdx.y;
+  int lane_id = threadIdx.x % 32;
+
+  float *final_ptr = final_out + (b * num_heads + head_idx) * head_dim;
+
+  float global_max = -1e20f;
+  for (int s = 0; s < num_splits; s++) {
+    size_t split_lse_idx = (size_t)(s * batch_size + b) * num_heads + head_idx;
+    float2 lse = partial_lse[split_lse_idx];
+    if (lse.y > 0.0f) {
+      global_max = fmaxf(global_max, lse.x);
+    }
+  }
+
+  float global_sum_exp = 0.0f;
+  float acc_v[16];
+#pragma unroll
+  for (int i = 0; i < 16; ++i)
+    acc_v[i] = 0.0f;
+
+  int q_items = 0;
+  for (int d = lane_id; d < head_dim && q_items < 16; d += 32, q_items++) {}
+
+  for (int s = 0; s < num_splits; s++) {
+    size_t split_lse_idx = (size_t)(s * batch_size + b) * num_heads + head_idx;
+    float2 lse = partial_lse[split_lse_idx];
+    if (lse.y > 0.0f) {
+      float weight = expf(lse.x - global_max);
+      global_sum_exp += lse.y * weight;
+      const float *part_ptr = partial_out + split_lse_idx * head_dim;
+      for (int i = 0; i < q_items; i++) {
+        acc_v[i] += part_ptr[lane_id + i * 32] * weight;
+      }
+    }
+  }
+
+  float inv_sum = global_sum_exp > 0.0f ? (1.0f / global_sum_exp) : 0.0f;
+  for (int i = 0; i < q_items; i++) {
+    final_ptr[lane_id + i * 32] = acc_v[i] * inv_sum;
+  }
+}
+
+int launch_cuda_rope_paged_continuous_batch(
     float *q, float *k, void *k_cache, const int *d_seq_positions,
-    const int *d_slot_mapping, int batch_size, int num_heads, int num_kv_heads,
+    const int *d_slot_mapping, const int *d_block_table, int max_blocks_per_seq,
+    int batch_size, int num_heads, int num_kv_heads,
     int head_dim, int slot_stride_tokens, float theta, int is_fp16,
     float scaling_factor, int orig_ctx, cudaStream_t stream) {
   if (batch_size <= 0 || head_dim <= 0)
@@ -5009,9 +5131,35 @@ int launch_cuda_rope_continuous_batch(
   dim3 grid(max_heads, batch_size);
   int block_size = head_dim / 2;
   rope_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
-      q, k, k_cache, d_seq_positions, d_slot_mapping, batch_size, num_heads,
-      num_kv_heads, head_dim, slot_stride_tokens, theta, is_fp16,
-      scaling_factor, orig_ctx);
+      q, k, k_cache, d_seq_positions, d_slot_mapping, d_block_table,
+      max_blocks_per_seq, batch_size, num_heads, num_kv_heads, head_dim,
+      slot_stride_tokens, theta, is_fp16, scaling_factor, orig_ctx);
+  return cudaGetLastError();
+}
+
+int launch_cuda_rope_continuous_batch(
+    float *q, float *k, void *k_cache, const int *d_seq_positions,
+    const int *d_slot_mapping, int batch_size, int num_heads, int num_kv_heads,
+    int head_dim, int slot_stride_tokens, float theta, int is_fp16,
+    float scaling_factor, int orig_ctx, cudaStream_t stream) {
+  return launch_cuda_rope_paged_continuous_batch(
+      q, k, k_cache, d_seq_positions, d_slot_mapping, nullptr, 0, batch_size,
+      num_heads, num_kv_heads, head_dim, slot_stride_tokens, theta, is_fp16,
+      scaling_factor, orig_ctx, stream);
+}
+
+int launch_cuda_write_v_cache_paged_continuous_batch(
+    void *v_cache, const float *v_src, const int *d_seq_positions,
+    const int *d_slot_mapping, const int *d_block_table, int max_blocks_per_seq,
+    int batch_size, int kv_dim, int slot_stride_tokens, int is_fp16,
+    cudaStream_t stream) {
+  if (batch_size <= 0 || kv_dim <= 0)
+    return 0;
+  int block_size = 256;
+  dim3 grid((kv_dim + block_size - 1) / block_size, batch_size);
+  write_v_cache_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
+      v_cache, v_src, d_seq_positions, d_slot_mapping, d_block_table,
+      max_blocks_per_seq, batch_size, kv_dim, slot_stride_tokens, is_fp16);
   return cudaGetLastError();
 }
 
@@ -5019,13 +5167,41 @@ int launch_cuda_write_v_cache_continuous_batch(
     void *v_cache, const float *v_src, const int *d_seq_positions,
     const int *d_slot_mapping, int batch_size, int kv_dim,
     int slot_stride_tokens, int is_fp16, cudaStream_t stream) {
-  if (batch_size <= 0 || kv_dim <= 0)
+  return launch_cuda_write_v_cache_paged_continuous_batch(
+      v_cache, v_src, d_seq_positions, d_slot_mapping, nullptr, 0,
+      batch_size, kv_dim, slot_stride_tokens, is_fp16, stream);
+}
+
+int launch_cuda_split_k_flash_decode(
+    float *output,
+    float *partial_out,
+    void *partial_lse,
+    const float *q, const void *k_cache, const void *v_cache,
+    const int *d_seq_positions, const int *d_slot_mapping,
+    const int *d_block_table, int max_blocks_per_seq,
+    int batch_size,
+    int num_heads, int num_kv_heads, int head_dim, int slot_stride_tokens,
+    float sm_scale, int is_fp16, int num_splits, cudaStream_t stream) {
+  if (batch_size <= 0 || num_heads <= 0 || head_dim <= 0)
     return 0;
-  int block_size = 256;
-  dim3 grid((kv_dim + block_size - 1) / block_size, batch_size);
-  write_v_cache_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
-      v_cache, v_src, d_seq_positions, d_slot_mapping, batch_size, kv_dim,
-      slot_stride_tokens, is_fp16);
+
+  int splits = num_splits > 0 ? num_splits : 1;
+  const int block_size = 32;
+  dim3 grid(num_heads, batch_size, splits);
+
+  split_k_flash_decode_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
+      partial_out, (float2 *)partial_lse, output, q, k_cache, v_cache,
+      d_seq_positions, d_slot_mapping, d_block_table, max_blocks_per_seq,
+      batch_size, num_heads, num_kv_heads, head_dim, slot_stride_tokens,
+      sm_scale, is_fp16, splits);
+
+  if (splits > 1 && partial_out != nullptr && partial_lse != nullptr) {
+    dim3 reduce_grid(num_heads, batch_size);
+    split_k_flash_decode_reduce_kernel<<<reduce_grid, block_size, 0, stream>>>(
+        output, partial_out, (const float2 *)partial_lse, batch_size,
+        num_heads, head_dim, splits);
+  }
+
   return cudaGetLastError();
 }
 
@@ -5034,14 +5210,10 @@ int launch_cuda_flash_decode_continuous_batch(
     const int *d_seq_positions, const int *d_slot_mapping, int batch_size,
     int num_heads, int num_kv_heads, int head_dim, int slot_stride_tokens,
     float sm_scale, int is_fp16, cudaStream_t stream) {
-  if (batch_size <= 0 || num_heads <= 0 || head_dim <= 0)
-    return 0;
-  const int block_size = 32;
-  dim3 grid(num_heads, batch_size);
-  flash_decode_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
-      output, q, k_cache, v_cache, d_seq_positions, d_slot_mapping, num_heads,
-      num_kv_heads, head_dim, slot_stride_tokens, sm_scale, is_fp16);
-  return cudaGetLastError();
+  return launch_cuda_split_k_flash_decode(
+      output, nullptr, nullptr, q, k_cache, v_cache, d_seq_positions,
+      d_slot_mapping, nullptr, 0, batch_size, num_heads, num_kv_heads,
+      head_dim, slot_stride_tokens, sm_scale, is_fp16, 1, stream);
 }
 
 void init_cuda_kernel_attributes() {

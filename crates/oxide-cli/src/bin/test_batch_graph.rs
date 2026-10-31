@@ -126,7 +126,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for (i, text) in generated_texts.iter().enumerate() {
         assert!(!text.is_empty(), "Stream {} output was empty", i);
         if i < 8 {
-            println!("  [Stream {}] Prompt: {:?} -> Output: {:?}", i, prompts[i], text.trim());
+            println!(
+                "  [Stream {}] Prompt: {:?} -> Output: {:?}",
+                i,
+                prompts[i],
+                text.trim()
+            );
         }
     }
 

@@ -185,6 +185,11 @@ pub struct CudaBackend {
     pub cuda_graph_enabled: bool,
     pub last_sampled_token: Option<u32>,
     pub last_gpu_seq_pos: Option<usize>,
+    pub d_split_k_partial_out: Option<CudaDeviceBuffer>,
+    pub d_split_k_partial_lse: Option<CudaDeviceBuffer>,
+    pub d_block_table: Option<CudaDeviceBuffer>,
+    pub max_blocks_per_seq: usize,
+    pub num_splits: usize,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -318,6 +323,11 @@ impl CudaBackend {
             cuda_graph_enabled: true,
             last_sampled_token: None,
             last_gpu_seq_pos: None,
+            d_split_k_partial_out: None,
+            d_split_k_partial_lse: None,
+            d_block_table: None,
+            max_blocks_per_seq: 512,
+            num_splits: 1,
         }
     }
 
@@ -349,6 +359,35 @@ impl CudaBackend {
         self.rope_scaling_orig_ctx = rope_scaling_orig_ctx;
         self.is_gemma = is_gemma;
         self.final_logit_softcapping = final_logit_softcapping;
+    }
+
+    /// Sets or updates the block mapping table for paged RadixAttention execution.
+    pub fn update_block_table(
+        &mut self,
+        block_table: &[i32],
+        max_blocks_per_seq: usize,
+    ) -> Result<()> {
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| EngineError::BackendError("CUDA stream not available".to_string()))?;
+        let s = stream.raw();
+        self.max_blocks_per_seq = max_blocks_per_seq;
+        let req_bytes = block_table.len() * std::mem::size_of::<i32>();
+        if self
+            .d_block_table
+            .as_ref()
+            .map_or(0, driver::CudaDeviceBuffer::size_bytes)
+            < req_bytes
+        {
+            self.d_block_table =
+                Some(CudaDeviceBuffer::allocate(req_bytes).map_err(EngineError::BackendError)?);
+        }
+        if let Some(buf) = &mut self.d_block_table {
+            buf.copy_from_host_async(block_table, s)
+                .map_err(EngineError::BackendError)?;
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2649,6 +2688,49 @@ impl CudaBackend {
             .copy_from_host_async(&tok_i32, s)
             .map_err(EngineError::BackendError)?;
 
+        let max_pos = padded_positions.iter().copied().max().unwrap_or(0);
+        let num_splits = if max_pos >= 256 { 4usize } else { 1usize };
+        self.num_splits = num_splits;
+
+        if num_splits > 1 {
+            let cur_head_dim = if self.head_dim > 0 {
+                self.head_dim
+            } else {
+                128
+            };
+            let cur_num_heads = if self.num_heads > 0 {
+                self.num_heads
+            } else {
+                32
+            };
+            let req_partial_out_bytes =
+                bucket * cur_num_heads * cur_head_dim * num_splits * std::mem::size_of::<f32>();
+            if self
+                .d_split_k_partial_out
+                .as_ref()
+                .map_or(0, driver::CudaDeviceBuffer::size_bytes)
+                < req_partial_out_bytes
+            {
+                self.d_split_k_partial_out = Some(
+                    CudaDeviceBuffer::allocate(req_partial_out_bytes)
+                        .map_err(EngineError::BackendError)?,
+                );
+            }
+            let req_partial_lse_bytes =
+                bucket * cur_num_heads * num_splits * std::mem::size_of::<f32>() * 2;
+            if self
+                .d_split_k_partial_lse
+                .as_ref()
+                .map_or(0, driver::CudaDeviceBuffer::size_bytes)
+                < req_partial_lse_bytes
+            {
+                self.d_split_k_partial_lse = Some(
+                    CudaDeviceBuffer::allocate(req_partial_lse_bytes)
+                        .map_err(EngineError::BackendError)?,
+                );
+            }
+        }
+
         let can_capture = self.cuda_graph_enabled
             && self.token_embd_quant_type == 1
             && self.d_token_embd.is_some()
@@ -2927,13 +3009,21 @@ impl CudaBackend {
                             }
                         }
 
+                        let block_tbl_ptr = self
+                            .d_block_table
+                            .as_ref()
+                            .map_or(std::ptr::null(), |b| b.as_typed_ptr::<i32>());
+                        let max_blocks = self.max_blocks_per_seq as i32;
+
                         unsafe {
-                            driver::launch_cuda_rope_continuous_batch(
+                            driver::launch_cuda_rope_paged_continuous_batch(
                                 d_q.as_typed_ptr::<f32>(),
                                 d_k.as_typed_ptr::<f32>(),
                                 k_cache_ptr,
                                 d_pos_ptr,
                                 d_slots_ptr,
+                                block_tbl_ptr,
+                                max_blocks,
                                 bucket as i32,
                                 cur_num_heads as i32,
                                 cur_num_kv_heads as i32,
@@ -2949,11 +3039,13 @@ impl CudaBackend {
 
                         if !v_cache_ptr.is_null() {
                             unsafe {
-                                driver::launch_cuda_write_v_cache_continuous_batch(
+                                driver::launch_cuda_write_v_cache_paged_continuous_batch(
                                     v_cache_ptr,
                                     d_v.as_typed_ptr::<f32>(),
                                     d_pos_ptr,
                                     d_slots_ptr,
+                                    block_tbl_ptr,
+                                    max_blocks,
                                     bucket as i32,
                                     kv_dim as i32,
                                     slot_stride,
@@ -2965,14 +3057,32 @@ impl CudaBackend {
 
                         if let Some(d_out) = &mut self.d_scratch_attn_out {
                             let sm_scale = 1.0f32 / (cur_head_dim as f32).sqrt();
+                            let part_out_ptr = if num_splits > 1 {
+                                self.d_split_k_partial_out
+                                    .as_mut()
+                                    .map_or(std::ptr::null_mut(), |b| b.as_typed_ptr::<f32>())
+                            } else {
+                                std::ptr::null_mut()
+                            };
+                            let part_lse_ptr = if num_splits > 1 {
+                                self.d_split_k_partial_lse
+                                    .as_mut()
+                                    .map_or(std::ptr::null_mut(), |b| b.as_raw_ptr())
+                            } else {
+                                std::ptr::null_mut()
+                            };
                             unsafe {
-                                driver::launch_cuda_flash_decode_continuous_batch(
+                                driver::launch_cuda_split_k_flash_decode(
                                     d_out.as_typed_ptr::<f32>(),
+                                    part_out_ptr,
+                                    part_lse_ptr,
                                     d_q.as_typed_ptr::<f32>(),
                                     k_cache_ptr,
                                     v_cache_ptr,
                                     d_pos_ptr,
                                     d_slots_ptr,
+                                    block_tbl_ptr,
+                                    max_blocks,
                                     bucket as i32,
                                     cur_num_heads as i32,
                                     cur_num_kv_heads as i32,
@@ -2980,6 +3090,7 @@ impl CudaBackend {
                                     slot_stride,
                                     sm_scale,
                                     1,
+                                    num_splits as i32,
                                     s,
                                 );
                             }
@@ -2988,26 +3099,33 @@ impl CudaBackend {
 
                     if let Some(d_out) = &self.d_scratch_attn_out {
                         unsafe {
-                            driver::launch_cuda_fused_rmsnorm_q8_1(
-                                std::ptr::null_mut(),
-                                d_q8_1_ptr,
+                            driver::launch_cuda_quantize_q8_1(
                                 d_out.as_typed_ptr::<f32>(),
-                                std::ptr::null(),
-                                bucket as i32,
-                                layer.o_k as i32,
-                                0.0,
-                                0.0,
-                                s,
-                            );
-                            driver::launch_cuda_mmvq_q4_k_fused_add(
-                                d_hid.as_typed_ptr::<f32>(),
-                                layer.d_wo.as_raw_ptr(),
                                 d_q8_1_ptr,
-                                layer.o_m as i32,
-                                layer.o_k as i32,
-                                bucket as i32,
+                                (bucket * layer.o_k) as i32,
                                 s,
                             );
+                            if layer.o_quant == 2 {
+                                driver::launch_cuda_mmvq_q6_k_fused_add(
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    layer.d_wo.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.o_m as i32,
+                                    layer.o_k as i32,
+                                    bucket as i32,
+                                    s,
+                                );
+                            } else {
+                                driver::launch_cuda_mmvq_q4_k_fused_add(
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    layer.d_wo.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.o_m as i32,
+                                    layer.o_k as i32,
+                                    bucket as i32,
+                                    s,
+                                );
+                            }
                         }
                     }
                 }
