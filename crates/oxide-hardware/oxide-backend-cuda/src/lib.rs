@@ -1609,8 +1609,6 @@ impl CudaBackend {
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let tail_batch = batch_size;
             let tail_tok_offset = 0usize;
-            let bench_this_layer = false;
-            let t_layer_start: Option<std::time::Instant> = None;
             if let (Some(d_hid), Some(d_norm)) = (&self.d_hidden, &mut self.d_scratch_norm) {
                 let has_attn =
                     layer.d_wq.size_bytes() > 0 && layer.d_wo.size_bytes() > 0 && layer.q_m > 0;
@@ -1983,15 +1981,6 @@ impl CudaBackend {
                             }
                         }
                     }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 Attention: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
-                    }
 
                     if let (Some(d_out), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
                         &self.d_scratch_attn_out,
@@ -2061,15 +2050,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                    }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 WO: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
                     }
                 }
 
@@ -2190,15 +2170,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                        if bench_this_layer {
-                            unsafe {
-                                let _ = driver::cudaStreamSynchronize(s);
-                            }
-                            tracing::info!(
-                                "Prefill Layer 0 GateUp: {:?}",
-                                t_layer_start.unwrap().elapsed()
-                            );
-                        }
 
                         if !d_q8_1_ptr.is_null() {
                             unsafe {
@@ -2214,15 +2185,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                    }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 SwiGLU: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
                     }
 
                     if let (Some(d_gate), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
@@ -2279,15 +2241,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                    }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 W2: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
                     }
                 }
             }
@@ -2553,8 +2506,6 @@ impl CudaBackend {
             } else {
                 0
             };
-            let bench_this_layer = false;
-            let t_layer_start: Option<std::time::Instant> = None;
             if let (Some(d_hid), Some(d_norm)) = (&self.d_hidden, &mut self.d_scratch_norm) {
                 let has_attn =
                     layer.d_wq.size_bytes() > 0 && layer.d_wo.size_bytes() > 0 && layer.q_m > 0;
@@ -2573,10 +2524,6 @@ impl CudaBackend {
                                 s,
                             );
                         }
-                    }
-                    if bench_this_layer {
-                        let _ = stream.synchronize();
-                        tracing::info!("Layer 0 RMSNorm: {:?}", t_layer_start.unwrap().elapsed());
                     }
 
                     let cur_head_dim = if let Some(ref d_q_norm) = layer.d_attn_q_norm {
@@ -2807,11 +2754,6 @@ impl CudaBackend {
                         }
                     }
 
-                    if bench_this_layer {
-                        let _ = stream.synchronize();
-                        tracing::info!("Layer 0 QKV: {:?}", t_layer_start.unwrap().elapsed());
-                    }
-
                     // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
                     if let Some(ref d_bias) = layer.d_q_bias {
                         if let Some(d_q) = &mut self.d_scratch_q {
@@ -2936,15 +2878,6 @@ impl CudaBackend {
                             }
                         }
                     }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 Attention: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
-                    }
 
                     if let (Some(d_out), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
                         &self.d_scratch_attn_out,
@@ -3014,15 +2947,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                    }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 WO: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
                     }
                 }
 
@@ -3143,15 +3067,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                        if bench_this_layer {
-                            unsafe {
-                                let _ = driver::cudaStreamSynchronize(s);
-                            }
-                            tracing::info!(
-                                "Prefill Layer 0 GateUp: {:?}",
-                                t_layer_start.unwrap().elapsed()
-                            );
-                        }
 
                         if !d_q8_1_ptr.is_null() {
                             unsafe {
@@ -3167,15 +3082,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                    }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 SwiGLU: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
                     }
 
                     if let (Some(d_gate), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
@@ -3232,15 +3138,6 @@ impl CudaBackend {
                                 );
                             }
                         }
-                    }
-                    if bench_this_layer {
-                        unsafe {
-                            let _ = driver::cudaStreamSynchronize(s);
-                        }
-                        tracing::info!(
-                            "Prefill Layer 0 W2: {:?}",
-                            t_layer_start.unwrap().elapsed()
-                        );
                     }
                 }
             }
