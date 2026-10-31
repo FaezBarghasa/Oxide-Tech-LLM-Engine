@@ -1112,6 +1112,9 @@ fn run_chat_session(
         let mut spec_drafted_count = 0usize;
         let mut spec_accepted_count = 0usize;
 
+        let mut decode_start: Option<std::time::Instant> = None;
+        let mut decode_start_tokens = 0usize;
+
         while gen_count < max_tokens {
             let mut draft = Vec::new();
             if let Some(ref mut dp) = companion_draft_pipeline {
@@ -1214,6 +1217,10 @@ fn run_chat_session(
             let cmd = StepCommand::new(1, cur_token, 0, false);
             let step_res = pipeline.step(&cmd)?;
             gen_count += 1;
+            if decode_start.is_none() && gen_count >= 2 {
+                decode_start = Some(std::time::Instant::now());
+                decode_start_tokens = gen_count;
+            }
             cur_token = step_res.sampled_token;
             all_tokens.push(cur_token);
             if let Some(ref mut ens) = ensemble {
@@ -1242,8 +1249,11 @@ fn run_chat_session(
                 break;
             }
             print!("{text}");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
+            if gen_count % 4 == 0 {
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
         }
+        let _ = std::io::Write::flush(&mut std::io::stdout());
         let elapsed = t_start.elapsed();
 
         println!();
@@ -1254,9 +1264,12 @@ fn run_chat_session(
             } else {
                 0.0
             };
-            let decode_duration = elapsed.saturating_sub(first_tok_time);
-            let decode_tokens = gen_count.saturating_sub(1);
-            let decode_tps = if decode_duration.as_secs_f64() > 0.0 {
+            let (decode_duration, decode_tokens) = if let Some(d_start) = decode_start {
+                (d_start.elapsed(), gen_count.saturating_sub(decode_start_tokens))
+            } else {
+                (elapsed.saturating_sub(first_tok_time), gen_count.saturating_sub(1))
+            };
+            let decode_tps = if decode_duration.as_secs_f64() > 0.0 && decode_tokens > 0 {
                 decode_tokens as f64 / decode_duration.as_secs_f64()
             } else {
                 0.0

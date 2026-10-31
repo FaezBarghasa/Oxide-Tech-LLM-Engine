@@ -610,6 +610,22 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_write_v_cache_ptr(
+        v_cache_fp16: *mut std::ffi::c_void,
+        y_v: *const f32,
+        d_start_pos: *const i32,
+        kv_m: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_write_v_cache(
+        v_cache_fp16: *mut std::ffi::c_void,
+        y_v: *const f32,
+        pos: i32,
+        kv_m: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_fused_qknorm_rope_batch_ptr(
         q: *mut f32,
         k: *mut f32,

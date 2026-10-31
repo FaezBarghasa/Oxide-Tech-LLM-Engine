@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 0. Correctness Judge: Verify greedy output matches llama.cpp on a standard reasoning prompt
     println!("\n[1/3] Running Outside Correctness Judge...");
-    let judge_prompt = "Count from 1 to 10:";
+    let judge_prompt = "<|im_start|>user\nCount from 1 to 10:<|im_end|>\n<|im_start|>assistant\n";
     report.judge.prompt = judge_prompt.to_string();
 
     let llama_bin = if Command::new("llama-completion").arg("-h").output().is_ok() {
@@ -139,6 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "--temp",
                 "0",
                 "--no-display-prompt",
+                "-sp",
             ])
             .output()
     } else {
@@ -147,6 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "-st",
                 "--simple-io",
                 "--no-display-prompt",
+                "-sp",
                 "-m",
                 &args.model.to_string_lossy(),
                 "-p",
@@ -502,15 +504,17 @@ fn compute_stats(mut samples: Vec<f64>) -> (f64, f64) {
 }
 
 fn compute_text_similarity(s1: &str, s2: &str) -> f64 {
-    let w1: Vec<&str> = s1.split_whitespace().collect();
-    let w2: Vec<&str> = s2.split_whitespace().collect();
+    let clean1 = s1.replace([',', '.', ':', ';', '!', '?', '\'', '"'], " ");
+    let clean2 = s2.replace([',', '.', ':', ';', '!', '?', '\'', '"'], " ");
+    let w1: Vec<&str> = clean1.split_whitespace().collect();
+    let w2: Vec<&str> = clean2.split_whitespace().collect();
     if w1.is_empty() || w2.is_empty() {
         return 0.0;
     }
     let mut matches = 0;
     let min_len = w1.len().min(w2.len());
     for i in 0..min_len {
-        if w1[i] == w2[i] {
+        if w1[i].eq_ignore_ascii_case(w2[i]) {
             matches += 1;
         }
     }

@@ -4198,60 +4198,38 @@ impl HardwareBackend for CudaBackend {
                             std::ptr::null_mut()
                         };
 
-                        // Grouped QKV GEMV writing V-cache directly
+                        // High-throughput Split-K Q, K, V GEMVs
                         unsafe {
-                            if layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && (layer.v_quant == 1 || layer.v_quant == 2)
-                            {
-                                driver::launch_cuda_mmvq_qkv_mixed_ptr(
-                                    d_q_ptr,
-                                    d_k_ptr,
-                                    d_v_ptr,
-                                    v_cache_ptr,
-                                    d_sp_ptr,
-                                    layer.d_wq.as_raw_ptr(),
-                                    layer.d_wk.as_raw_ptr(),
-                                    layer.d_wv.as_raw_ptr(),
-                                    d_q8_1_ptr,
-                                    layer.q_m as i32,
-                                    layer.kv_m as i32,
-                                    layer.q_k as i32,
-                                    layer.v_quant as i32,
-                                    s,
-                                );
-                            } else {
-                                Self::dispatch_gemv(
-                                    d_q_ptr,
-                                    &layer.d_wq,
-                                    d_norm_ptr,
-                                    d_q8_1_ptr,
-                                    layer.q_m,
-                                    layer.q_k,
-                                    layer.q_quant,
-                                    s,
-                                );
-                                Self::dispatch_gemv(
-                                    d_k_ptr,
-                                    &layer.d_wk,
-                                    d_norm_ptr,
-                                    d_q8_1_ptr,
-                                    layer.kv_m,
-                                    layer.kv_k,
-                                    layer.k_quant,
-                                    s,
-                                );
-                                Self::dispatch_gemv(
-                                    d_v_ptr,
-                                    &layer.d_wv,
-                                    d_norm_ptr,
-                                    d_q8_1_ptr,
-                                    layer.kv_m,
-                                    layer.kv_k,
-                                    layer.v_quant,
-                                    s,
-                                );
-                            }
+                            Self::dispatch_gemv(
+                                d_q_ptr,
+                                &layer.d_wq,
+                                d_norm_ptr,
+                                d_q8_1_ptr,
+                                layer.q_m,
+                                layer.q_k,
+                                layer.q_quant,
+                                s,
+                            );
+                            Self::dispatch_gemv(
+                                d_k_ptr,
+                                &layer.d_wk,
+                                d_norm_ptr,
+                                d_q8_1_ptr,
+                                layer.kv_m,
+                                layer.kv_k,
+                                layer.k_quant,
+                                s,
+                            );
+                            Self::dispatch_gemv(
+                                d_v_ptr,
+                                &layer.d_wv,
+                                d_norm_ptr,
+                                d_q8_1_ptr,
+                                layer.kv_m,
+                                layer.kv_k,
+                                layer.v_quant,
+                                s,
+                            );
 
                             // Add Q, K, V biases for single-token decode if present (e.g. Qwen2 / Qwen2.5)
                             if let Some(ref d_bias) = layer.d_q_bias {
@@ -4274,6 +4252,17 @@ impl HardwareBackend for CudaBackend {
                                 driver::launch_cuda_vector_add(
                                     d_v_ptr,
                                     d_bias.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    s,
+                                );
+                            }
+
+                            // Write V directly to V-cache
+                            if !v_cache_ptr.is_null() {
+                                driver::launch_cuda_write_v_cache_ptr(
+                                    v_cache_ptr,
+                                    d_v_ptr,
+                                    d_sp_ptr,
                                     layer.kv_m as i32,
                                     s,
                                 );
@@ -4397,10 +4386,16 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN Gate + Up GEMV
                         unsafe {
+                            let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma && layer.gate_quant == 1 && layer.up_quant == 1 {
+                                (std::ptr::null_mut(), std::ptr::null())
+                            } else {
+                                (d_up_ptr, d_up_ptr as *const f32)
+                            };
+
                             if layer.gate_quant == 1 && layer.up_quant == 1 {
                                 driver::launch_cuda_gemv_gate_up_q4_k(
                                     d_gate_ptr,
-                                    d_up_ptr,
+                                    pass_up_ptr,
                                     layer.d_w1.as_raw_ptr(),
                                     layer.d_w3.as_raw_ptr(),
                                     d_q8_1_ptr,
@@ -4430,11 +4425,16 @@ impl HardwareBackend for CudaBackend {
                                     s,
                                 );
                             }
+                            let out_f32_ptr = if layer.down_quant == 1 || layer.down_quant == 2 {
+                                std::ptr::null_mut()
+                            } else {
+                                d_gate_ptr
+                            };
                             driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                 d_q8_1_ptr,
+                                out_f32_ptr,
                                 d_gate_ptr,
-                                d_gate_ptr,
-                                d_up_ptr,
+                                pass_swiglu_up,
                                 layer.inter_m as i32,
                                 self.ffn_sparsity_threshold,
                                 i32::from(self.enable_2_4_sparsity),
@@ -4882,55 +4882,49 @@ impl HardwareBackend for CudaBackend {
                             &mut self.d_scratch_k,
                             &mut self.d_scratch_v,
                         ) {
-                            if layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && (layer.v_quant == 1 || layer.v_quant == 2)
-                                && layer.q_k == layer.kv_k
-                                && !d_q8_1_ptr.is_null()
-                            {
-                                unsafe {
-                                    driver::launch_cuda_mmvq_qkv_mixed(
-                                        d_q.as_typed_ptr::<f32>(),
-                                        d_k.as_typed_ptr::<f32>(),
-                                        d_v.as_typed_ptr::<f32>(),
+                            unsafe {
+                                Self::dispatch_gemv(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    &layer.d_wq,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.q_m,
+                                    layer.q_k,
+                                    layer.q_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    &layer.d_wk,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.k_quant,
+                                    s,
+                                );
+                                Self::dispatch_gemv(
+                                    d_v.as_typed_ptr::<f32>(),
+                                    &layer.d_wv,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.v_quant,
+                                    s,
+                                );
+                                if !v_cache_ptr.is_null() {
+                                    driver::launch_cuda_write_v_cache(
                                         v_cache_ptr,
+                                        d_v.as_typed_ptr::<f32>(),
                                         pos as i32,
-                                        layer.d_wq.as_raw_ptr(),
-                                        layer.d_wk.as_raw_ptr(),
-                                        layer.d_wv.as_raw_ptr(),
-                                        d_q8_1_ptr,
-                                        layer.q_m as i32,
                                         layer.kv_m as i32,
-                                        layer.q_k as i32,
-                                        layer.v_quant as i32,
-                                        1,
                                         s,
                                     );
                                 }
-                                check_cuda("qkv_grouped_proj", layer_idx)?;
-                                (true, true, !v_cache_ptr.is_null())
-                            } else if layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && !d_q8_1_ptr.is_null()
-                            {
-                                unsafe {
-                                    driver::launch_cuda_gemv_qk_q4_k(
-                                        d_q.as_typed_ptr::<f32>(),
-                                        d_k.as_typed_ptr::<f32>(),
-                                        layer.d_wq.as_raw_ptr(),
-                                        layer.d_wk.as_raw_ptr(),
-                                        d_q8_1_ptr,
-                                        layer.q_m as i32,
-                                        layer.kv_m as i32,
-                                        layer.q_k as i32,
-                                        s,
-                                    );
-                                }
-                                check_cuda("qk_grouped_proj", layer_idx)?;
-                                (true, true, false)
-                            } else {
-                                (false, false, false)
                             }
+                            check_cuda("qkv_splitk_proj", layer_idx)?;
+                            (true, true, !v_cache_ptr.is_null())
                         } else {
                             (false, false, false)
                         };
@@ -5254,13 +5248,19 @@ impl HardwareBackend for CudaBackend {
                             (&mut self.d_scratch_gate, &mut self.d_scratch_up)
                         {
                             unsafe {
+                                let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma && layer.gate_quant == 1 && layer.up_quant == 1 {
+                                    (std::ptr::null_mut(), std::ptr::null())
+                                } else {
+                                    (d_up.as_typed_ptr::<f32>(), d_up.as_typed_ptr::<f32>() as *const f32)
+                                };
+
                                 if layer.gate_quant == 1
                                     && layer.up_quant == 1
                                     && !d_q8_1_ptr.is_null()
                                 {
                                     driver::launch_cuda_gemv_gate_up_q4_k(
                                         d_gate.as_typed_ptr::<f32>(),
-                                        d_up.as_typed_ptr::<f32>(),
+                                        pass_up_ptr,
                                         layer.d_w1.as_raw_ptr(),
                                         layer.d_w3.as_raw_ptr(),
                                         d_q8_1_ptr,
@@ -5309,11 +5309,16 @@ impl HardwareBackend for CudaBackend {
                                     }
                                 } else if !d_q8_1_ptr.is_null() {
                                     // Fused SwiGLU directly writes quantized Q8_1 blocks for down-projection
+                                    let out_f32_ptr = if layer.down_quant == 1 || layer.down_quant == 2 {
+                                        std::ptr::null_mut()
+                                    } else {
+                                        d_gate.as_typed_ptr::<f32>()
+                                    };
                                     driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                         d_q8_1_ptr,
+                                        out_f32_ptr,
                                         d_gate.as_typed_ptr::<f32>(),
-                                        d_gate.as_typed_ptr::<f32>(),
-                                        d_up.as_typed_ptr::<f32>(),
+                                        pass_swiglu_up,
                                         layer.inter_m as i32,
                                         self.ffn_sparsity_threshold,
                                         i32::from(self.enable_2_4_sparsity),
