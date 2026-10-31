@@ -434,6 +434,162 @@ impl CudaBackend {
         }
     }
 
+    /// Prunes physical KV cache for a given slot using H2O (Heavy-Hitter Oracle) + StreamingLLM:
+    /// - Keeps the first `sink_tokens` (default 4)
+    /// - Keeps the last `local_rolling_tokens` (default 256)
+    /// - Selects the top heavy-hitter tokens in the middle based on accumulated attention scores
+    /// - Compacts physical GPU KV cache memory in-place via D2D cudaMemcpyAsync
+    /// - Returns the new compacted sequence position
+    pub fn prune_slot_kv_h2o(
+        &mut self,
+        slot_idx: usize,
+        max_budget_tokens: usize,
+        sink_tokens: usize,
+        local_rolling_tokens: usize,
+    ) -> Result<usize> {
+        let cur_pos = if slot_idx < self.slot_positions.len() {
+            self.slot_positions[slot_idx]
+        } else {
+            self.seq_pos
+        };
+
+        if cur_pos <= max_budget_tokens || sink_tokens + local_rolling_tokens >= cur_pos {
+            return Ok(cur_pos);
+        }
+
+        let allowed_mid = max_budget_tokens.saturating_sub(sink_tokens + local_rolling_tokens);
+        let mid_start = sink_tokens;
+        let mid_end = cur_pos - local_rolling_tokens;
+
+        // Retrieve accumulated block scores if available
+        let host_scores =
+            self.read_block_scores(self.max_blocks_per_seq * self.max_slots.max(1))?;
+        let slot_score_offset = slot_idx * self.max_blocks_per_seq;
+
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| EngineError::BackendError("CUDA stream not available".to_string()))?;
+        let s = stream.raw();
+
+        // Score middle tokens (each block = 16 tokens)
+        let mut mid_token_scores: Vec<(usize, f32)> = (mid_start..mid_end)
+            .map(|tok_idx| {
+                let blk_idx = tok_idx / 16;
+                let score = host_scores
+                    .get(slot_score_offset + blk_idx)
+                    .copied()
+                    .unwrap_or(0.0f32);
+                (tok_idx, score)
+            })
+            .collect();
+
+        // Sort descending by score to pick heavy-hitters
+        mid_token_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut retained_tokens: Vec<usize> = mid_token_scores
+            .iter()
+            .take(allowed_mid)
+            .map(|&(tok_idx, _)| tok_idx)
+            .collect();
+
+        // Sort back in chronological order to preserve causal ordering
+        retained_tokens.sort_unstable();
+
+        let cur_head_dim = self.head_dim;
+        let cur_num_kv_heads = self.num_kv_heads;
+        let kv_dim = cur_num_kv_heads * cur_head_dim;
+        let tok_bytes = kv_dim * std::mem::size_of::<u16>();
+        let slot_stride = (self.kv_capacity / self.max_slots.max(1)).max(64);
+        let slot_base_bytes = slot_idx * slot_stride * tok_bytes;
+
+        // Compact retained middle tokens immediately following sink tokens
+        let mut write_pos = sink_tokens;
+        for &tok_pos in &retained_tokens {
+            if tok_pos != write_pos {
+                for layer_idx in 0..self.layers.len() {
+                    if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
+                        let k_buf = &mut self.kv_k[layer_idx];
+                        let v_buf = &mut self.kv_v[layer_idx];
+                        unsafe {
+                            let k_src = (k_buf.as_raw_ptr() as *const u8)
+                                .add(slot_base_bytes + tok_pos * tok_bytes);
+                            let k_dst = (k_buf.as_raw_ptr() as *mut u8)
+                                .add(slot_base_bytes + write_pos * tok_bytes);
+                            let _ = driver::cudaMemcpyAsync(
+                                k_dst as *mut std::ffi::c_void,
+                                k_src as *const std::ffi::c_void,
+                                tok_bytes,
+                                driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                s,
+                            );
+
+                            let v_src = (v_buf.as_raw_ptr() as *const u8)
+                                .add(slot_base_bytes + tok_pos * tok_bytes);
+                            let v_dst = (v_buf.as_raw_ptr() as *mut u8)
+                                .add(slot_base_bytes + write_pos * tok_bytes);
+                            let _ = driver::cudaMemcpyAsync(
+                                v_dst as *mut std::ffi::c_void,
+                                v_src as *const std::ffi::c_void,
+                                tok_bytes,
+                                driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                                s,
+                            );
+                        }
+                    }
+                }
+            }
+            write_pos += 1;
+        }
+
+        // Compact rolling window tokens
+        let roll_bytes = local_rolling_tokens * tok_bytes;
+        let roll_src_offset = slot_base_bytes + mid_end * tok_bytes;
+        let roll_dst_offset = slot_base_bytes + write_pos * tok_bytes;
+
+        if roll_src_offset != roll_dst_offset {
+            for layer_idx in 0..self.layers.len() {
+                if layer_idx < self.kv_k.len() && layer_idx < self.kv_v.len() {
+                    let k_buf = &mut self.kv_k[layer_idx];
+                    let v_buf = &mut self.kv_v[layer_idx];
+                    unsafe {
+                        let k_src = (k_buf.as_raw_ptr() as *const u8).add(roll_src_offset);
+                        let k_dst = (k_buf.as_raw_ptr() as *mut u8).add(roll_dst_offset);
+                        let _ = driver::cudaMemcpyAsync(
+                            k_dst as *mut std::ffi::c_void,
+                            k_src as *const std::ffi::c_void,
+                            roll_bytes,
+                            driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                            s,
+                        );
+
+                        let v_src = (v_buf.as_raw_ptr() as *const u8).add(roll_src_offset);
+                        let v_dst = (v_buf.as_raw_ptr() as *mut u8).add(roll_dst_offset);
+                        let _ = driver::cudaMemcpyAsync(
+                            v_dst as *mut std::ffi::c_void,
+                            v_src as *const std::ffi::c_void,
+                            roll_bytes,
+                            driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                            s,
+                        );
+                    }
+                }
+            }
+        }
+        write_pos += local_rolling_tokens;
+
+        stream.synchronize().map_err(EngineError::BackendError)?;
+
+        if slot_idx < self.slot_positions.len() {
+            self.slot_positions[slot_idx] = write_pos;
+        }
+        if slot_idx == 0 {
+            self.seq_pos = write_pos;
+        }
+
+        Ok(write_pos)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn configure_sampling(
         &mut self,
@@ -3476,6 +3632,9 @@ impl HardwareBackend for CudaBackend {
                     self.last_sampled_token = Some(best_tok);
                     self.seq_pos += 1;
                     self.last_gpu_seq_pos = Some(self.seq_pos);
+                    if slot < self.slot_positions.len() {
+                        self.slot_positions[slot] = self.seq_pos;
+                    }
                     if slot < self.host_token_buffer.len() {
                         self.host_token_buffer[slot] = best_tok;
                     }
@@ -3968,6 +4127,9 @@ impl HardwareBackend for CudaBackend {
                                 self.last_sampled_token = Some(best_tok);
                                 self.seq_pos += 1;
                                 self.last_gpu_seq_pos = Some(self.seq_pos);
+                                if slot < self.slot_positions.len() {
+                                    self.slot_positions[slot] = self.seq_pos;
+                                }
                                 if slot < self.host_token_buffer.len() {
                                     self.host_token_buffer[slot] = best_tok;
                                 }
@@ -4937,6 +5099,10 @@ impl HardwareBackend for CudaBackend {
 
                 if slot < self.host_token_buffer.len() {
                     self.host_token_buffer[slot] = selected_token;
+                }
+                self.seq_pos += 1;
+                if slot < self.slot_positions.len() {
+                    self.slot_positions[slot] = self.seq_pos;
                 }
             }
         } else {

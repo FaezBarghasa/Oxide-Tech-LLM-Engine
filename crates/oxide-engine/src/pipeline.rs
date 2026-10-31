@@ -143,6 +143,25 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Prunes physical GPU KV cache for a sequence slot using H2O + StreamingLLM compaction.
+    pub fn prune_slot_kv_h2o(
+        &mut self,
+        slot_idx: usize,
+        max_budget_tokens: usize,
+        sink_tokens: usize,
+        local_rolling_tokens: usize,
+    ) -> Result<usize> {
+        match self {
+            Self::Llama3Cuda(engine) => engine.backend.prune_slot_kv_h2o(
+                slot_idx,
+                max_budget_tokens,
+                sink_tokens,
+                local_rolling_tokens,
+            ),
+            _ => Ok(0),
+        }
+    }
+
     /// Dispatches a continuous batch decode step across multiple active slots in a single GPU pass.
     pub fn step_continuous_batch(
         &mut self,
@@ -169,7 +188,14 @@ impl SpecializedPipeline {
     #[inline(always)]
     pub fn get_seq_pos(&self, sequence_id: u64) -> usize {
         match self {
-            Self::Llama3Cuda(engine) => engine.backend.seq_pos,
+            Self::Llama3Cuda(engine) => {
+                let slot = sequence_id as usize;
+                if slot < engine.backend.slot_positions.len() {
+                    engine.backend.slot_positions[slot]
+                } else {
+                    engine.backend.seq_pos
+                }
+            }
             Self::Llama3Dense { seq_positions, .. }
             | Self::Llama3AmdApuCpuIgpu { seq_positions, .. } => {
                 seq_positions.get(&sequence_id).copied().unwrap_or(0)
@@ -184,6 +210,12 @@ impl SpecializedPipeline {
         match self {
             Self::Llama3Cuda(engine) => {
                 engine.backend.seq_pos = pos;
+                let slot = sequence_id as usize;
+                if slot < engine.backend.slot_positions.len() {
+                    engine.backend.slot_positions[slot] = pos;
+                } else {
+                    engine.backend.slot_positions.resize(slot + 1, pos);
+                }
             }
             Self::Llama3Dense { seq_positions, .. }
             | Self::Llama3AmdApuCpuIgpu { seq_positions, .. } => {
