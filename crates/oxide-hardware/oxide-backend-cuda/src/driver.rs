@@ -462,6 +462,17 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_fused_swiglu_q8_1_sparse(
+        y_q8_1: *mut std::ffi::c_void,
+        out_f32: *mut f32,
+        gate: *const f32,
+        up: *const f32,
+        n: i32,
+        sparsity_threshold: f32,
+        enable_2_4: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_rope_single(
         q: *mut f32,
         k: *mut f32,
@@ -710,6 +721,29 @@ unsafe extern "C" {
         sm_scale: f32,
         is_fp16: i32,
         num_splits: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_split_k_flash_decode_h2o(
+        output: *mut f32,
+        partial_out: *mut f32,
+        partial_lse: *mut std::ffi::c_void,
+        q: *const f32,
+        k_cache: *const std::ffi::c_void,
+        v_cache: *const std::ffi::c_void,
+        d_seq_positions: *const i32,
+        d_slot_mapping: *const i32,
+        d_block_table: *const i32,
+        max_blocks_per_seq: i32,
+        batch_size: i32,
+        num_heads: i32,
+        num_kv_heads: i32,
+        head_dim: i32,
+        slot_stride_tokens: i32,
+        sm_scale: f32,
+        is_fp16: i32,
+        num_splits: i32,
+        d_block_scores: *mut f32,
         stream: cudaStream_t,
     ) -> i32;
 

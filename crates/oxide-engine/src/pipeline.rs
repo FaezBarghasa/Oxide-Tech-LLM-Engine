@@ -113,6 +113,36 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Retrieves the most recent normalized hidden state vector from the physical GPU.
+    pub fn get_last_hidden_state(&mut self) -> Result<Vec<f32>> {
+        match self {
+            Self::Llama3Cuda(engine) => engine.backend.get_last_hidden_state(),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Synchronizes logical block tables to physical GPU memory for paged attention.
+    pub fn update_block_table(
+        &mut self,
+        block_table: &[i32],
+        max_blocks_per_seq: usize,
+    ) -> Result<()> {
+        match self {
+            Self::Llama3Cuda(engine) => {
+                engine.backend.update_block_table(block_table, max_blocks_per_seq)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Reads back accumulated attention score mass for all blocks from the GPU for H2O pruning.
+    pub fn read_block_scores(&mut self, total_elements: usize) -> Result<Vec<f32>> {
+        match self {
+            Self::Llama3Cuda(engine) => engine.backend.read_block_scores(total_elements),
+            _ => Ok(vec![0.0f32; total_elements]),
+        }
+    }
+
     /// Dispatches a continuous batch decode step across multiple active slots in a single GPU pass.
     pub fn step_continuous_batch(
         &mut self,
@@ -172,6 +202,18 @@ impl SpecializedPipeline {
                 model.config.vocab_size
             }
             _ => 128_256,
+        }
+    }
+
+    /// Returns model hidden dimension.
+    #[inline(always)]
+    pub fn hidden_dim(&self) -> usize {
+        match self {
+            Self::Llama3Cuda(engine) => engine.backend.hidden_dim,
+            Self::Llama3Dense { model, .. } | Self::Llama3AmdApuCpuIgpu { model, .. } => {
+                model.config.hidden_dim
+            }
+            _ => 4096,
         }
     }
 

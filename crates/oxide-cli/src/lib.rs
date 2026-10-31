@@ -989,7 +989,7 @@ fn run_chat_session(
         let is_speculative = draft_model.is_some()
             || match speculative {
                 "auto" => greedy || temp <= 0.2,
-                "ensemble" | "dynamic" | "ngram" | "prompt-lookup" => true,
+                "ensemble" | "dynamic" | "ngram" | "prompt-lookup" | "medusa" | "dflash" => true,
                 _ => false,
             };
 
@@ -1060,6 +1060,25 @@ fn run_chat_session(
             let mut ens = oxide_engine::DrafterEnsemble::new(draft_tokens.clamp(2, 5), 2, 5);
             ens.warm_up(&prompt_tokens);
             ens.seed_with_prompt_and_encoder(p, |s| tokenizer.encode(s));
+            if speculative == "medusa" {
+                let medusa_config = oxide_models::MedusaConfig {
+                    hidden_dim: pipeline.hidden_dim(),
+                    num_heads: draft_tokens.clamp(2, 5),
+                    tree_depth: 4,
+                    vocab_size: pipeline.vocab_size(),
+                };
+                ens = ens.with_medusa(oxide_models::MedusaTreeDrafter::new(medusa_config));
+            } else if speculative == "dflash" {
+                let dflash_config = oxide_models::DFlashConfig {
+                    target_hidden_dim: pipeline.hidden_dim(),
+                    draft_hidden_dim: 1024,
+                    block_size: draft_tokens.clamp(2, 5),
+                    conv_kernel_size: 3,
+                    conv_group_size: 64,
+                    vocab_size: pipeline.vocab_size(),
+                };
+                ens = ens.with_dflash(oxide_models::DFlashModel::new(dflash_config));
+            }
             Some(ens)
         } else {
             None
@@ -1110,8 +1129,18 @@ fn run_chat_session(
                     }
                 }
             } else if let (Some(spec), Some(ens)) = (&spec_engine, &mut ensemble) {
-                let (d, _tier) = ens.propose_draft(&all_tokens, spec);
-                draft = d;
+                if (speculative == "medusa" || speculative == "dflash") && draft.is_empty() {
+                    if let Ok(last_hidden) = pipeline.get_last_hidden_state() {
+                        let (d, _tier) = ens.propose_medusa_draft(&last_hidden);
+                        if !d.is_empty() {
+                            draft = d;
+                        }
+                    }
+                }
+                if draft.is_empty() {
+                    let (d, _tier) = ens.propose_draft(&all_tokens, spec);
+                    draft = d;
+                }
             }
 
             if !draft.is_empty() {

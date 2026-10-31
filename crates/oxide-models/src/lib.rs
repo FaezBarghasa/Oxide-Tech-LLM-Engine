@@ -68,7 +68,7 @@ pub use decision::{
     DecisionScorer, LabelLogits, LabelPrompt, LabelPromptResult, MAX_LABEL_PROMPTS,
     MAX_LABELS_PER_PROMPT, TokenizedLabelPrompt, shared_prefix_len, softmax,
 };
-pub use dflash::{DFlashConfig, DFlashModel};
+pub use dflash::{DFlashConfig, DFlashModel, MedusaConfig, MedusaTreeDrafter};
 pub use dspark::{DSparkConfig, DSparkModel};
 pub use gdn::{GatedDeltaNet, GdnReplayState, GdnStepInputs, GdnUpdateRecord};
 pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};

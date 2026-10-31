@@ -813,6 +813,24 @@ __launch_bounds__(256, (BATCH_N > 32 ? 1 : (BATCH_N > 16 ? 3 : 4))) void mmvq_q6
 
   for (int b = 0; b < num_blocks_per_row; ++b) {
     if (valid_row) {
+      bool thread_has_work = false;
+#pragma unroll
+      for (int col = 0; col < BATCH_N; ++col) {
+        if (col < num_cols) {
+          const BlockQ8_1_Gpu *bx =
+              &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
+          float d0 = __low2float(__ldg(&bx[group].ds));
+          float d1 = __low2float(__ldg(&bx[4 + group].ds));
+          if (d0 != 0.0f || d1 != 0.0f) {
+            thread_has_work = true;
+          }
+        }
+      }
+      unsigned int warp_active = __ballot_sync(0xFFFFFFFF, thread_has_work);
+      if (warp_active == 0) {
+        continue;
+      }
+
       const BlockQ6_K_Gpu *blk = &row_blocks[b];
       float d = __half2float(*((const half *)&blk->d));
 
@@ -840,9 +858,11 @@ __launch_bounds__(256, (BATCH_N > 32 ? 1 : (BATCH_N > 16 ? 3 : 4))) void mmvq_q6
                 &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
             const BlockQ8_1_Gpu *bq8 = &bx[sub];
             float d8 = __low2float(__ldg(&bq8->ds));
-            int u = __ldg(&((const int *)bq8->qs)[idx]);
-            int dot = __dp4a(v_signed, u, 0);
-            thread_dot[col] += d_sc * d8 * (float)dot;
+            if (d8 != 0.0f) {
+              int u = __ldg(&((const int *)bq8->qs)[idx]);
+              int dot = __dp4a(v_signed, u, 0);
+              thread_dot[col] += d_sc * d8 * (float)dot;
+            }
           }
         }
       }
@@ -974,6 +994,24 @@ __launch_bounds__(256, (BATCH_N > 32 ? 1 : (BATCH_N > 16 ? 3 : 4))) void mmvq_q4
 
   for (int b = 0; b < num_blocks_per_row; b++) {
     if (valid_row) {
+      bool thread_has_work = false;
+#pragma unroll
+      for (int col = 0; col < BATCH_N; ++col) {
+        if (col < num_cols) {
+          const BlockQ8_1_Gpu *bx =
+              &x_q8_1[(col_offset + col) * num_q8_blocks_per_col + b * 8];
+          float d0 = __low2float(__ldg(&bx[sub0].ds));
+          float d1 = __low2float(__ldg(&bx[sub1].ds));
+          if (d0 != 0.0f || d1 != 0.0f) {
+            thread_has_work = true;
+          }
+        }
+      }
+      unsigned int warp_active = __ballot_sync(0xFFFFFFFF, thread_has_work);
+      if (warp_active == 0) {
+        continue;
+      }
+
       const BlockQ4_K_Gpu *blk = &row_blocks[b];
       uint4 hdr = ((const uint4 *)blk)[0];
       float d = __low2float(*((const half2 *)&hdr.x));
@@ -1003,18 +1041,23 @@ __launch_bounds__(256, (BATCH_N > 32 ? 1 : (BATCH_N > 16 ? 3 : 4))) void mmvq_q4
           float d8_0 = __low2float(__ldg(&bq8_0->ds));
           float d8_1 = __low2float(__ldg(&bq8_1->ds));
 
-          int u0 = __ldg(&((const int *)bq8_0->qs)[sub_idx]);
-          int u1 = __ldg(&((const int *)bq8_1->qs)[sub_idx]);
+          if (d8_0 != 0.0f) {
+            int u0 = __ldg(&((const int *)bq8_0->qs)[sub_idx]);
+            int dot0 = __dp4a(v0, u0, 0);
+            int sum0 = __dp4a(0x01010101, u0, 0);
+            float s0 = d_sc0 * d8_0;
+            float m0 = dm_min0 * d8_0;
+            thread_dot[col] += (s0 * (float)dot0 - m0 * (float)sum0);
+          }
 
-          int dot0 = __dp4a(v0, u0, 0);
-          int dot1 = __dp4a(v1, u1, 0);
-          int sum0 = __dp4a(0x01010101, u0, 0);
-          int sum1 = __dp4a(0x01010101, u1, 0);
-
-          float acc0 = d_sc0 * (float)dot0 - dm_min0 * (float)sum0;
-          float acc1 = d_sc1 * (float)dot1 - dm_min1 * (float)sum1;
-
-          thread_dot[col] += acc0 * d8_0 + acc1 * d8_1;
+          if (d8_1 != 0.0f) {
+            int u1 = __ldg(&((const int *)bq8_1->qs)[sub_idx]);
+            int dot1 = __dp4a(v1, u1, 0);
+            int sum1 = __dp4a(0x01010101, u1, 0);
+            float s1 = d_sc1 * d8_1;
+            float m1 = dm_min1 * d8_1;
+            thread_dot[col] += (s1 * (float)dot1 - m1 * (float)sum1);
+          }
         }
       }
     }
@@ -1566,10 +1609,12 @@ __launch_bounds__(256, (BATCH_N > 32 ? 1 : (BATCH_N > 16 ? 3 : 4))) void mmvq_qk
             int sum0 = __dp4a(0x01010101, u0, 0);
             int sum1 = __dp4a(0x01010101, u1, 0);
 
-            float acc0 = d_sc0 * (float)dot0 - dm_min0 * (float)sum0;
-            float acc1 = d_sc1 * (float)dot1 - dm_min1 * (float)sum1;
+            float s0 = d_sc0 * d8_0;
+            float m0 = dm_min0 * d8_0;
+            float s1 = d_sc1 * d8_1;
+            float m1 = dm_min1 * d8_1;
 
-            thread_dot[col] += acc0 * d8_0 + acc1 * d8_1;
+            thread_dot[col] += (s0 * (float)dot0 - m0 * (float)sum0) + (s1 * (float)dot1 - m1 * (float)sum1);
           }
         }
       } else {
@@ -2150,7 +2195,8 @@ __global__ void swiglu_f32_kernel(float *__restrict__ out,
  */
 __global__ void fused_swiglu_q8_1_cuda_kernel(
     BlockQ8_1_Gpu *__restrict__ y_q8_1, float *__restrict__ output_f32,
-    const float *__restrict__ gate, const float *__restrict__ up, int n) {
+    const float *__restrict__ gate, const float *__restrict__ up, int n,
+    float sparsity_threshold = 0.0f, int enable_2_4 = 0) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n)
     return;
@@ -2168,6 +2214,23 @@ __global__ void fused_swiglu_q8_1_cuda_kernel(
   }
 
   if (y_q8_1 != nullptr) {
+    // 2:4 structured sparsity: retain 2 largest values per 4-element window
+    if (enable_2_4) {
+      int rank = 0;
+      int base_lane = lane_id & ~3;
+      float abs_val = fabsf(val);
+#pragma unroll
+      for (int k = 0; k < 4; ++k) {
+        float other_abs = fabsf(__shfl_sync(0xFFFFFFFF, val, base_lane + k));
+        if (other_abs > abs_val || (other_abs == abs_val && ((lane_id & 3) < k))) {
+          rank++;
+        }
+      }
+      if (rank >= 2) {
+        val = 0.0f;
+      }
+    }
+
     float amax = fabsf(val);
     float sum = val;
 
@@ -2177,13 +2240,21 @@ __global__ void fused_swiglu_q8_1_cuda_kernel(
       sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset);
     }
 
-    float d = amax / 127.0f;
-    float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
-    int8_t q = (int8_t)roundf(val * id);
-    y_q8_1[block_32_idx].qs[lane_id] = q;
+    if (amax < sparsity_threshold) {
+      // Dynamic pruning: entire 32-element block zeroed out
+      y_q8_1[block_32_idx].qs[lane_id] = 0;
+      if (lane_id == 0) {
+        y_q8_1[block_32_idx].ds = make_half2(__float2half(0.0f), __float2half(0.0f));
+      }
+    } else {
+      float d = amax / 127.0f;
+      float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+      int8_t q = (int8_t)roundf(val * id);
+      y_q8_1[block_32_idx].qs[lane_id] = q;
 
-    if (lane_id == 0) {
-      y_q8_1[block_32_idx].ds = make_half2(__float2half(d), __float2half(sum));
+      if (lane_id == 0) {
+        y_q8_1[block_32_idx].ds = make_half2(__float2half(d), __float2half(sum));
+      }
     }
   }
 }
@@ -2585,31 +2656,39 @@ __global__ __launch_bounds__(256, 4) void gemv_q6_k_pure_cuda_kernel(
   float thread_dot = 0.0f;
 
   for (int b = 0; b < num_blocks_per_row; b++) {
+    const BlockQ8_1_Gpu *bx = &s_x[b * 8];
+    float d0 = __low2float(bx[group].ds);
+    float d1 = __low2float(bx[4 + group].ds);
+    bool active = (d0 != 0.0f || d1 != 0.0f);
+    if (__ballot_sync(0xFFFFFFFF, active) == 0) {
+      continue;
+    }
+
     const BlockQ6_K_Gpu *blk = &row_blocks[b];
     float d = __half2float(*((const half *)&blk->d));
-    const BlockQ8_1_Gpu *bx = &s_x[b * 8];
 
 #pragma unroll
     for (int half_idx = 0; half_idx < 2; half_idx++) {
-      const uint16_t *ql16 = (const uint16_t *)&blk->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
-      uint32_t ql4 = (uint32_t)ql16[0] | ((uint32_t)ql16[1] << 16);
-      const uint16_t *qh16 = (const uint16_t *)&blk->qh[half_idx * 32 + idx * 4];
-      uint32_t qh4 = (uint32_t)qh16[0] | ((uint32_t)qh16[1] << 16);
-
-      uint32_t q_low4 = (ql4 >> ((group & 2) * 2)) & 0x0F0F0F0Fu;
-      uint32_t q_high4 = ((qh4 >> (group * 2)) & 0x03030303u) << 4;
-      uint32_t vx = (q_low4 | q_high4) ^ 0x20202020u;
-      uint32_t vm = vx & 0x20202020u;
-      int v_signed = (int)(vx | (vm << 1) | (vm << 2));
-
-      float d_sc = d * (float)blk->scales[half_idx * 8 + group * 2 + (idx >> 2)];
       int sub = half_idx * 4 + group;
-
       const BlockQ8_1_Gpu *bq8 = &bx[sub];
       float d8 = __low2float(bq8->ds);
-      int u = ((const int *)bq8->qs)[idx];
-      int dot = __dp4a(v_signed, u, 0);
-      thread_dot += d_sc * d8 * (float)dot;
+      if (d8 != 0.0f) {
+        const uint16_t *ql16 = (const uint16_t *)&blk->ql[half_idx * 64 + (group & 1) * 32 + idx * 4];
+        uint32_t ql4 = (uint32_t)ql16[0] | ((uint32_t)ql16[1] << 16);
+        const uint16_t *qh16 = (const uint16_t *)&blk->qh[half_idx * 32 + idx * 4];
+        uint32_t qh4 = (uint32_t)qh16[0] | ((uint32_t)qh16[1] << 16);
+
+        uint32_t q_low4 = (ql4 >> ((group & 2) * 2)) & 0x0F0F0F0Fu;
+        uint32_t q_high4 = ((qh4 >> (group * 2)) & 0x03030303u) << 4;
+        uint32_t vx = (q_low4 | q_high4) ^ 0x20202020u;
+        uint32_t vm = vx & 0x20202020u;
+        int v_signed = (int)(vx | (vm << 1) | (vm << 2));
+
+        float d_sc = d * (float)blk->scales[half_idx * 8 + group * 2 + (idx >> 2)];
+        int u = ((const int *)bq8->qs)[idx];
+        int dot = __dp4a(v_signed, u, 0);
+        thread_dot += d_sc * d8 * (float)dot;
+      }
     }
   }
 
@@ -2663,6 +2742,18 @@ __global__ __launch_bounds__(256, 4) void gemv_q4_k_pure_cuda_kernel(
   float thread_dot = 0.0f;
 
   for (int b = 0; b < num_blocks_per_row; b++) {
+    const BlockQ8_1_Gpu *bx = &s_x[b * 8];
+    const BlockQ8_1_Gpu *bq8_0 = &bx[sub0];
+    const BlockQ8_1_Gpu *bq8_1 = &bx[sub1];
+
+    float d8_0 = __low2float(bq8_0->ds);
+    float d8_1 = __low2float(bq8_1->ds);
+
+    bool active = (d8_0 != 0.0f || d8_1 != 0.0f);
+    if (__ballot_sync(0xFFFFFFFF, active) == 0) {
+      continue;
+    }
+
     const BlockQ4_K_Gpu *blk = &row_blocks[b];
     uint4 hdr = ((const uint4 *)blk)[0];
     float d = __low2float(*((const half2 *)&hdr.x));
@@ -2681,25 +2772,19 @@ __global__ __launch_bounds__(256, 4) void gemv_q4_k_pure_cuda_kernel(
     int v0 = v & 0x0F0F0F0F;
     int v1 = (v >> 4) & 0x0F0F0F0F;
 
-    const BlockQ8_1_Gpu *bx = &s_x[b * 8];
-    const BlockQ8_1_Gpu *bq8_0 = &bx[sub0];
-    const BlockQ8_1_Gpu *bq8_1 = &bx[sub1];
+    if (d8_0 != 0.0f) {
+      int u0 = ((const int *)bq8_0->qs)[sub_idx];
+      int dot0 = __dp4a(v0, u0, 0);
+      int sum0 = __dp4a(0x01010101, u0, 0);
+      thread_dot += (d_sc0 * (float)dot0 - dm_min0 * (float)sum0) * d8_0;
+    }
 
-    float d8_0 = __low2float(bq8_0->ds);
-    float d8_1 = __low2float(bq8_1->ds);
-
-    int u0 = ((const int *)bq8_0->qs)[sub_idx];
-    int u1 = ((const int *)bq8_1->qs)[sub_idx];
-
-    int dot0 = __dp4a(v0, u0, 0);
-    int dot1 = __dp4a(v1, u1, 0);
-    int sum0 = __dp4a(0x01010101, u0, 0);
-    int sum1 = __dp4a(0x01010101, u1, 0);
-
-    float acc0 = d_sc0 * (float)dot0 - dm_min0 * (float)sum0;
-    float acc1 = d_sc1 * (float)dot1 - dm_min1 * (float)sum1;
-
-    thread_dot += acc0 * d8_0 + acc1 * d8_1;
+    if (d8_1 != 0.0f) {
+      int u1 = ((const int *)bq8_1->qs)[sub_idx];
+      int dot1 = __dp4a(v1, u1, 0);
+      int sum1 = __dp4a(0x01010101, u1, 0);
+      thread_dot += (d_sc1 * (float)dot1 - dm_min1 * (float)sum1) * d8_1;
+    }
   }
 
 #pragma unroll
@@ -2756,7 +2841,36 @@ __global__ __launch_bounds__(256, 1) void mmq_q4_k_cuda_kernel(
   float acc[4][4] = {{0.0f}}; // [tc 0..3][r0_t0, r0_t1, r1_t0, r1_t1]
 
   for (int k_blk = 0; k_blk < num_k_blocks; ++k_blk) {
-    // 1. Unpack 64 rows x 256 elements = 2048 words into shared memory
+    __shared__ int s_k_blk_active;
+    if (tid == 0) s_k_blk_active = 0;
+    __syncthreads();
+
+    // 1. Load 64 tokens x 8 sub-blocks of Q8_1 into shared memory
+#pragma unroll
+    for (int item = tid; item < 64 * 8; item += total_threads) {
+      int t = item / 8;
+      int sub = item % 8;
+      int actual_tok = blockIdx.y * 64 + t;
+      if (actual_tok < batch_size) {
+        BlockQ8_1_Gpu val_x = x_q8_1[(size_t)actual_tok * num_q8_blocks_per_col + k_blk * 8 + sub];
+        s_x[t][sub] = val_x;
+        if (__low2float(val_x.ds) != 0.0f) {
+          s_k_blk_active = 1;
+        }
+      } else {
+        s_x[t][sub].ds = make_half2(0.0f, 0.0f);
+#pragma unroll
+        for (int i = 0; i < 32; ++i) s_x[t][sub].qs[i] = 0;
+      }
+    }
+    __syncthreads();
+
+    if (s_k_blk_active == 0) {
+      // Entire 256-element block is zero for all active tokens in this block!
+      continue;
+    }
+
+    // 2. Unpack 64 rows x 256 elements = 2048 words into shared memory
 #pragma unroll
     for (int item = tid; item < 64 * 32; item += total_threads) {
       int r = item / 32;
@@ -2773,21 +2887,6 @@ __global__ __launch_bounds__(256, 1) void mmq_q4_k_cuda_kernel(
       }
       ((int *)&s_A[r][(2 * chunk + 0) * 32])[w] = v0;
       ((int *)&s_A[r][(2 * chunk + 1) * 32])[w] = v1;
-    }
-
-    // 2. Load 64 tokens x 8 sub-blocks of Q8_1 into shared memory
-#pragma unroll
-    for (int item = tid; item < 64 * 8; item += total_threads) {
-      int t = item / 8;
-      int sub = item % 8;
-      int actual_tok = blockIdx.y * 64 + t;
-      if (actual_tok < batch_size) {
-        s_x[t][sub] = x_q8_1[(size_t)actual_tok * num_q8_blocks_per_col + k_blk * 8 + sub];
-      } else {
-        s_x[t][sub].ds = make_half2(0.0f, 0.0f);
-#pragma unroll
-        for (int i = 0; i < 32; ++i) s_x[t][sub].qs[i] = 0;
-      }
     }
 
     __syncthreads();
@@ -3884,7 +3983,7 @@ int launch_cuda_mmvq_q4_k(float *y, const void *raw_blocks, const void *x_q8_1,
   if (batch_size == 1) {
     return launch_cuda_gemv_q4_k(y, raw_blocks, x_q8_1, m, k, stream);
   }
-  if (batch_size >= 16) {
+  if (batch_size >= 8) {
     dim3 grid((m + 63) / 64, (batch_size + 63) / 64);
     dim3 block(32, 8);
     mmq_q4_k_cuda_kernel<0><<<grid, block, 0, stream>>>(
@@ -3897,13 +3996,9 @@ int launch_cuda_mmvq_q4_k(float *y, const void *raw_blocks, const void *x_q8_1,
     dim3 grid_2d(grid, (batch_size + 1) / 2);
     mmvq_q4_k_cuda_kernel<2><<<grid_2d, block, 0, stream>>>(
         y, (const uint8_t *)raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 4) {
+  } else {
     dim3 grid_2d(grid, (batch_size + 3) / 4);
     mmvq_q4_k_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(
-        y, (const uint8_t *)raw_blocks, x_q8_1, m, k, batch_size);
-  } else {
-    dim3 grid_2d(grid, (batch_size + 7) / 8);
-    mmvq_q4_k_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(
         y, (const uint8_t *)raw_blocks, x_q8_1, m, k, batch_size);
   }
   return cudaGetLastError();
@@ -3917,7 +4012,7 @@ int launch_cuda_mmvq_q4_k_fused_add(float *y, const void *raw_blocks,
   if (batch_size == 1) {
     return launch_cuda_gemv_q4_k_fused_add(y, raw_blocks, x_q8_1, m, k, stream);
   }
-  if (batch_size >= 16) {
+  if (batch_size >= 8) {
     dim3 grid((m + 63) / 64, (batch_size + 63) / 64);
     dim3 block(32, 8);
     mmq_q4_k_cuda_kernel<1><<<grid, block, 0, stream>>>(
@@ -3930,13 +4025,9 @@ int launch_cuda_mmvq_q4_k_fused_add(float *y, const void *raw_blocks,
     dim3 grid_2d(grid, (batch_size + 1) / 2);
     mmvq_q4_k_cuda_kernel<2, 1><<<grid_2d, block, 0, stream>>>(
         y, (const uint8_t *)raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 4) {
+  } else {
     dim3 grid_2d(grid, (batch_size + 3) / 4);
     mmvq_q4_k_cuda_kernel<4, 1><<<grid_2d, block, 0, stream>>>(
-        y, (const uint8_t *)raw_blocks, x_q8_1, m, k, batch_size);
-  } else {
-    dim3 grid_2d(grid, (batch_size + 7) / 8);
-    mmvq_q4_k_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(
         y, (const uint8_t *)raw_blocks, x_q8_1, m, k, batch_size);
   }
   return cudaGetLastError();
@@ -3976,7 +4067,7 @@ int launch_cuda_mmvq_gate_up_q4_k(float *y_gate, float *y_up,
         y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k);
     return cudaGetLastError();
   }
-  if (batch_size >= 16) {
+  if (batch_size >= 8) {
     dim3 grid((inter_m + 63) / 64, (batch_size + 63) / 64);
     dim3 block(32, 8);
     mmq_q4_k_cuda_kernel<0><<<grid, block, 0, stream>>>(
@@ -3991,13 +4082,9 @@ int launch_cuda_mmvq_gate_up_q4_k(float *y_gate, float *y_up,
     dim3 grid_2d(grid, (batch_size + 1) / 2);
     mmvq_gate_up_q4_k_cuda_kernel<2><<<grid_2d, block, 0, stream>>>(
         y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size);
-  } else if (batch_size <= 4) {
+  } else {
     dim3 grid_2d(grid, (batch_size + 3) / 4);
     mmvq_gate_up_q4_k_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(
-        y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size);
-  } else {
-    dim3 grid_2d(grid, (batch_size + 7) / 8);
-    mmvq_gate_up_q4_k_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(
         y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size);
   }
   return cudaGetLastError();
@@ -4219,16 +4306,26 @@ int launch_cuda_swiglu(float *out, const float *gate, const float *up, int n,
   return cudaGetLastError();
 }
 
-int launch_cuda_fused_swiglu_q8_1(void *y_q8_1, float *output_f32,
-                                  const float *gate, const float *up, int n,
-                                  cudaStream_t stream) {
+int launch_cuda_fused_swiglu_q8_1_sparse(void *y_q8_1, float *output_f32,
+                                         const float *gate, const float *up,
+                                         int n, float sparsity_threshold,
+                                         int enable_2_4,
+                                         cudaStream_t stream) {
   if (n <= 0)
     return 0;
   int block_size = 256;
   int grid = (n + block_size - 1) / block_size;
   fused_swiglu_q8_1_cuda_kernel<<<grid, block_size, 0, stream>>>(
-      (BlockQ8_1_Gpu *)y_q8_1, output_f32, gate, up, n);
+      (BlockQ8_1_Gpu *)y_q8_1, output_f32, gate, up, n, sparsity_threshold,
+      enable_2_4);
   return cudaGetLastError();
+}
+
+int launch_cuda_fused_swiglu_q8_1(void *y_q8_1, float *output_f32,
+                                  const float *gate, const float *up, int n,
+                                  cudaStream_t stream) {
+  return launch_cuda_fused_swiglu_q8_1_sparse(y_q8_1, output_f32, gate, up, n,
+                                              0.0f, 0, stream);
 }
 
 int launch_cuda_rope_single(float *q, float *k, void *k_out, int pos,
@@ -4939,7 +5036,8 @@ __global__ void split_k_flash_decode_continuous_batch_kernel(
     int batch_size,
     int num_heads, int num_kv_heads, int head_dim,
     int slot_stride_tokens, float sm_scale, int is_fp16,
-    int num_splits) {
+    int num_splits,
+    float *__restrict__ d_block_scores) {
   int head_idx = blockIdx.x;
   int b = blockIdx.y;
   int split_idx = blockIdx.z;
@@ -4997,6 +5095,9 @@ __global__ void split_k_flash_decode_continuous_batch_kernel(
   size_t slot_base_offset =
       (size_t)slot_idx * slot_stride_tokens * kv_heads * head_dim;
 
+  int current_accum_block = -1;
+  float current_block_beta_sum = 0.0f;
+
   for (int t = t_start; t < t_end; t++) {
     size_t tok_offset;
     if (d_block_table != nullptr) {
@@ -5023,7 +5124,7 @@ __global__ void split_k_flash_decode_continuous_batch_kernel(
       }
     }
 
-#pragma unroll
+    #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
       score += __shfl_down_sync(0xFFFFFFFF, score, offset);
     }
@@ -5033,6 +5134,21 @@ __global__ void split_k_flash_decode_continuous_batch_kernel(
     float alpha = (t == t_start) ? 0.0f
                                  : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
     float beta = expf(cur_score - new_max);
+
+    if (d_block_scores != nullptr && d_block_table != nullptr) {
+      int block_num = t / 16;
+      if (lane_id == 0) {
+        if (block_num != current_accum_block) {
+          if (current_accum_block >= 0 && current_block_beta_sum > 0.0f) {
+            atomicAdd(&d_block_scores[(size_t)b * max_blocks_per_seq + current_accum_block], current_block_beta_sum);
+          }
+          current_accum_block = block_num;
+          current_block_beta_sum = beta;
+        } else {
+          current_block_beta_sum += beta;
+        }
+      }
+    }
 
     max_score = new_max;
     sum_exp = sum_exp * alpha + beta;
@@ -5048,6 +5164,12 @@ __global__ void split_k_flash_decode_continuous_batch_kernel(
       for (int i = 0; i < q_items; i++) {
         acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
       }
+    }
+  }
+
+  if (d_block_scores != nullptr && d_block_table != nullptr && lane_id == 0) {
+    if (current_accum_block >= 0 && current_block_beta_sum > 0.0f) {
+      atomicAdd(&d_block_scores[(size_t)b * max_blocks_per_seq + current_accum_block], current_block_beta_sum);
     }
   }
 
@@ -5172,7 +5294,7 @@ int launch_cuda_write_v_cache_continuous_batch(
       batch_size, kv_dim, slot_stride_tokens, is_fp16, stream);
 }
 
-int launch_cuda_split_k_flash_decode(
+int launch_cuda_split_k_flash_decode_h2o(
     float *output,
     float *partial_out,
     void *partial_lse,
@@ -5181,7 +5303,9 @@ int launch_cuda_split_k_flash_decode(
     const int *d_block_table, int max_blocks_per_seq,
     int batch_size,
     int num_heads, int num_kv_heads, int head_dim, int slot_stride_tokens,
-    float sm_scale, int is_fp16, int num_splits, cudaStream_t stream) {
+    float sm_scale, int is_fp16, int num_splits,
+    float *d_block_scores,
+    cudaStream_t stream) {
   if (batch_size <= 0 || num_heads <= 0 || head_dim <= 0)
     return 0;
 
@@ -5193,7 +5317,7 @@ int launch_cuda_split_k_flash_decode(
       partial_out, (float2 *)partial_lse, output, q, k_cache, v_cache,
       d_seq_positions, d_slot_mapping, d_block_table, max_blocks_per_seq,
       batch_size, num_heads, num_kv_heads, head_dim, slot_stride_tokens,
-      sm_scale, is_fp16, splits);
+      sm_scale, is_fp16, splits, d_block_scores);
 
   if (splits > 1 && partial_out != nullptr && partial_lse != nullptr) {
     dim3 reduce_grid(num_heads, batch_size);
@@ -5203,6 +5327,23 @@ int launch_cuda_split_k_flash_decode(
   }
 
   return cudaGetLastError();
+}
+
+int launch_cuda_split_k_flash_decode(
+    float *output,
+    float *partial_out,
+    void *partial_lse,
+    const float *q, const void *k_cache, const void *v_cache,
+    const int *d_seq_positions, const int *d_slot_mapping,
+    const int *d_block_table, int max_blocks_per_seq,
+    int batch_size,
+    int num_heads, int num_kv_heads, int head_dim, int slot_stride_tokens,
+    float sm_scale, int is_fp16, int num_splits, cudaStream_t stream) {
+  return launch_cuda_split_k_flash_decode_h2o(
+      output, partial_out, partial_lse, q, k_cache, v_cache,
+      d_seq_positions, d_slot_mapping, d_block_table, max_blocks_per_seq,
+      batch_size, num_heads, num_kv_heads, head_dim, slot_stride_tokens,
+      sm_scale, is_fp16, num_splits, nullptr, stream);
 }
 
 int launch_cuda_flash_decode_continuous_batch(

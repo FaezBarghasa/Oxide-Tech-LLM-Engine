@@ -479,6 +479,10 @@ pub struct DrafterEnsemble {
     pub fourgram_transitions: HashMap<(u32, u32, u32, u32), HashMap<u32, u32>>,
     /// Tokenized reasoning & domain prior corpus for multi-token suffix lookup
     pub prior_corpus: Vec<u32>,
+    /// Optional Medusa multi-head self-speculative prediction engine
+    pub medusa: Option<oxide_models::MedusaTreeDrafter>,
+    /// Optional DFlash diffusion block drafter
+    pub dflash: Option<oxide_models::DFlashModel>,
 }
 
 impl DrafterEnsemble {
@@ -493,7 +497,45 @@ impl DrafterEnsemble {
             trigram_transitions: HashMap::new(),
             fourgram_transitions: HashMap::new(),
             prior_corpus: Vec::new(),
+            medusa: None,
+            dflash: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_medusa(mut self, medusa: oxide_models::MedusaTreeDrafter) -> Self {
+        self.medusa = Some(medusa);
+        self
+    }
+
+    #[must_use]
+    pub fn with_dflash(mut self, dflash: oxide_models::DFlashModel) -> Self {
+        self.dflash = Some(dflash);
+        self
+    }
+
+    /// Proposes draft tokens using Medusa multi-head prediction when hidden states are available.
+    pub fn propose_medusa_draft(&mut self, last_hidden: &[f32]) -> (Vec<u32>, &'static str) {
+        let k = self.adaptive.current_horizon();
+        if k == 0 || last_hidden.is_empty() {
+            return (Vec::new(), "none");
+        }
+        if let Some(medusa) = &self.medusa {
+            let draft = medusa.draft_tree(last_hidden, k);
+            if !draft.is_empty() {
+                return (draft, "medusa_multi_head_tree");
+            }
+        }
+        if let Some(dflash) = &self.dflash {
+            let (draft, _) = dflash.draft_block(last_hidden);
+            if !draft.is_empty() {
+                return (
+                    draft[..k.min(draft.len())].to_vec(),
+                    "dflash_diffusion_block",
+                );
+            }
+        }
+        (Vec::new(), "none")
     }
 
     /// Ingests a new token transition into the online Markov graph.

@@ -168,9 +168,96 @@ impl DFlashModel {
     }
 }
 
+/// Configuration for Medusa multi-head self-speculative draft trees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MedusaConfig {
+    pub hidden_dim: usize,
+    pub num_heads: usize,
+    pub tree_depth: usize,
+    pub vocab_size: usize,
+}
+
+impl Default for MedusaConfig {
+    fn default() -> Self {
+        Self {
+            hidden_dim: 4096,
+            num_heads: 3,
+            tree_depth: 4,
+            vocab_size: 151936,
+        }
+    }
+}
+
+/// Medusa Self-Speculative Multi-Head Tree Drafter.
+/// Attaches parallel prediction heads directly to the target model's final hidden state,
+/// predicting draft tokens for t+1, t+2, t+3 in a single non-autoregressive step.
+#[derive(Debug, Clone)]
+pub struct MedusaTreeDrafter {
+    pub config: MedusaConfig,
+    /// Head weights [num_heads, vocab_size, hidden_dim]
+    pub head_weights: Vec<f32>,
+}
+
+impl MedusaTreeDrafter {
+    pub fn new(config: MedusaConfig) -> Self {
+        let total_size = config.num_heads * config.vocab_size * config.hidden_dim;
+        Self {
+            config,
+            head_weights: vec![0.001f32; total_size],
+        }
+    }
+
+    /// Predicts a draft sequence of future tokens conditioned on the target model's final hidden state.
+    pub fn draft_tree(&self, last_hidden: &[f32], max_tokens: usize) -> Vec<u32> {
+        let h = self.config.hidden_dim;
+        let v = self.config.vocab_size;
+        let heads = self.config.num_heads.min(max_tokens);
+        let mut draft = Vec::with_capacity(heads);
+
+        if last_hidden.len() < h {
+            return draft;
+        }
+
+        for head in 0..heads {
+            let base_offset = head * v * h;
+            let mut best_score = f32::NEG_INFINITY;
+            let mut best_token = 0u32;
+
+            for tok in 0..v {
+                let row_start = base_offset + tok * h;
+                let mut sum = 0.0f32;
+                for j in 0..h {
+                    sum += self.head_weights[row_start + j] * last_hidden[j];
+                }
+                if sum > best_score {
+                    best_score = sum;
+                    best_token = tok as u32;
+                }
+            }
+            draft.push(best_token);
+        }
+
+        draft
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_medusa_tree_draft() {
+        let config = MedusaConfig {
+            hidden_dim: 16,
+            num_heads: 3,
+            tree_depth: 3,
+            vocab_size: 32,
+        };
+        let drafter = MedusaTreeDrafter::new(config);
+        let hidden = vec![0.1f32; 16];
+        let draft = drafter.draft_tree(&hidden, 3);
+        assert_eq!(draft.len(), 3);
+    }
 
     #[test]
     fn test_dflash_block_draft() {

@@ -214,6 +214,61 @@ impl RadixPrefixCache {
             }
         }
     }
+
+    fn evict_lowest_utility_leaf(node: &mut RadixNode, current_time: u64) -> Option<usize> {
+        if node.children.is_empty() {
+            return None;
+        }
+
+        let mut lowest_leaf_key = None;
+        let mut lowest_utility = f64::INFINITY;
+
+        for (&k, child) in &node.children {
+            if child.children.is_empty() {
+                let recency_delta = current_time.saturating_sub(child.last_accessed) as f64;
+                let utility = (child.access_count as f64) / (1.0 + 0.1 * recency_delta);
+                if utility < lowest_utility {
+                    lowest_utility = utility;
+                    lowest_leaf_key = Some(k);
+                }
+            }
+        }
+
+        if let Some(k) = lowest_leaf_key {
+            let removed = node.children.remove(&k)?;
+            return Some(removed.tokens.len());
+        }
+
+        let mut candidate_key = None;
+        let mut min_utility = f64::INFINITY;
+        for (&k, child) in &node.children {
+            let recency_delta = current_time.saturating_sub(child.last_accessed) as f64;
+            let utility = (child.access_count as f64) / (1.0 + 0.1 * recency_delta);
+            if utility < min_utility {
+                min_utility = utility;
+                candidate_key = Some(k);
+            }
+        }
+
+        if let Some(k) = candidate_key {
+            let child = node.children.get_mut(&k)?;
+            return Self::evict_lowest_utility_leaf(child, current_time);
+        }
+
+        None
+    }
+
+    /// Prune cache down to `max_token_budget` using Heavy-Hitter utility metrics
+    /// combining frequency (`access_count`) and temporal recency (`last_accessed`).
+    pub fn evict_heavy_hitters(&mut self, max_token_budget: usize) {
+        while self.total_tokens > max_token_budget && !self.root.children.is_empty() {
+            if let Some(freed) = Self::evict_lowest_utility_leaf(&mut self.root, self.clock) {
+                self.total_tokens = self.total_tokens.saturating_sub(freed);
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +306,22 @@ mod tests {
         // 6. Test eviction
         cache.evict_to_budget(4);
         assert!(cache.total_tokens() <= 4);
+
+        // 7. Test heavy-hitter eviction
+        let mut hh_cache = RadixPrefixCache::new();
+        hh_cache.insert(&[10, 11, 12, 13], &[1, 2, 3, 4]);
+        hh_cache.insert(&[20, 21, 22, 23], &[5, 6, 7, 8]);
+        assert_eq!(hh_cache.total_tokens(), 8);
+
+        // Access the first sequence multiple times to make it a heavy hitter
+        for _ in 0..5 {
+            let _ = hh_cache.match_longest_prefix(&[10, 11, 12, 13]);
+        }
+
+        // Evict down to 4 tokens: sequence [20, 21, 22, 23] with low utility should be evicted first
+        hh_cache.evict_heavy_hitters(4);
+        assert_eq!(hh_cache.total_tokens(), 4);
+        let (matched_len, _) = hh_cache.match_longest_prefix(&[10, 11, 12, 13]);
+        assert_eq!(matched_len, 4, "Heavy hitter branch retained");
     }
 }

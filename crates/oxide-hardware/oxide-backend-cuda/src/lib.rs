@@ -118,6 +118,7 @@ impl fmt::Debug for CudaLayerWeights {
 
 pub type EmbeddingLookupFn = Box<dyn Fn(usize, &mut [f32]) + Send + Sync>;
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct CudaBackend {
     pub device_id: usize,
     pub current_event_id: u64,
@@ -188,8 +189,13 @@ pub struct CudaBackend {
     pub d_split_k_partial_out: Option<CudaDeviceBuffer>,
     pub d_split_k_partial_lse: Option<CudaDeviceBuffer>,
     pub d_block_table: Option<CudaDeviceBuffer>,
+    pub d_block_scores: Option<CudaDeviceBuffer>,
     pub max_blocks_per_seq: usize,
     pub num_splits: usize,
+    pub ffn_sparsity_threshold: f32,
+    pub enable_2_4_sparsity: bool,
+    pub enable_h2o_kv_pruning: bool,
+    pub h2o_max_blocks_budget: usize,
 }
 
 impl fmt::Debug for CudaBackend {
@@ -326,8 +332,21 @@ impl CudaBackend {
             d_split_k_partial_out: None,
             d_split_k_partial_lse: None,
             d_block_table: None,
+            d_block_scores: None,
             max_blocks_per_seq: 512,
             num_splits: 1,
+            ffn_sparsity_threshold: std::env::var("OXIDE_SWIGLU_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0f32),
+            enable_2_4_sparsity: std::env::var("OXIDE_SPARSE_2_4")
+                .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+            enable_h2o_kv_pruning: std::env::var("OXIDE_H2O_PRUNING")
+                .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+            h2o_max_blocks_budget: std::env::var("OXIDE_H2O_BUDGET")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(128),
         }
     }
 
@@ -382,12 +401,37 @@ impl CudaBackend {
         {
             self.d_block_table =
                 Some(CudaDeviceBuffer::allocate(req_bytes).map_err(EngineError::BackendError)?);
+            self.d_block_scores =
+                Some(CudaDeviceBuffer::allocate(req_bytes).map_err(EngineError::BackendError)?);
+            if let Some(buf) = &mut self.d_block_scores {
+                unsafe {
+                    let _ = driver::cudaMemsetAsync(buf.as_raw_ptr(), 0, req_bytes, s);
+                }
+            }
         }
         if let Some(buf) = &mut self.d_block_table {
             buf.copy_from_host_async(block_table, s)
                 .map_err(EngineError::BackendError)?;
         }
         Ok(())
+    }
+
+    /// Reads cumulative attention score mass for all blocks from the physical GPU.
+    pub fn read_block_scores(&mut self, total_elements: usize) -> Result<Vec<f32>> {
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| EngineError::BackendError("CUDA stream not available".to_string()))?;
+        let s = stream.raw();
+        if let Some(buf) = &self.d_block_scores {
+            let mut host_scores = vec![0.0f32; total_elements];
+            buf.copy_to_host_async(&mut host_scores, s)
+                .map_err(EngineError::BackendError)?;
+            stream.synchronize().map_err(EngineError::BackendError)?;
+            Ok(host_scores)
+        } else {
+            Ok(vec![0.0f32; total_elements])
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1777,12 +1821,14 @@ impl CudaBackend {
 
                         if !d_q8_1_ptr.is_null() {
                             unsafe {
-                                driver::launch_cuda_fused_swiglu_q8_1(
+                                driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                     d_q8_1_ptr,
                                     d_gate.as_typed_ptr::<f32>(),
                                     d_gate.as_typed_ptr::<f32>(),
                                     d_up.as_typed_ptr::<f32>(),
                                     (tail_batch * layer.inter_m) as i32,
+                                    self.ffn_sparsity_threshold,
+                                    i32::from(self.enable_2_4_sparsity),
                                     s,
                                 );
                             }
@@ -1914,6 +1960,27 @@ impl CudaBackend {
         } else {
             Err(EngineError::BackendError(
                 "LM head buffers not initialized".to_string(),
+            ))
+        }
+    }
+
+    /// Retrieves the most recent normalized hidden state vector [hidden_dim] from the physical GPU.
+    pub fn get_last_hidden_state(&mut self) -> Result<Vec<f32>> {
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| EngineError::BackendError("CUDA stream not available".to_string()))?;
+        let s = stream.raw();
+        if let Some(d_norm) = &self.d_scratch_norm {
+            let mut host_hidden = vec![0.0f32; self.hidden_dim];
+            d_norm
+                .copy_to_host_async(&mut host_hidden, s)
+                .map_err(EngineError::BackendError)?;
+            stream.synchronize().map_err(EngineError::BackendError)?;
+            Ok(host_hidden)
+        } else {
+            Err(EngineError::BackendError(
+                "Hidden buffer not allocated".to_string(),
             ))
         }
     }
@@ -2430,12 +2497,14 @@ impl CudaBackend {
 
                         if !d_q8_1_ptr.is_null() {
                             unsafe {
-                                driver::launch_cuda_fused_swiglu_q8_1(
+                                driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                     d_q8_1_ptr,
                                     d_gate.as_typed_ptr::<f32>(),
                                     d_gate.as_typed_ptr::<f32>(),
                                     d_up.as_typed_ptr::<f32>(),
                                     (tail_batch * layer.inter_m) as i32,
+                                    self.ffn_sparsity_threshold,
+                                    i32::from(self.enable_2_4_sparsity),
                                     s,
                                 );
                             }
@@ -3071,8 +3140,12 @@ impl CudaBackend {
                             } else {
                                 std::ptr::null_mut()
                             };
+                            let block_scores_ptr = self
+                                .d_block_scores
+                                .as_mut()
+                                .map_or(std::ptr::null_mut(), |b| b.as_typed_ptr::<f32>());
                             unsafe {
-                                driver::launch_cuda_split_k_flash_decode(
+                                driver::launch_cuda_split_k_flash_decode_h2o(
                                     d_out.as_typed_ptr::<f32>(),
                                     part_out_ptr,
                                     part_lse_ptr,
@@ -3091,6 +3164,7 @@ impl CudaBackend {
                                     sm_scale,
                                     1,
                                     num_splits as i32,
+                                    block_scores_ptr,
                                     s,
                                 );
                             }
@@ -3169,12 +3243,14 @@ impl CudaBackend {
                         let act_n = bucket * layer.inter_m;
                         if let Some(d_act) = &mut self.d_scratch_act {
                             unsafe {
-                                driver::launch_cuda_fused_swiglu_q8_1(
+                                driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                     d_q8_1_swiglu_ptr,
                                     d_act.as_typed_ptr::<f32>(),
                                     d_gate.as_typed_ptr::<f32>(),
                                     d_up.as_typed_ptr::<f32>(),
                                     act_n as i32,
+                                    self.ffn_sparsity_threshold,
+                                    i32::from(self.enable_2_4_sparsity),
                                     s,
                                 );
                                 if layer.down_quant == 2 {
@@ -3738,12 +3814,14 @@ impl HardwareBackend for CudaBackend {
                                     s,
                                 );
                             }
-                            driver::launch_cuda_fused_swiglu_q8_1(
+                            driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                 d_q8_1_ptr,
                                 d_gate_ptr,
                                 d_gate_ptr,
                                 d_up_ptr,
                                 layer.inter_m as i32,
+                                self.ffn_sparsity_threshold,
+                                i32::from(self.enable_2_4_sparsity),
                                 s,
                             );
                             if layer.down_quant == 1 {
@@ -4612,12 +4690,14 @@ impl HardwareBackend for CudaBackend {
                                     }
                                 } else if !d_q8_1_ptr.is_null() {
                                     // Fused SwiGLU directly writes quantized Q8_1 blocks for down-projection
-                                    driver::launch_cuda_fused_swiglu_q8_1(
+                                    driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                         d_q8_1_ptr,
                                         d_gate.as_typed_ptr::<f32>(),
                                         d_gate.as_typed_ptr::<f32>(),
                                         d_up.as_typed_ptr::<f32>(),
                                         layer.inter_m as i32,
+                                        self.ffn_sparsity_threshold,
+                                        i32::from(self.enable_2_4_sparsity),
                                         s,
                                     );
                                 } else {

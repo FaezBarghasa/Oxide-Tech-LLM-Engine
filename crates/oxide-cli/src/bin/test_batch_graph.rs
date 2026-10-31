@@ -34,12 +34,20 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "Artificial intelligence is the field of",
     ];
 
+    let args: Vec<String> = std::env::args().collect();
+    let target_streams: usize = if args.len() > 1 {
+        args[1].parse().unwrap_or(16)
+    } else {
+        16
+    };
+
     let mut prompts = Vec::new();
-    for p in base_prompts {
-        prompts.push(p);
-    }
-    for p in base_prompts {
-        prompts.push(p);
+    while prompts.len() < target_streams {
+        for p in base_prompts {
+            if prompts.len() < target_streams {
+                prompts.push(p);
+            }
+        }
     }
 
     let num_streams = prompts.len();
@@ -114,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("        CONTINUOUS BATCH CUDA GRAPH PERFORMANCE         ");
     println!("========================================================");
     println!("  Concurrent Streams : {}", slot_indices.len());
-    println!("  Graph Bucket Used  : 16");
+    println!("  Graph Bucket Used  : {}", slot_indices.len());
     println!("  Avg Step Latency   : {:.2} ms", avg_replay);
     println!("  Min Step Latency   : {:.2} ms", min_replay);
     println!(
