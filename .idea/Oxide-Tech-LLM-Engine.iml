@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-alloc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-alloc/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-cli/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-cli/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-core/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-core/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-engine/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-engine/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-cpu/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-cuda/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-cuda/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-hailo/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-hailo/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-intel/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-intel/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-metal/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-metal/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-qualcomm/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-qualcomm/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-rknn/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-rknn/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-rocm/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-rocm/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-tpu/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-hardware/oxide-backend-tpu/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-lab/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-lab/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-models/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-models/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-quant/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-quant/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-server/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-server/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/oxide-server/tests" isTestSource="true" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
