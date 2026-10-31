@@ -246,8 +246,10 @@ impl SequenceBlockTable {
         }
 
         let sink_blocks = (self.sink_tokens.saturating_add(TOKENS_PER_PAGE - 1)) / TOKENS_PER_PAGE;
-        let local_blocks =
-            (self.local_rolling_tokens.saturating_add(TOKENS_PER_PAGE - 1)) / TOKENS_PER_PAGE;
+        let local_blocks = (self
+            .local_rolling_tokens
+            .saturating_add(TOKENS_PER_PAGE - 1))
+            / TOKENS_PER_PAGE;
 
         if sink_blocks + local_blocks >= total_blocks {
             // Cannot prune without violating sink or local rolling invariant
@@ -271,7 +273,8 @@ impl SequenceBlockTable {
             })
             .collect();
 
-        scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_candidates
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut retained_indices_set = std::collections::HashSet::new();
         for &(idx, _) in scored_candidates.iter().take(allowed_mid_blocks) {

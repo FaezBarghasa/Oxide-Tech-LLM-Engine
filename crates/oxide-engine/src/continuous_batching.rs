@@ -428,6 +428,17 @@ impl ContinuousBatchingEngine {
                     seq.current_position += 1;
                     seq.generated_count += 1;
 
+                    // H2O (Heavy-Hitter Oracle) + StreamingLLM KV-cache pruning:
+                    // Keep memory strictly bounded for infinite context streaming.
+                    if let Some(ref arena_ref) = self.paged_arena {
+                        let max_blocks_budget = 128; // 2,048 tokens / 16
+                        if seq.block_table.block_ids.len() > max_blocks_budget {
+                            let _evicted = seq
+                                .block_table
+                                .prune_heavy_hitters(arena_ref, max_blocks_budget);
+                        }
+                    }
+
                     let reached_max = seq.generated_count >= seq.max_tokens;
                     let is_terminal = is_eos || reached_max;
 
@@ -505,6 +516,15 @@ impl ContinuousBatchingEngine {
                     seq.current_token = next_token;
                     seq.current_position += 1;
                     seq.generated_count += 1;
+
+                    // H2O (Heavy-Hitter Oracle) + StreamingLLM KV-cache pruning:
+                    // Keep memory strictly bounded for infinite context streaming.
+                    let max_blocks_budget = 128; // 2,048 tokens / 16
+                    if seq.block_table.block_ids.len() > max_blocks_budget {
+                        let _evicted = seq
+                            .block_table
+                            .prune_heavy_hitters(arena, max_blocks_budget);
+                    }
 
                     let is_eos = next_token == 0
                         || next_token == 2

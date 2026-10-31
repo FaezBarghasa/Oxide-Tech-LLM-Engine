@@ -128,9 +128,9 @@ impl SpecializedPipeline {
         max_blocks_per_seq: usize,
     ) -> Result<()> {
         match self {
-            Self::Llama3Cuda(engine) => {
-                engine.backend.update_block_table(block_table, max_blocks_per_seq)
-            }
+            Self::Llama3Cuda(engine) => engine
+                .backend
+                .update_block_table(block_table, max_blocks_per_seq),
             _ => Ok(()),
         }
     }
