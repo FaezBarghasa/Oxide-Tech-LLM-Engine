@@ -1932,6 +1932,21 @@ impl CudaBackend {
                         }
                     }
 
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        if let (Some(d_q), Some(d_k), Some(d_v)) = (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v) {
+                            let mut h_q = [0.0f32; 4];
+                            let mut h_k = [0.0f32; 4];
+                            let mut h_v = [0.0f32; 4];
+                            let _ = d_q.copy_to_host_async(&mut h_q, s);
+                            let _ = d_k.copy_to_host_async(&mut h_k, s);
+                            let _ = d_v.copy_to_host_async(&mut h_v, s);
+                            let _ = stream.synchronize();
+                            eprintln!("[PREFILL L0] q_after_bias: {:?}", h_q);
+                            eprintln!("[PREFILL L0] k_after_bias: {:?}", h_k);
+                            eprintln!("[PREFILL L0] v_after_bias: {:?}", h_v);
+                        }
+                    }
+
                     let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
                         10_000.0f32
                     } else {
@@ -2012,6 +2027,12 @@ impl CudaBackend {
                                     1, // is_fp16
                                     s,
                                 );
+                                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                                    let mut h_attn = [0.0f32; 4];
+                                    let _ = d_out.copy_to_host_async(&mut h_attn, s);
+                                    let _ = stream.synchronize();
+                                    eprintln!("[PREFILL L0] attn_out: {:?}", h_attn);
+                                }
                             }
                         }
                     }
@@ -2084,6 +2105,13 @@ impl CudaBackend {
                                 );
                             }
                         }
+                    }
+
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let mut h_hid = [0.0f32; 4];
+                        let _ = d_hid.copy_to_host_async(&mut h_hid, s);
+                        let _ = stream.synchronize();
+                        eprintln!("[PREFILL L0] hid_after_attn: {:?}", h_hid);
                     }
                 }
 
@@ -2849,6 +2877,21 @@ impl CudaBackend {
                         }
                     }
 
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        if let (Some(d_q), Some(d_k), Some(d_v)) = (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v) {
+                            let mut h_q = [0.0f32; 4];
+                            let mut h_k = [0.0f32; 4];
+                            let mut h_v = [0.0f32; 4];
+                            let _ = d_q.copy_to_host_async(&mut h_q, s);
+                            let _ = d_k.copy_to_host_async(&mut h_k, s);
+                            let _ = d_v.copy_to_host_async(&mut h_v, s);
+                            let _ = stream.synchronize();
+                            eprintln!("[PREFILL L0] q_after_bias: {:?}", h_q);
+                            eprintln!("[PREFILL L0] k_after_bias: {:?}", h_k);
+                            eprintln!("[PREFILL L0] v_after_bias: {:?}", h_v);
+                        }
+                    }
+
                     let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
                         10_000.0f32
                     } else {
@@ -2929,6 +2972,12 @@ impl CudaBackend {
                                     1, // is_fp16
                                     s,
                                 );
+                                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                                    let mut h_attn = [0.0f32; 4];
+                                    let _ = d_out.copy_to_host_async(&mut h_attn, s);
+                                    let _ = stream.synchronize();
+                                    eprintln!("[PREFILL L0] attn_out: {:?}", h_attn);
+                                }
                             }
                         }
                     }
@@ -3001,6 +3050,13 @@ impl CudaBackend {
                                 );
                             }
                         }
+                    }
+
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let mut h_hid = [0.0f32; 4];
+                        let _ = d_hid.copy_to_host_async(&mut h_hid, s);
+                        let _ = stream.synchronize();
+                        eprintln!("[PREFILL L0] hid_after_attn: {:?}", h_hid);
                     }
                 }
 
@@ -4067,6 +4123,7 @@ impl CudaBackend {
             self.seq_pos = 0;
             let _ = self.dispatch_prefill_chunk(&[0; 19], true);
             self.seq_pos = 0;
+            self.slot_positions.fill(0);
             self.sampler.config.temperature = prev_temp;
         }
     }
@@ -5297,6 +5354,12 @@ impl HardwareBackend for CudaBackend {
                                     );
                                 }
                                 check_cuda("flash_decode", layer_idx)?;
+                                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                                    let mut h_attn = [0.0f32; 4];
+                                    let _ = d_out.copy_to_host_async(&mut h_attn, s);
+                                    let _ = stream.synchronize();
+                                    eprintln!("[CUDA L0] attn_out: {:?}", h_attn);
+                                }
                             }
                         }
 
