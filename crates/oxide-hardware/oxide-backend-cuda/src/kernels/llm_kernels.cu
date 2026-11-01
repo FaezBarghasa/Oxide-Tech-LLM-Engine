@@ -1136,6 +1136,12 @@ __global__ __launch_bounds__(256, 4) void mmvq_q4_k_splitk_kernel(
       float d8_0 = __low2float(__ldg(&bq8_0->ds));
       float d8_1 = __low2float(__ldg(&bq8_1->ds));
 
+      // Warp-wide zero block check: if all subblocks across the entire warp are 0, skip the 144-byte weight load!
+      bool active = (d8_0 != 0.0f) || (d8_1 != 0.0f);
+      if (!__any_sync(0xFFFFFFFF, active)) {
+        continue;
+      }
+
       int u0 = __ldg(&((const int *)bq8_0->qs)[sub_idx]);
       int u1 = __ldg(&((const int *)bq8_1->qs)[sub_idx]);
       int sum0 = __dp4a(0x01010101, u0, 0);
@@ -1219,6 +1225,14 @@ __global__ __launch_bounds__(256, 4) void mmvq_q6_k_splitk_kernel(
 
   if (valid_row) {
     for (int b = b_start; b < b_end; ++b) {
+      // Warp-wide zero block check: if all subblocks across the entire warp are 0, skip the 210-byte weight load!
+      const BlockQ8_1_Gpu *bx = &x_q8_1[b * 8];
+      int sub_chk = lane_id % 8;
+      float d8_chk = __low2float(__ldg(&bx[sub_chk].ds));
+      if (!__any_sync(0xFFFFFFFF, d8_chk != 0.0f)) {
+        continue;
+      }
+
       const BlockQ6_K_Gpu *blk = &row_blocks[b];
       float d = __half2float(*((const half *)&blk->d));
       float sum_b = 0.0f;
@@ -5088,6 +5102,78 @@ int launch_cuda_fused_swiglu_q8_1(void *y_q8_1, float *output_f32,
                                   cudaStream_t stream) {
   return launch_cuda_fused_swiglu_q8_1_sparse(y_q8_1, output_f32, gate, up, n,
                                               0.0f, 0, stream);
+}
+
+/**
+ * Hardware 2:4 Structured Sparsity INT4 Tensor Core Kernel via PTX mma.sp.
+ * Computes D = A_sparse * B_dense + C using Ada Lovelace SM 8.9 sparse Tensor Cores.
+ * Matrix A: M x K INT4 weights compressed to M x (K/2) with 2:4 sparsity.
+ * Matrix B: K x N dense INT4 activations (N=8).
+ * Matrix meta: M x (K/64) 32-bit metadata registers encoding 2-bit position indices.
+ */
+__global__ void gemm_sparse_2_4_tensor_core_s4_kernel(
+    int32_t *__restrict__ d,
+    const int32_t *__restrict__ a_sparse,
+    const int32_t *__restrict__ b_dense,
+    const uint32_t *__restrict__ meta_sparse,
+    int m, int k, int n) {
+  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+  int lane_id = threadIdx.x % 32;
+  int warps_per_grid = (gridDim.x * blockDim.x) / 32;
+
+  int num_m_tiles = (m + 15) / 16;
+  int num_n_tiles = (n + 7) / 8;
+  int total_tiles = num_m_tiles * num_n_tiles;
+  int k_steps = k / 64;
+
+  for (int tile_idx = warp_id; tile_idx < total_tiles; tile_idx += warps_per_grid) {
+    int m_tile = tile_idx % num_m_tiles;
+    int n_tile = tile_idx / num_m_tiles;
+    int m_base = m_tile * 16;
+    int n_base = n_tile * 8;
+
+    int32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+
+    for (int step = 0; step < k_steps; ++step) {
+      int a_offset = (m_base * (k / 2) / 8) + step * 64 + lane_id * 2;
+      int32_t a0 = a_sparse[a_offset];
+      int32_t a1 = a_sparse[a_offset + 1];
+
+      int b_offset = (n_base * k / 8) + step * 64 + lane_id * 2;
+      int32_t b0 = b_dense[b_offset];
+      int32_t b1 = b_dense[b_offset + 1];
+
+      int meta_offset = (m_base * (k / 64)) + step * 32 + lane_id;
+      uint32_t meta = meta_sparse[meta_offset];
+
+      asm volatile(
+          "mma.sp::ordered_metadata.sync.aligned.m16n8k64.row.col.s32.s4.s4.s32 "
+          "{%0, %1, %2, %3}, {%4, %5}, {%6, %7}, {%8, %9, %10, %11}, %12, 0x0;\n"
+          : "=r"(d0), "=r"(d1), "=r"(d2), "=r"(d3)
+          : "r"(a0), "r"(a1), "r"(b0), "r"(b1), "r"(d0), "r"(d1), "r"(d2), "r"(d3), "r"(meta)
+      );
+    }
+
+    int d_offset = (m_base * n + n_base) + lane_id * 4;
+    d[d_offset + 0] = d0;
+    d[d_offset + 1] = d1;
+    d[d_offset + 2] = d2;
+    d[d_offset + 3] = d3;
+  }
+}
+
+int launch_cuda_gemm_sparse_2_4_tensor_core_s4(
+    int32_t *d, const int32_t *a_sparse, const int32_t *b_dense,
+    const uint32_t *meta_sparse, int m, int k, int n, cudaStream_t stream) {
+  if (m <= 0 || k <= 0 || n <= 0 || d == nullptr || a_sparse == nullptr ||
+      b_dense == nullptr || meta_sparse == nullptr)
+    return 0;
+  int block_size = 128;
+  int num_warps = ((m + 15) / 16) * ((n + 7) / 8);
+  int grid_size = (num_warps * 32 + block_size - 1) / block_size;
+  gemm_sparse_2_4_tensor_core_s4_kernel<<<grid_size, block_size, 0, stream>>>(
+      d, a_sparse, b_dense, meta_sparse, m, k, n);
+  return cudaGetLastError();
 }
 
 int launch_cuda_rope_single(float *q, float *k, void *k_out, int pos,

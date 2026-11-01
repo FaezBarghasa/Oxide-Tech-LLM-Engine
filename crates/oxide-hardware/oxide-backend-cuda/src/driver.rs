@@ -486,6 +486,17 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_gemm_sparse_2_4_tensor_core_s4(
+        d: *mut i32,
+        a_sparse: *const i32,
+        b_dense: *const i32,
+        meta_sparse: *const u32,
+        m: i32,
+        k: i32,
+        n: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_rope_single(
         q: *mut f32,
         k: *mut f32,

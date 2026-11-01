@@ -355,8 +355,7 @@ impl CudaBackend {
             decode_graph_handle: None,
             batch_decode_graphs: std::collections::HashMap::new(),
             cuda_graph_enabled: std::env::var("OXIDE_CUDA_GRAPH")
-                .map(|v| v != "0" && v.to_lowercase() != "false")
-                .unwrap_or(true),
+                .map_or(true, |v| v != "0" && v.to_lowercase() != "false"),
             last_sampled_token: None,
             last_gpu_seq_pos: None,
             d_split_k_partial_out: None,
@@ -4113,8 +4112,12 @@ impl HardwareBackend for CudaBackend {
                     stream.synchronize().map_err(EngineError::BackendError)?;
                     let graph_dt = t_graph_start.elapsed();
                     let best_tok = unsafe { *self.pinned_host_token() };
-                    if self.seq_pos % 16 == 0 {
-                        tracing::info!("CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)", graph_dt.as_secs_f64() * 1000.0, 1.0 / graph_dt.as_secs_f64());
+                    if self.seq_pos.is_multiple_of(16) {
+                        tracing::info!(
+                            "CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)",
+                            graph_dt.as_secs_f64() * 1000.0,
+                            1.0 / graph_dt.as_secs_f64()
+                        );
                     }
                     self.last_sampled_token = Some(best_tok);
                     self.seq_pos += 1;
@@ -4132,8 +4135,12 @@ impl HardwareBackend for CudaBackend {
                     stream.synchronize().map_err(EngineError::BackendError)?;
                     let graph_dt = t_graph_start.elapsed();
                     let best_tok = sampled_res[0];
-                    if self.seq_pos % 16 == 0 {
-                        tracing::info!("CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)", graph_dt.as_secs_f64() * 1000.0, 1.0 / graph_dt.as_secs_f64());
+                    if self.seq_pos.is_multiple_of(16) {
+                        tracing::info!(
+                            "CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)",
+                            graph_dt.as_secs_f64() * 1000.0,
+                            1.0 / graph_dt.as_secs_f64()
+                        );
                     }
                     self.last_sampled_token = Some(best_tok);
                     self.seq_pos += 1;
@@ -4202,7 +4209,11 @@ impl HardwareBackend for CudaBackend {
                     for (layer_idx, layer) in self.layers.iter().enumerate() {
                         // Attention RMSNorm + Q8_1
                         if layer.d_attn_norm.size_bytes() > 0 {
-                            let norm_out_ptr = if layer.q_quant == 1 { std::ptr::null_mut() } else { d_norm_ptr };
+                            let norm_out_ptr = if layer.q_quant == 1 {
+                                std::ptr::null_mut()
+                            } else {
+                                d_norm_ptr
+                            };
                             unsafe {
                                 driver::launch_cuda_fused_rmsnorm_q8_1(
                                     norm_out_ptr,
@@ -4414,7 +4425,9 @@ impl HardwareBackend for CudaBackend {
                                     s,
                                 );
                             } else {
-                                driver::launch_cuda_quantize_q8_1(d_out_ptr, d_q8_1_ptr, o_k as i32, s);
+                                driver::launch_cuda_quantize_q8_1(
+                                    d_out_ptr, d_q8_1_ptr, o_k as i32, s,
+                                );
                                 Self::dispatch_gemv(
                                     d_out_ptr,
                                     &layer.d_wo,
@@ -4431,7 +4444,11 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN RMSNorm + Q8_1
                         if layer.d_ffn_norm.size_bytes() > 0 {
-                            let norm_ffn_out_ptr = if layer.gate_quant == 1 { std::ptr::null_mut() } else { d_norm_ptr };
+                            let norm_ffn_out_ptr = if layer.gate_quant == 1 {
+                                std::ptr::null_mut()
+                            } else {
+                                d_norm_ptr
+                            };
                             unsafe {
                                 driver::launch_cuda_fused_rmsnorm_q8_1(
                                     norm_ffn_out_ptr,
@@ -4449,11 +4466,12 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN Gate + Up GEMV
                         unsafe {
-                            let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma && layer.gate_quant == 1 && layer.up_quant == 1 {
-                                (std::ptr::null_mut(), std::ptr::null())
-                            } else {
-                                (d_up_ptr, d_up_ptr as *const f32)
-                            };
+                            let (pass_up_ptr, pass_swiglu_up) =
+                                if !self.is_gemma && layer.gate_quant == 1 && layer.up_quant == 1 {
+                                    (std::ptr::null_mut(), std::ptr::null())
+                                } else {
+                                    (d_up_ptr, d_up_ptr.cast_const())
+                                };
 
                             if layer.gate_quant == 1 && layer.up_quant == 1 {
                                 driver::launch_cuda_gemv_gate_up_q4_k(
@@ -4539,11 +4557,12 @@ impl HardwareBackend for CudaBackend {
 
                     // 3. Final Output Norm
                     if let Some(d_out_norm) = &self.d_output_norm {
-                        let norm_lm_out_ptr = if self.lm_head_quant_type == 1 || self.lm_head_quant_type == 2 {
-                            std::ptr::null_mut()
-                        } else {
-                            d_norm_ptr
-                        };
+                        let norm_lm_out_ptr =
+                            if self.lm_head_quant_type == 1 || self.lm_head_quant_type == 2 {
+                                std::ptr::null_mut()
+                            } else {
+                                d_norm_ptr
+                            };
                         unsafe {
                             driver::launch_cuda_fused_rmsnorm_q8_1(
                                 norm_lm_out_ptr,
@@ -4647,23 +4666,27 @@ impl HardwareBackend for CudaBackend {
                                 self.graph_manager.launch_graph(handle, s)?;
                             }
                             if self.pinned_host_token_ptr != 0 {
-                    stream.synchronize().map_err(EngineError::BackendError)?;
-                    let graph_dt = t_graph_start.elapsed();
-                    let best_tok = unsafe { *self.pinned_host_token() };
-                    if self.seq_pos % 16 == 0 {
-                        tracing::info!("CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)", graph_dt.as_secs_f64() * 1000.0, 1.0 / graph_dt.as_secs_f64());
-                    }
-                    self.last_sampled_token = Some(best_tok);
-                    self.seq_pos += 1;
-                    self.last_gpu_seq_pos = Some(self.seq_pos);
-                    if slot < self.slot_positions.len() {
-                        self.slot_positions[slot] = self.seq_pos;
-                    }
-                    if slot < self.host_token_buffer.len() {
-                        self.host_token_buffer[slot] = best_tok;
-                    }
-                    return Ok(event);
-                } else if let Some(ref d_sampled) = self.d_sampled_token {
+                                stream.synchronize().map_err(EngineError::BackendError)?;
+                                let graph_dt = t_graph_start.elapsed();
+                                let best_tok = unsafe { *self.pinned_host_token() };
+                                if self.seq_pos.is_multiple_of(16) {
+                                    tracing::info!(
+                                        "CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)",
+                                        graph_dt.as_secs_f64() * 1000.0,
+                                        1.0 / graph_dt.as_secs_f64()
+                                    );
+                                }
+                                self.last_sampled_token = Some(best_tok);
+                                self.seq_pos += 1;
+                                self.last_gpu_seq_pos = Some(self.seq_pos);
+                                if slot < self.slot_positions.len() {
+                                    self.slot_positions[slot] = self.seq_pos;
+                                }
+                                if slot < self.host_token_buffer.len() {
+                                    self.host_token_buffer[slot] = best_tok;
+                                }
+                                return Ok(event);
+                            } else if let Some(ref d_sampled) = self.d_sampled_token {
                                 let mut sampled_res = [0u32, 0u32];
                                 let _ = d_sampled.copy_to_host_async(&mut sampled_res, s);
                                 stream.synchronize().map_err(EngineError::BackendError)?;
@@ -5323,10 +5346,16 @@ impl HardwareBackend for CudaBackend {
                             (&mut self.d_scratch_gate, &mut self.d_scratch_up)
                         {
                             unsafe {
-                                let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma && layer.gate_quant == 1 && layer.up_quant == 1 {
+                                let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma
+                                    && layer.gate_quant == 1
+                                    && layer.up_quant == 1
+                                {
                                     (std::ptr::null_mut(), std::ptr::null())
                                 } else {
-                                    (d_up.as_typed_ptr::<f32>(), d_up.as_typed_ptr::<f32>() as *const f32)
+                                    (
+                                        d_up.as_typed_ptr::<f32>(),
+                                        d_up.as_typed_ptr::<f32>().cast_const(),
+                                    )
                                 };
 
                                 if layer.gate_quant == 1
@@ -5384,11 +5413,12 @@ impl HardwareBackend for CudaBackend {
                                     }
                                 } else if !d_q8_1_ptr.is_null() {
                                     // Fused SwiGLU directly writes quantized Q8_1 blocks for down-projection
-                                    let out_f32_ptr = if layer.down_quant == 1 || layer.down_quant == 2 {
-                                        std::ptr::null_mut()
-                                    } else {
-                                        d_gate.as_typed_ptr::<f32>()
-                                    };
+                                    let out_f32_ptr =
+                                        if layer.down_quant == 1 || layer.down_quant == 2 {
+                                            std::ptr::null_mut()
+                                        } else {
+                                            d_gate.as_typed_ptr::<f32>()
+                                        };
                                     driver::launch_cuda_fused_swiglu_q8_1_sparse(
                                         d_q8_1_ptr,
                                         out_f32_ptr,

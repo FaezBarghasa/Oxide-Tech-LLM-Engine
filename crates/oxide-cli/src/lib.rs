@@ -1261,7 +1261,7 @@ fn run_chat_session(
                 break;
             }
             print!("{text}");
-            if gen_count % 4 == 0 {
+            if gen_count.is_multiple_of(4) {
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
         }
@@ -1279,9 +1279,15 @@ fn run_chat_session(
             let (decode_duration, decode_tokens) = if pure_decode_tokens > 0 {
                 (pure_decode_duration, pure_decode_tokens)
             } else if let Some(d_start) = decode_start {
-                (d_start.elapsed(), gen_count.saturating_sub(decode_start_tokens))
+                (
+                    d_start.elapsed(),
+                    gen_count.saturating_sub(decode_start_tokens),
+                )
             } else {
-                (elapsed.saturating_sub(first_tok_time), gen_count.saturating_sub(1))
+                (
+                    elapsed.saturating_sub(first_tok_time),
+                    gen_count.saturating_sub(1),
+                )
             };
             let decode_tps = if decode_duration.as_secs_f64() > 0.0 && decode_tokens > 0 {
                 decode_tokens as f64 / decode_duration.as_secs_f64()
