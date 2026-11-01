@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let t0 = Instant::now();
             for _ in 0..iters {
                 driver::launch_cuda_fused_rmsnorm_q8_1(
-                    d_norm_ptr, d_q8_1_ptr, d_hid_ptr, layer0.d_attn_norm.as_typed_ptr::<f32>(),
+                    std::ptr::null_mut(), d_q8_1_ptr, d_hid_ptr, layer0.d_attn_norm.as_typed_ptr::<f32>(),
                     1, h as i32, 1e-6, 0.0, stream,
                 );
             }
@@ -203,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     let lyr = &eng.backend.layers[l];
                     // 1. RMSNorm
                     driver::launch_cuda_fused_rmsnorm_q8_1(
-                        d_norm_ptr, d_q8_1_ptr, d_hid_ptr, lyr.d_attn_norm.as_typed_ptr::<f32>(),
+                        std::ptr::null_mut(), d_q8_1_ptr, d_hid_ptr, lyr.d_attn_norm.as_typed_ptr::<f32>(),
                         1, h as i32, 1e-6, 0.0, stream,
                     );
                     // 2. QKV
@@ -226,7 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     driver::launch_cuda_gemv_q4_k_fused_add(d_hid_ptr, lyr.d_wo.as_raw_ptr(), d_q8_1_ptr, lyr.o_m as i32, lyr.o_k as i32, stream);
                     // 6. FFN Norm
                     driver::launch_cuda_fused_rmsnorm_q8_1(
-                        d_norm_ptr, d_q8_1_ptr, d_hid_ptr, lyr.d_ffn_norm.as_typed_ptr::<f32>(),
+                        std::ptr::null_mut(), d_q8_1_ptr, d_hid_ptr, lyr.d_ffn_norm.as_typed_ptr::<f32>(),
                         1, h as i32, 1e-6, 0.0, stream,
                     );
                     // 7. Gate + Up
@@ -241,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 }
                 // Final Norm + LM Head + Argmax
-                driver::launch_cuda_fused_rmsnorm_q8_1(d_norm_ptr, d_q8_1_ptr, d_hid_ptr, eng.backend.d_output_norm.as_ref().unwrap().as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream);
+                driver::launch_cuda_fused_rmsnorm_q8_1(std::ptr::null_mut(), d_q8_1_ptr, d_hid_ptr, eng.backend.d_output_norm.as_ref().unwrap().as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream);
                 driver::launch_cuda_gemv_q6_k(d_logits_ptr, d_lm_ptr, d_q8_1_ptr, vocab_size as i32, h as i32, stream);
                 driver::launch_cuda_argmax(d_logits_ptr, vocab_size as i32, d_sampled_ptr, d_val_ptr, 1, stream);
             }

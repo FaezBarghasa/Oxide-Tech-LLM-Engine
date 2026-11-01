@@ -4669,6 +4669,11 @@ int launch_cuda_gemv_q6_k_fused_add(float *y, const void *raw_blocks,
                                     cudaStream_t stream) {
   if (m <= 0 || k <= 0)
     return 0;
+  if (k >= 8192 && (k % 2048) == 0) {
+    int grid = m;
+    mmvq_q6_k_splitk_kernel<8, 1><<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+    return cudaGetLastError();
+  }
   if (k >= 4096 && (k % 1024) == 0) {
     int grid = (m + 1) / 2;
     mmvq_q6_k_splitk_kernel<4, 1><<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
@@ -4768,6 +4773,12 @@ int launch_cuda_gemv_q4_k_fused_add(float *y, const void *raw_blocks,
                                     cudaStream_t stream) {
   if (m <= 0 || k <= 0)
     return 0;
+  if (k >= 8192 && (k % 2048) == 0) {
+    int grid = m;
+    mmvq_q4_k_splitk_kernel<8, 1><<<grid, 256, 0, stream>>>(
+        y, (const uint8_t *)raw_blocks, x_q8_1, m, k);
+    return cudaGetLastError();
+  }
   if (k >= 4096 && (k % 1024) == 0) {
     int grid = (m + 1) / 2;
     mmvq_q4_k_splitk_kernel<4, 1><<<grid, 256, 0, stream>>>(

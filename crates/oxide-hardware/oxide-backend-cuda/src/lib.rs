@@ -4539,9 +4539,14 @@ impl HardwareBackend for CudaBackend {
 
                     // 3. Final Output Norm
                     if let Some(d_out_norm) = &self.d_output_norm {
+                        let norm_lm_out_ptr = if self.lm_head_quant_type == 1 || self.lm_head_quant_type == 2 {
+                            std::ptr::null_mut()
+                        } else {
+                            d_norm_ptr
+                        };
                         unsafe {
                             driver::launch_cuda_fused_rmsnorm_q8_1(
-                                d_norm_ptr,
+                                norm_lm_out_ptr,
                                 d_q8_1_ptr,
                                 d_hid_ptr,
                                 d_out_norm.as_typed_ptr::<f32>(),
