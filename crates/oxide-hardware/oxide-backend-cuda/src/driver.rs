@@ -69,6 +69,7 @@ unsafe extern "C" {
         flags: u64,
     ) -> cudaError_t;
     pub fn cudaGraphLaunch(graphExec: cudaGraphExec_t, stream: cudaStream_t) -> cudaError_t;
+    pub fn cudaGraphUpload(graphExec: cudaGraphExec_t, stream: cudaStream_t) -> cudaError_t;
     pub fn cudaGraphGetNodes(
         graph: cudaGraph_t,
         nodes: *mut *mut c_void,
@@ -677,6 +678,7 @@ unsafe extern "C" {
         d_seq_pos: *mut i32,
         d_sampled_token: *const u32,
         d_input_token: *mut i32,
+        h_sampled_token: *mut u32,
         stream: cudaStream_t,
     ) -> i32;
 

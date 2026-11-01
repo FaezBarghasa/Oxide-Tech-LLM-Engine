@@ -120,6 +120,9 @@ impl CudaGraphManager {
             )));
         }
 
+        // Pre-upload the execution graph topology directly into device memory
+        let _ = unsafe { driver::cudaGraphUpload(raw_exec, stream) };
+
         let graph_id = self.next_graph_id;
         self.next_graph_id += 1;
         let mut real_num_nodes: usize = 0;

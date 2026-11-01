@@ -5712,7 +5712,8 @@ int launch_cuda_flash_decode_ptr(float *output, void *out_q8_1, const float *q, 
 
 __global__ void advance_decode_step_kernel(int *__restrict__ d_seq_pos,
                                            const uint32_t *__restrict__ d_sampled_token,
-                                           int *__restrict__ d_input_token) {
+                                           int *__restrict__ d_input_token,
+                                           uint32_t *__restrict__ h_sampled_token) {
   if (threadIdx.x == 0 && blockIdx.x == 0) {
     if (d_seq_pos != nullptr) {
       *d_seq_pos += 1;
@@ -5720,14 +5721,18 @@ __global__ void advance_decode_step_kernel(int *__restrict__ d_seq_pos,
     if (d_sampled_token != nullptr && d_input_token != nullptr) {
       *d_input_token = (int)(*d_sampled_token);
     }
+    if (d_sampled_token != nullptr && h_sampled_token != nullptr) {
+      *h_sampled_token = *d_sampled_token;
+    }
   }
 }
 
 int launch_cuda_advance_decode_step(int *d_seq_pos,
                                     const uint32_t *d_sampled_token,
                                     int *d_input_token,
+                                    uint32_t *h_sampled_token,
                                     cudaStream_t stream) {
-  advance_decode_step_kernel<<<1, 1, 0, stream>>>(d_seq_pos, d_sampled_token, d_input_token);
+  advance_decode_step_kernel<<<1, 1, 0, stream>>>(d_seq_pos, d_sampled_token, d_input_token, h_sampled_token);
   return cudaGetLastError();
 }
 
