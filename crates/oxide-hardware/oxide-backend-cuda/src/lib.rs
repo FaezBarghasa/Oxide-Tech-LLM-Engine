@@ -44,8 +44,8 @@ pub use driver::{CudaDeviceBuffer, CudaStream};
 pub use energy::{DynamicNvml, EnergyMeasurement, EnergyMethod, EnergySampler};
 pub use gpu_unlock::{
     EffectiveSpeedReadout, GpuThroughputProjection, GpuUnlockCapability, HardwareGpuUnlockEngine,
-    LiveMmioRegisters, MmioAccessStatus, PciBarRegion, PhysicalPciGpu, UnlockResult, nv_rm,
-    registers as gpu_unlock_registers,
+    LiveMmioRegisters, MmioAccessStatus, PciBarRegion, PhysicalPciGpu, UnlockResult,
+    clock_stabilizer, nv_rm, registers as gpu_unlock_registers,
 };
 pub use graph::{CapturedCudaGraph, CudaGraphExecHandle, CudaGraphManager};
 pub use kernels::CudaLlmKernels;

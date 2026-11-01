@@ -232,6 +232,10 @@ pub struct GpuUnlockArgs {
     /// Attempt live physical MMIO register modification (requires root/CAP_SYS_RAWIO)
     #[arg(long)]
     pub apply: bool,
+
+    /// Stabilize hardware clocks and maximize power limits (Phase 6)
+    #[arg(long)]
+    pub stabilize: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -2566,6 +2570,55 @@ pub fn run_gpu_unlock_probe(
                     &dev_path, gpu,
                 );
                 println!("  - [{}] Unlock Sequence Result: {:?}", gpu.pci_bdf, res);
+            }
+        }
+
+        if args.stabilize {
+            println!(
+                "\n[*] Executing Hardware Firmware Clock & Voltage Stabilization Sequence (Phase 6)..."
+            );
+            let target_mhz = if args.clock_mhz > 0.0 {
+                Some(args.clock_mhz as u32)
+            } else {
+                Some(2550)
+            };
+            let res = oxide_backend_cuda::clock_stabilizer::stabilize_clocks(target_mhz, Some(120));
+            match res {
+                oxide_backend_cuda::clock_stabilizer::ClockStabilizationResult::Applied {
+                    target_sm_mhz,
+                    target_power_w,
+                    telemetry,
+                } => {
+                    println!("  [+] Successfully stabilized GPU clocks at {target_sm_mhz} MHz (Power Cap: {target_power_w} W)");
+                    println!(
+                        "      Current SM Clock: {} MHz | Mem Clock: {} MHz | Temp: {} C | Power: {:.2} W",
+                        telemetry.sm_clock_mhz, telemetry.mem_clock_mhz, telemetry.temperature_c, telemetry.power_draw_w
+                    );
+                }
+                oxide_backend_cuda::clock_stabilizer::ClockStabilizationResult::RequiresPrivileges {
+                    target_sm_mhz,
+                    suggested_command,
+                    telemetry,
+                } => {
+                    println!(
+                        "  [-] Administrative privileges required to lock physical clocks at {target_sm_mhz} MHz."
+                    );
+                    println!(
+                        "      Current SM Clock: {} MHz (Max: {} MHz) | Mem Clock: {} MHz | Temp: {} C | Power: {:.2} W",
+                        telemetry.sm_clock_mhz, telemetry.max_sm_clock_mhz, telemetry.mem_clock_mhz, telemetry.temperature_c, telemetry.power_draw_w
+                    );
+                    println!(
+                        "      Thermal Throttling: {} | Power Throttling: {}",
+                        if telemetry.is_thermal_throttling { "ACTIVE (WARNING)" } else { "None" },
+                        if telemetry.is_power_throttling { "ACTIVE (WARNING)" } else { "None" }
+                    );
+                    println!("      Run this command with sudo to lock SM clocks and eliminate frequency downclocking:");
+                    println!("      >>> {suggested_command}");
+                    println!("      Or execute helper script: ./scripts/stabilize_gpu_clocks.sh");
+                }
+                oxide_backend_cuda::clock_stabilizer::ClockStabilizationResult::Failed(err) => {
+                    println!("  [!] Clock stabilization query failed: {err}");
+                }
             }
         }
     }

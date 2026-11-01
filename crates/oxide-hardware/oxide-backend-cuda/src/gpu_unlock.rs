@@ -1522,6 +1522,123 @@ impl HardwareGpuUnlockEngine {
     }
 }
 
+/// Hardware Clock & Voltage Stabilization Engine (Phase 6)
+pub mod clock_stabilizer {
+    use serde::{Deserialize, Serialize};
+    use std::process::Command;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct GpuClockTelemetry {
+        pub sm_clock_mhz: u32,
+        pub max_sm_clock_mhz: u32,
+        pub mem_clock_mhz: u32,
+        pub max_mem_clock_mhz: u32,
+        pub power_draw_w: f32,
+        pub power_cap_w: f32,
+        pub max_power_limit_w: f32,
+        pub temperature_c: u32,
+        pub gpu_utilization_pct: u32,
+        pub is_thermal_throttling: bool,
+        pub is_power_throttling: bool,
+    }
+
+    impl GpuClockTelemetry {
+        pub fn query_current() -> Option<Self> {
+            let output = Command::new("nvidia-smi")
+                .args([
+                    "--query-gpu=clocks.current.sm,clocks.max.sm,clocks.current.memory,clocks.max.memory,power.draw,power.limit,power.max_limit,temperature.gpu,utilization.gpu,clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_power_cap",
+                    "--format=csv,noheader,nounits",
+                ])
+                .output()
+                .ok()?;
+
+            if !output.status.success() {
+                return None;
+            }
+
+            let text = String::from_utf8_lossy(&output.stdout);
+            let parts: Vec<&str> = text.trim().split(',').map(str::trim).collect();
+            if parts.len() < 11 {
+                return None;
+            }
+
+            let parse_u32 = |s: &str| s.parse::<u32>().unwrap_or(0);
+            let parse_f32 = |s: &str| s.parse::<f32>().unwrap_or(0.0);
+
+            Some(Self {
+                sm_clock_mhz: parse_u32(parts[0]),
+                max_sm_clock_mhz: parse_u32(parts[1]),
+                mem_clock_mhz: parse_u32(parts[2]),
+                max_mem_clock_mhz: parse_u32(parts[3]),
+                power_draw_w: parse_f32(parts[4]),
+                power_cap_w: parse_f32(parts[5]),
+                max_power_limit_w: parse_f32(parts[6]),
+                temperature_c: parse_u32(parts[7]),
+                gpu_utilization_pct: parse_u32(parts[8]),
+                is_thermal_throttling: parts[9].eq_ignore_ascii_case("active"),
+                is_power_throttling: parts[10].eq_ignore_ascii_case("active"),
+            })
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub enum ClockStabilizationResult {
+        Applied {
+            target_sm_mhz: u32,
+            target_power_w: u32,
+            telemetry: GpuClockTelemetry,
+        },
+        RequiresPrivileges {
+            target_sm_mhz: u32,
+            suggested_command: String,
+            telemetry: GpuClockTelemetry,
+        },
+        Failed(String),
+    }
+
+    pub fn stabilize_clocks(
+        target_mhz: Option<u32>,
+        target_power_w: Option<u32>,
+    ) -> ClockStabilizationResult {
+        let Some(telemetry) = GpuClockTelemetry::query_current() else {
+            return ClockStabilizationResult::Failed(
+                "Failed to query NVIDIA GPU telemetry via nvidia-smi".to_string(),
+            );
+        };
+
+        let sm_mhz = target_mhz.unwrap_or(2550);
+        let power_w = target_power_w.unwrap_or(120);
+
+        // Attempt setting persistence mode and clock lock
+        let pm_res = Command::new("nvidia-smi").args(["-pm", "1"]).output();
+        let lgc_res = Command::new("nvidia-smi")
+            .args(["-lgc", &format!("{sm_mhz},{sm_mhz}")])
+            .output();
+
+        let success = match (pm_res, lgc_res) {
+            (Ok(p), Ok(l)) => p.status.success() && l.status.success(),
+            _ => false,
+        };
+
+        if success {
+            ClockStabilizationResult::Applied {
+                target_sm_mhz: sm_mhz,
+                target_power_w: power_w,
+                telemetry,
+            }
+        } else {
+            let suggested = format!(
+                "sudo nvidia-smi -pm 1 && sudo nvidia-smi -lgc {sm_mhz},{sm_mhz} && sudo nvidia-smi -pl {power_w}"
+            );
+            ClockStabilizationResult::RequiresPrivileges {
+                target_sm_mhz: sm_mhz,
+                suggested_command: suggested,
+                telemetry,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
