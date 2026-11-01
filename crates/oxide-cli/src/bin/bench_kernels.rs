@@ -117,6 +117,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let _ = stream_obj.synchronize();
             let dt_gate_up = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
 
+            let t0 = Instant::now();
+            for _ in 0..iters {
+                driver::launch_cuda_gemv_q4_k(d_gate_ptr, layer0.d_w1.as_raw_ptr(), d_q8_1_ptr, layer0.inter_m as i32, h as i32, stream);
+                driver::launch_cuda_gemv_q4_k(d_up_ptr, layer0.d_w3.as_raw_ptr(), d_q8_1_ptr, layer0.inter_m as i32, h as i32, stream);
+            }
+            let _ = stream_obj.synchronize();
+            let dt_two_gemv = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
+            println!("Gate+Up fused vs two gemv: fused={:.2}us, two_gemv={:.2}us", dt_gate_up, dt_two_gemv);
+
             // 8. SwiGLU
             let t0 = Instant::now();
             for _ in 0..iters {
@@ -181,6 +190,128 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("18 Q4_K layers total            : {:>8.2} ms ({:.2} us/layer)", per_layer_q4 * 18.0 / 1000.0, per_layer_q4);
             println!("All 36 layers sum               : {:>8.2} ms", total_layers / 1000.0);
             println!("Grand Total Single-Token Decode : {:>8.2} ms ({:.2} tok/s)", grand_total / 1000.0, 1000.0 / (grand_total / 1000.0));
+            println!("==================================================");
+
+            // Now measure actual sequential stream execution of all 36 layers + LM head!
+            let _ = stream_obj.synchronize();
+            let t_real0 = Instant::now();
+            let real_iters = 20;
+            for _ in 0..real_iters {
+                for l in 0..36 {
+                    let lyr = &eng.backend.layers[l];
+                    // 1. RMSNorm
+                    driver::launch_cuda_fused_rmsnorm_q8_1(
+                        d_norm_ptr, d_q8_1_ptr, d_hid_ptr, lyr.d_attn_norm.as_typed_ptr::<f32>(),
+                        1, h as i32, 1e-6, 0.0, stream,
+                    );
+                    // 2. QKV
+                    driver::launch_cuda_mmvq_qkv_mixed_ptr(
+                        d_q_ptr, d_k_ptr, d_v_ptr, eng.backend.kv_v[l].as_raw_ptr(), d_sp_ptr,
+                        lyr.d_wq.as_raw_ptr(), lyr.d_wk.as_raw_ptr(), lyr.d_wv.as_raw_ptr(),
+                        d_q8_1_ptr, lyr.q_m as i32, lyr.kv_m as i32, lyr.q_k as i32, lyr.v_quant as i32, stream,
+                    );
+                    // 3. RoPE
+                    driver::launch_cuda_fused_qknorm_rope_batch_ptr(
+                        d_q_ptr, d_k_ptr, std::ptr::null(), std::ptr::null(), eng.backend.kv_k[l].as_raw_ptr(), d_sp_ptr,
+                        32, 8, 128, 1e-6, 10000.0, 1, 1.0, 4096, stream,
+                    );
+                    // 4. Flash Decode
+                    driver::launch_cuda_flash_decode_ptr(
+                        d_out_ptr, d_q8_1_ptr, d_q_ptr, eng.backend.kv_k[l].as_raw_ptr(), eng.backend.kv_v[l].as_raw_ptr(),
+                        32, 8, 128, d_sp_ptr, 0, 1.0 / (128.0f32).sqrt(), 1, stream,
+                    );
+                    // 5. WO
+                    driver::launch_cuda_gemv_q4_k_fused_add(d_hid_ptr, lyr.d_wo.as_raw_ptr(), d_q8_1_ptr, lyr.o_m as i32, lyr.o_k as i32, stream);
+                    // 6. FFN Norm
+                    driver::launch_cuda_fused_rmsnorm_q8_1(
+                        d_norm_ptr, d_q8_1_ptr, d_hid_ptr, lyr.d_ffn_norm.as_typed_ptr::<f32>(),
+                        1, h as i32, 1e-6, 0.0, stream,
+                    );
+                    // 7. Gate + Up
+                    driver::launch_cuda_gemv_gate_up_q4_k(d_gate_ptr, std::ptr::null_mut(), lyr.d_w1.as_raw_ptr(), lyr.d_w3.as_raw_ptr(), d_q8_1_ptr, lyr.inter_m as i32, h as i32, stream);
+                    // 8. SwiGLU
+                    driver::launch_cuda_fused_swiglu_q8_1_sparse(d_q8_1_ptr, std::ptr::null_mut(), d_gate_ptr, std::ptr::null(), lyr.inter_m as i32, 0.0, 0, stream);
+                    // 9. W2
+                    if lyr.down_quant == 2 {
+                        driver::launch_cuda_gemv_q6_k_fused_add(d_hid_ptr, lyr.d_w2.as_raw_ptr(), d_q8_1_ptr, h as i32, lyr.inter_m as i32, stream);
+                    } else {
+                        driver::launch_cuda_gemv_q4_k_fused_add(d_hid_ptr, lyr.d_w2.as_raw_ptr(), d_q8_1_ptr, h as i32, lyr.inter_m as i32, stream);
+                    }
+                }
+                // Final Norm + LM Head + Argmax
+                driver::launch_cuda_fused_rmsnorm_q8_1(d_norm_ptr, d_q8_1_ptr, d_hid_ptr, eng.backend.d_output_norm.as_ref().unwrap().as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream);
+                driver::launch_cuda_gemv_q6_k(d_logits_ptr, d_lm_ptr, d_q8_1_ptr, vocab_size as i32, h as i32, stream);
+                driver::launch_cuda_argmax(d_logits_ptr, vocab_size as i32, d_sampled_ptr, d_val_ptr, 1, stream);
+            }
+            let _ = stream_obj.synchronize();
+            let dt_real_stream = t_real0.elapsed().as_secs_f64() * 1000.0 / real_iters as f64;
+            // Measure each layer individually
+            let mut layer_times = Vec::new();
+            for l in 0..36 {
+                let lyr = &eng.backend.layers[l];
+                let _ = stream_obj.synchronize();
+                let t_l = Instant::now();
+                for _ in 0..10 {
+                    driver::launch_cuda_fused_rmsnorm_q8_1(d_norm_ptr, d_q8_1_ptr, d_hid_ptr, lyr.d_attn_norm.as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream);
+                    driver::launch_cuda_mmvq_qkv_mixed_ptr(d_q_ptr, d_k_ptr, d_v_ptr, eng.backend.kv_v[l].as_raw_ptr(), d_sp_ptr, lyr.d_wq.as_raw_ptr(), lyr.d_wk.as_raw_ptr(), lyr.d_wv.as_raw_ptr(), d_q8_1_ptr, lyr.q_m as i32, lyr.kv_m as i32, lyr.q_k as i32, lyr.v_quant as i32, stream);
+                    driver::launch_cuda_fused_qknorm_rope_batch_ptr(d_q_ptr, d_k_ptr, std::ptr::null(), std::ptr::null(), eng.backend.kv_k[l].as_raw_ptr(), d_sp_ptr, 32, 8, 128, 1e-6, 10000.0, 1, 1.0, 4096, stream);
+                    driver::launch_cuda_flash_decode_ptr(d_out_ptr, d_q8_1_ptr, d_q_ptr, eng.backend.kv_k[l].as_raw_ptr(), eng.backend.kv_v[l].as_raw_ptr(), 32, 8, 128, d_sp_ptr, 0, 1.0 / (128.0f32).sqrt(), 1, stream);
+                    driver::launch_cuda_gemv_q4_k_fused_add(d_hid_ptr, lyr.d_wo.as_raw_ptr(), d_q8_1_ptr, lyr.o_m as i32, lyr.o_k as i32, stream);
+                    driver::launch_cuda_fused_rmsnorm_q8_1(d_norm_ptr, d_q8_1_ptr, d_hid_ptr, lyr.d_ffn_norm.as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream);
+                    driver::launch_cuda_gemv_gate_up_q4_k(d_gate_ptr, std::ptr::null_mut(), lyr.d_w1.as_raw_ptr(), lyr.d_w3.as_raw_ptr(), d_q8_1_ptr, lyr.inter_m as i32, h as i32, stream);
+                    driver::launch_cuda_fused_swiglu_q8_1_sparse(d_q8_1_ptr, std::ptr::null_mut(), d_gate_ptr, std::ptr::null(), lyr.inter_m as i32, 0.0, 0, stream);
+                    if lyr.down_quant == 2 {
+                        driver::launch_cuda_gemv_q6_k_fused_add(d_hid_ptr, lyr.d_w2.as_raw_ptr(), d_q8_1_ptr, h as i32, lyr.inter_m as i32, stream);
+                    } else {
+                        driver::launch_cuda_gemv_q4_k_fused_add(d_hid_ptr, lyr.d_w2.as_raw_ptr(), d_q8_1_ptr, h as i32, lyr.inter_m as i32, stream);
+                    }
+                }
+                let _ = stream_obj.synchronize();
+                layer_times.push(t_l.elapsed().as_secs_f64() * 1000.0 / 10.0);
+            }
+            let mut q6_count = 0;
+            let mut q4_count = 0;
+            let mut wv_q6_count = 0;
+            for l in 0..36 {
+                let lyr = &eng.backend.layers[l];
+                if lyr.down_quant == 2 { q6_count += 1; } else { q4_count += 1; }
+                if lyr.v_quant == 2 { wv_q6_count += 1; }
+            }
+            let sum_layer_times: f64 = layer_times.iter().sum();
+            println!("Layer breakdown: down_quant Q6_K={}, Q4_K={}, v_quant Q6_K={}", q6_count, q4_count, wv_q6_count);
+            println!("Sum of individually measured 36 layers: {:>8.2} ms", sum_layer_times);
+
+            // Cumulative step-by-step measurement of Layer 4
+            let _ = stream_obj.synchronize();
+            let mut cum_times = Vec::new();
+            for step in 1..=9 {
+                let _ = stream_obj.synchronize();
+                let t_cum = Instant::now();
+                for _ in 0..iters {
+                    if step >= 1 { driver::launch_cuda_fused_rmsnorm_q8_1(d_norm_ptr, d_q8_1_ptr, d_hid_ptr, layer4.d_attn_norm.as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream); }
+                    if step >= 2 { driver::launch_cuda_mmvq_qkv_mixed_ptr(d_q_ptr, d_k_ptr, d_v_ptr, eng.backend.kv_v[4].as_raw_ptr(), d_sp_ptr, layer4.d_wq.as_raw_ptr(), layer4.d_wk.as_raw_ptr(), layer4.d_wv.as_raw_ptr(), d_q8_1_ptr, layer4.q_m as i32, layer4.kv_m as i32, layer4.q_k as i32, layer4.v_quant as i32, stream); }
+                    if step >= 3 { driver::launch_cuda_fused_qknorm_rope_batch_ptr(d_q_ptr, d_k_ptr, std::ptr::null(), std::ptr::null(), eng.backend.kv_k[4].as_raw_ptr(), d_sp_ptr, 32, 8, 128, 1e-6, 10000.0, 1, 1.0, 4096, stream); }
+                    if step >= 4 { driver::launch_cuda_flash_decode_ptr(d_out_ptr, d_q8_1_ptr, d_q_ptr, eng.backend.kv_k[4].as_raw_ptr(), eng.backend.kv_v[4].as_raw_ptr(), 32, 8, 128, d_sp_ptr, 0, 1.0 / (128.0f32).sqrt(), 1, stream); }
+                    if step >= 5 { driver::launch_cuda_gemv_q4_k_fused_add(d_hid_ptr, layer4.d_wo.as_raw_ptr(), d_q8_1_ptr, layer4.o_m as i32, layer4.o_k as i32, stream); }
+                    if step >= 6 { driver::launch_cuda_fused_rmsnorm_q8_1(d_norm_ptr, d_q8_1_ptr, d_hid_ptr, layer4.d_ffn_norm.as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream); }
+                    if step >= 7 { driver::launch_cuda_gemv_gate_up_q4_k(d_gate_ptr, std::ptr::null_mut(), layer4.d_w1.as_raw_ptr(), layer4.d_w3.as_raw_ptr(), d_q8_1_ptr, layer4.inter_m as i32, h as i32, stream); }
+                    if step >= 8 { driver::launch_cuda_fused_swiglu_q8_1_sparse(d_q8_1_ptr, std::ptr::null_mut(), d_gate_ptr, std::ptr::null(), layer4.inter_m as i32, 0.0, 0, stream); }
+                    if step >= 9 { driver::launch_cuda_gemv_q4_k_fused_add(d_hid_ptr, layer4.d_w2.as_raw_ptr(), d_q8_1_ptr, h as i32, layer4.inter_m as i32, stream); }
+                }
+                let _ = stream_obj.synchronize();
+                cum_times.push(t_cum.elapsed().as_secs_f64() * 1e6 / iters as f64);
+            }
+            println!("Layer 4 cumulative steps:");
+            let names = ["RMSNorm1", "+QKV", "+RoPE", "+FlashDec", "+WO", "+RMSNorm2", "+GateUp", "+SwiGLU", "+W2"];
+            let mut prev = 0.0;
+            for s in 0..9 {
+                println!("  Step {} {:<12}: {:>6.2} us (delta: {:>6.2} us)", s + 1, names[s], cum_times[s], cum_times[s] - prev);
+                prev = cum_times[s];
+            }
+            for l in 0..36 {
+                println!("  Layer {:2}: {:>6.2} us (down_quant={}, v_quant={})", l, layer_times[l] * 1000.0, eng.backend.layers[l].down_quant, eng.backend.layers[l].v_quant);
+            }
+            println!("Actual 36 layers sequential stream dt: {:>8.2} ms ({:.2} tok/s)", dt_real_stream, 1000.0 / dt_real_stream);
             println!("==================================================");
         }
     }

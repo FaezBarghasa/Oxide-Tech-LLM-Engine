@@ -198,6 +198,18 @@ pub struct CudaBackend {
     pub enable_2_4_sparsity: bool,
     pub enable_h2o_kv_pruning: bool,
     pub h2o_max_blocks_budget: usize,
+    pub pinned_host_token_ptr: usize,
+}
+
+impl Drop for CudaBackend {
+    fn drop(&mut self) {
+        if self.pinned_host_token_ptr != 0 {
+            unsafe {
+                let _ = driver::cudaFreeHost(self.pinned_host_token_ptr as *mut std::ffi::c_void);
+            }
+            self.pinned_host_token_ptr = 0;
+        }
+    }
 }
 
 impl fmt::Debug for CudaBackend {
@@ -242,6 +254,16 @@ impl CudaBackend {
         if stream.is_some() {
             // SAFETY: Configures physical device cache preferences (L1 preference, 0 shared memory carveout)
             unsafe { driver::init_cuda_kernel_attributes() };
+        }
+
+        let mut pinned_host_token: *mut u32 = std::ptr::null_mut();
+        unsafe {
+            let mut ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+            let err = driver::cudaHostAlloc(&raw mut ptr, 256, 0x03);
+            if err == 0 && !ptr.is_null() {
+                pinned_host_token = ptr as *mut u32;
+                std::ptr::write_bytes(pinned_host_token, 0, 64);
+            }
         }
 
         Self {
@@ -355,7 +377,13 @@ impl CudaBackend {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(128),
+            pinned_host_token_ptr: pinned_host_token as usize,
         }
+    }
+
+    #[inline(always)]
+    pub fn pinned_host_token(&self) -> *mut u32 {
+        self.pinned_host_token_ptr as *mut u32
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4081,7 +4109,24 @@ impl HardwareBackend for CudaBackend {
                     self.graph_manager.launch_graph(handle, s)?;
                 }
 
-                if let Some(ref d_sampled) = self.d_sampled_token {
+                if self.pinned_host_token_ptr != 0 {
+                    stream.synchronize().map_err(EngineError::BackendError)?;
+                    let graph_dt = t_graph_start.elapsed();
+                    let best_tok = unsafe { *self.pinned_host_token() };
+                    if self.seq_pos % 16 == 0 {
+                        tracing::info!("CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)", graph_dt.as_secs_f64() * 1000.0, 1.0 / graph_dt.as_secs_f64());
+                    }
+                    self.last_sampled_token = Some(best_tok);
+                    self.seq_pos += 1;
+                    self.last_gpu_seq_pos = Some(self.seq_pos);
+                    if slot < self.slot_positions.len() {
+                        self.slot_positions[slot] = self.seq_pos;
+                    }
+                    if slot < self.host_token_buffer.len() {
+                        self.host_token_buffer[slot] = best_tok;
+                    }
+                    return Ok(event);
+                } else if let Some(ref d_sampled) = self.d_sampled_token {
                     let mut sampled_res = [0u32, 0u32];
                     let _ = d_sampled.copy_to_host_async(&mut sampled_res, s);
                     stream.synchronize().map_err(EngineError::BackendError)?;
@@ -4568,6 +4613,7 @@ impl HardwareBackend for CudaBackend {
                             d_sp_ptr,
                             d_sampled_ptr,
                             d_in_tok_ptr,
+                            self.pinned_host_token(),
                             s,
                         );
                     }
@@ -4589,10 +4635,28 @@ impl HardwareBackend for CudaBackend {
                                 handle.node_count
                             );
                             self.decode_graph_handle = Some(handle);
+                            let t_graph_start = std::time::Instant::now();
                             unsafe {
                                 self.graph_manager.launch_graph(handle, s)?;
                             }
-                            if let Some(ref d_sampled) = self.d_sampled_token {
+                            if self.pinned_host_token_ptr != 0 {
+                    stream.synchronize().map_err(EngineError::BackendError)?;
+                    let graph_dt = t_graph_start.elapsed();
+                    let best_tok = unsafe { *self.pinned_host_token() };
+                    if self.seq_pos % 16 == 0 {
+                        tracing::info!("CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)", graph_dt.as_secs_f64() * 1000.0, 1.0 / graph_dt.as_secs_f64());
+                    }
+                    self.last_sampled_token = Some(best_tok);
+                    self.seq_pos += 1;
+                    self.last_gpu_seq_pos = Some(self.seq_pos);
+                    if slot < self.slot_positions.len() {
+                        self.slot_positions[slot] = self.seq_pos;
+                    }
+                    if slot < self.host_token_buffer.len() {
+                        self.host_token_buffer[slot] = best_tok;
+                    }
+                    return Ok(event);
+                } else if let Some(ref d_sampled) = self.d_sampled_token {
                                 let mut sampled_res = [0u32, 0u32];
                                 let _ = d_sampled.copy_to_host_async(&mut sampled_res, s);
                                 stream.synchronize().map_err(EngineError::BackendError)?;

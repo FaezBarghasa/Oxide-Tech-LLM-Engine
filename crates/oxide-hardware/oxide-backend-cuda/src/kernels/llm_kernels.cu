@@ -4653,6 +4653,11 @@ int launch_cuda_gemv_q6_k(float *y, const void *raw_blocks, const void *x_q8_1,
                           int m, int k, cudaStream_t stream) {
   if (m <= 0 || k <= 0)
     return 0;
+  if (m >= 65536 && (k % 512) == 0) {
+    int grid = (m + 3) / 4;
+    mmvq_q6_k_splitk_kernel<2, 0><<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
+    return cudaGetLastError();
+  }
   if (k >= 4096 && (k % 1024) == 0) {
     int grid = (m + 1) / 2;
     mmvq_q6_k_splitk_kernel<4, 0><<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
@@ -4797,8 +4802,8 @@ int launch_cuda_mmvq_gate_up_q4_k(float *y_gate, float *y_up,
   if (inter_m <= 0 || k <= 0 || batch_size <= 0)
     return 0;
   if (batch_size == 1) {
-    int grid = (inter_m + 1) / 2;
-    mmvq_gate_up_q4_k_2warp_kernel<4><<<grid, 256, 0, stream>>>(
+    int grid = (inter_m + 3) / 4;
+    mmvq_gate_up_q4_k_2warp_kernel<2><<<grid, 256, 0, stream>>>(
         y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k);
     return cudaGetLastError();
   }
@@ -4829,8 +4834,14 @@ int launch_cuda_gemv_gate_up_q4_k(float *y_gate, float *y_up,
                                   const void *raw_w1, const void *raw_w3,
                                   const void *x_q8_1, int inter_m, int k,
                                   cudaStream_t stream) {
-  int grid = (inter_m + 1) / 2;
-  mmvq_gate_up_q4_k_2warp_kernel<4><<<grid, 256, 0, stream>>>(
+  if (k >= 4096 && (k % 1024) == 0) {
+    int grid = (inter_m + 1) / 2;
+    mmvq_gate_up_q4_k_2warp_kernel<4><<<grid, 256, 0, stream>>>(
+        y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k);
+    return cudaGetLastError();
+  }
+  int grid = (inter_m + 3) / 4;
+  mmvq_gate_up_q4_k_2warp_kernel<2><<<grid, 256, 0, stream>>>(
       y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k);
   return cudaGetLastError();
 }
