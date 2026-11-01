@@ -600,6 +600,18 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_sample_native(
+        logits: *const f32,
+        vocab_size: i32,
+        out_token: *mut u32,
+        out_max_val: *mut f32,
+        temperature: f32,
+        top_p: f32,
+        seed: u64,
+        d_seq_pos: *const i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_dequantize_token_embd_q4_k(
         d_hidden: *mut f32,
         d_token_embd: *const std::ffi::c_void,

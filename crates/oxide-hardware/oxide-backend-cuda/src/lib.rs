@@ -199,6 +199,7 @@ pub struct CudaBackend {
     pub enable_h2o_kv_pruning: bool,
     pub h2o_max_blocks_budget: usize,
     pub pinned_host_token_ptr: usize,
+    pub current_step_counter: u32,
 }
 
 impl Drop for CudaBackend {
@@ -377,6 +378,7 @@ impl CudaBackend {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(128),
             pinned_host_token_ptr: pinned_host_token as usize,
+            current_step_counter: 0,
         }
     }
 
@@ -2439,6 +2441,12 @@ impl CudaBackend {
         self.decode_graph_handle = None;
         self.last_sampled_token = None;
         self.last_gpu_seq_pos = None;
+        self.current_step_counter = 0;
+        if self.pinned_host_token_ptr != 0 {
+            unsafe {
+                std::ptr::write_bytes(self.pinned_host_token(), 0, 64);
+            }
+        }
 
         if chunk_tokens.is_empty() {
             return Ok(None);
@@ -4085,7 +4093,6 @@ impl HardwareBackend for CudaBackend {
         // --- PHYSICAL CUDA GRAPH DECODE REPLAY ENGINE ---
         if !cmd.is_prefill_chunk
             && self.cuda_graph_enabled
-            && self.sampler.config.temperature <= 0.0
             && self.token_embd_quant_type == 1
             && self.d_token_embd.is_some()
             && self.d_per_layer_emb.is_none()
@@ -4124,9 +4131,19 @@ impl HardwareBackend for CudaBackend {
                 }
 
                 if self.pinned_host_token_ptr != 0 {
-                    stream.synchronize().map_err(EngineError::BackendError)?;
+                    let expected_step = self.current_step_counter + 1;
+                    let h_tok_ptr = self.pinned_host_token();
+                    let t_spin_start = std::time::Instant::now();
+                    while unsafe { std::ptr::read_volatile(h_tok_ptr.add(1)) } < expected_step {
+                        std::hint::spin_loop();
+                        if t_spin_start.elapsed().as_millis() > 2000 {
+                            stream.synchronize().map_err(EngineError::BackendError)?;
+                            break;
+                        }
+                    }
+                    self.current_step_counter = expected_step;
                     let graph_dt = t_graph_start.elapsed();
-                    let best_tok = unsafe { *self.pinned_host_token() };
+                    let best_tok = unsafe { std::ptr::read_volatile(h_tok_ptr) };
                     if self.seq_pos.is_multiple_of(16) {
                         tracing::info!(
                             "CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)",
@@ -4639,14 +4656,20 @@ impl HardwareBackend for CudaBackend {
                         }
                     }
 
-                    // 5. ArgMax
+                    // 5. Native GPU Sampling (Temperature / Gumbel-Max / ArgMax)
+                    let temp = self.sampler.config.temperature;
+                    let top_p = self.sampler.config.top_p;
+                    let seed = self.sampler.config.seed.unwrap_or(42);
                     unsafe {
-                        driver::launch_cuda_argmax(
+                        driver::launch_cuda_sample_native(
                             d_logits_ptr,
                             self.vocab_size as i32,
                             d_sampled_ptr,
                             d_val_ptr,
-                            1,
+                            temp,
+                            top_p,
+                            seed,
+                            d_sp_ptr,
                             s,
                         );
                         // 6. Advance decode step on device
@@ -4681,9 +4704,21 @@ impl HardwareBackend for CudaBackend {
                                 self.graph_manager.launch_graph(handle, s)?;
                             }
                             if self.pinned_host_token_ptr != 0 {
-                                stream.synchronize().map_err(EngineError::BackendError)?;
+                                let expected_step = self.current_step_counter + 1;
+                                let h_tok_ptr = self.pinned_host_token();
+                                let t_spin_start = std::time::Instant::now();
+                                while unsafe { std::ptr::read_volatile(h_tok_ptr.add(1)) }
+                                    < expected_step
+                                {
+                                    std::hint::spin_loop();
+                                    if t_spin_start.elapsed().as_millis() > 2000 {
+                                        stream.synchronize().map_err(EngineError::BackendError)?;
+                                        break;
+                                    }
+                                }
+                                self.current_step_counter = expected_step;
                                 let graph_dt = t_graph_start.elapsed();
-                                let best_tok = unsafe { *self.pinned_host_token() };
+                                let best_tok = unsafe { std::ptr::read_volatile(h_tok_ptr) };
                                 if self.seq_pos.is_multiple_of(16) {
                                     tracing::info!(
                                         "CUDA decode graph step dt: {:.3}ms ({:.2} tok/s)",
