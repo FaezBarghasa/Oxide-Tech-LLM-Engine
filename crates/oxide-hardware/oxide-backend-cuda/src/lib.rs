@@ -1715,7 +1715,7 @@ impl CudaBackend {
                         ) {
                             let req_w_bytes = layer.q_m.max(layer.kv_m) * layer.q_k * 2;
                             let req_x_bytes = batch_size * layer.q_k * 2;
-                            if batch_size >= 8
+                            if false && batch_size >= 8
                                 && layer.q_quant == 1
                                 && layer.k_quant == 1
                                 && (layer.v_quant == 1 || layer.v_quant == 2)
@@ -2033,7 +2033,7 @@ impl CudaBackend {
                             let req_w_bytes = o_m * o_k * 2;
                             let req_x_bytes = tail_batch * o_k * 2;
                             if layer.o_quant == 1
-                                && tail_batch >= 8
+                                && false && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -2118,7 +2118,7 @@ impl CudaBackend {
                             let req_x_bytes = tail_batch * h * 2;
                             if layer.gate_quant == 1
                                 && layer.up_quant == 1
-                                && tail_batch >= 8
+                                && false && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -2232,7 +2232,7 @@ impl CudaBackend {
                             let req_w_bytes = h * layer.inter_m * 2;
                             let req_x_bytes = tail_batch * layer.inter_m * 2;
                             if layer.down_quant == 2
-                                && tail_batch >= 8
+                                && false && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -2632,7 +2632,7 @@ impl CudaBackend {
                         ) {
                             let req_w_bytes = layer.q_m.max(layer.kv_m) * layer.q_k * 2;
                             let req_x_bytes = batch_size * layer.q_k * 2;
-                            if batch_size >= 8
+                            if false && batch_size >= 8
                                 && layer.q_quant == 1
                                 && layer.k_quant == 1
                                 && (layer.v_quant == 1 || layer.v_quant == 2)
@@ -2950,7 +2950,7 @@ impl CudaBackend {
                             let req_w_bytes = o_m * o_k * 2;
                             let req_x_bytes = tail_batch * o_k * 2;
                             if layer.o_quant == 1
-                                && tail_batch >= 8
+                                && false && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -3035,7 +3035,7 @@ impl CudaBackend {
                             let req_x_bytes = tail_batch * h * 2;
                             if layer.gate_quant == 1
                                 && layer.up_quant == 1
-                                && tail_batch >= 8
+                                && false && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -3149,7 +3149,7 @@ impl CudaBackend {
                             let req_w_bytes = h * layer.inter_m * 2;
                             let req_x_bytes = tail_batch * layer.inter_m * 2;
                             if layer.down_quant == 2
-                                && tail_batch >= 8
+                                && false && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -4373,6 +4373,19 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
 
+                        // Write computed V to FP16 V-cache if not done in grouped GEMV
+                        if !v_cache_ptr.is_null() && !(layer.q_quant == 1 && layer.k_quant == 1 && (layer.v_quant == 1 || layer.v_quant == 2) && layer.d_q_bias.is_none() && layer.d_v_bias.is_none()) {
+                            unsafe {
+                                driver::launch_cuda_write_v_cache_ptr(
+                                    v_cache_ptr,
+                                    d_v_ptr,
+                                    d_sp_ptr,
+                                    layer.kv_m as i32,
+                                    s,
+                                );
+                            }
+                        }
+
                         // RoPE writing K-cache directly
                         let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
                             10_000.0f32
@@ -4990,6 +5003,12 @@ impl HardwareBackend for CudaBackend {
                                 );
                             }
                             check_cuda("attn_fused_rmsnorm", layer_idx)?;
+                            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                                let mut h_norm = [0.0f32; 4];
+                                let _ = d_norm.copy_to_host_async(&mut h_norm, s);
+                                let _ = stream.synchronize();
+                                eprintln!("[CUDA L0] attn_norm: {:?}", h_norm);
+                            }
                         }
 
                         let cur_head_dim = if let Some(ref d_q_norm) = layer.d_attn_q_norm {
@@ -5186,6 +5205,21 @@ impl HardwareBackend for CudaBackend {
                             }
                         }
 
+                        if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                            if let (Some(d_q), Some(d_k), Some(d_v)) = (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v) {
+                                let mut h_q = [0.0f32; 4];
+                                let mut h_k = [0.0f32; 4];
+                                let mut h_v = [0.0f32; 4];
+                                let _ = d_q.copy_to_host_async(&mut h_q, s);
+                                let _ = d_k.copy_to_host_async(&mut h_k, s);
+                                let _ = d_v.copy_to_host_async(&mut h_v, s);
+                                let _ = stream.synchronize();
+                                eprintln!("[CUDA L0] q_after_bias: {:?}", h_q);
+                                eprintln!("[CUDA L0] k_after_bias: {:?}", h_k);
+                                eprintln!("[CUDA L0] v_after_bias: {:?}", h_v);
+                            }
+                        }
+
                         // Fused QK-Norm + Rotary Position Embedding (RoPE) on Q and K + direct FP16 K-cache write
                         let layer_rope_theta = if self.is_gemma && cur_head_dim <= 256 {
                             10_000.0f32
@@ -5365,6 +5399,13 @@ impl HardwareBackend for CudaBackend {
                                 );
                             }
                             check_cuda("wo_proj_fused_residual", layer_idx)?;
+                        }
+
+                        if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                            let mut h_hid = [0.0f32; 4];
+                            let _ = d_hid.copy_to_host_async(&mut h_hid, s);
+                            let _ = stream.synchronize();
+                            eprintln!("[CUDA L0] hid_after_attn: {:?}", h_hid);
                         }
                     }
 

@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let model_path = PathBuf::from("/home/jrad/models/Huihui-Qwen3-8B-abliterated-v2.Q4_K_M.gguf");
+    let model_path = PathBuf::from("/home/jrad/models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
     let file = File::open(&model_path)?;
     let mmap = unsafe { Mmap::map(&file)? };
     let gguf = GgufFile::parse(&mmap)?;

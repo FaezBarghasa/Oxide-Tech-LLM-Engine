@@ -21,6 +21,10 @@ path = "src/bin/bench_matrix.rs"
 name = "debug-prefill"
 path = "src/bin/debug_prefill.rs"
 
+[[bin]]
+name = "debug-layer"
+path = "src/bin/debug_layer.rs"
+
 
 [lib]
 path = "src/lib.rs"

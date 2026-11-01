@@ -3124,6 +3124,9 @@ impl Llama3Model {
                 eps,
                 self.config.is_gemma,
             );
+            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                eprintln!("[CPU L0] attn_norm: {:?}", &scratch.norm_hidden[..4]);
+            }
 
             // Fused Q, K, V Projections via SIMD GEMV
             QuantizedTensor::fused_gemv_3way(
@@ -3135,6 +3138,28 @@ impl Llama3Model {
                 &mut scratch.v,
                 &scratch.norm_hidden[..h],
             );
+
+            // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
+            if !layer.q_bias.is_empty() {
+                for (q_val, &b_val) in scratch.q[..cur_q_dim].iter_mut().zip(&layer.q_bias) {
+                    *q_val += b_val;
+                }
+            }
+            if !layer.k_bias.is_empty() {
+                for (k_val, &b_val) in scratch.k[..cur_k_dim].iter_mut().zip(&layer.k_bias) {
+                    *k_val += b_val;
+                }
+            }
+            if !layer.v_bias.is_empty() {
+                for (v_val, &b_val) in scratch.v[..cur_v_dim].iter_mut().zip(&layer.v_bias) {
+                    *v_val += b_val;
+                }
+            }
+            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                eprintln!("[CPU L0] q_after_bias: {:?}", &scratch.q[..4]);
+                eprintln!("[CPU L0] k_after_bias: {:?}", &scratch.k[..4]);
+                eprintln!("[CPU L0] v_after_bias: {:?}", &scratch.v[..4]);
+            }
 
             // QK-Norm (applied per-head before RoPE)
             let hd = cur_head_dim;
@@ -3249,6 +3274,9 @@ impl Llama3Model {
             // Residual 1
             for i in 0..h {
                 scratch.hidden[i] += scratch.o_proj_out[i];
+            }
+            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                eprintln!("[CPU L0] hid_after_attn: {:?}", &scratch.hidden[..4]);
             }
         }
 
