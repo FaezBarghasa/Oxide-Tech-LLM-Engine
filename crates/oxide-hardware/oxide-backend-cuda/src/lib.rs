@@ -4202,9 +4202,10 @@ impl HardwareBackend for CudaBackend {
                     for (layer_idx, layer) in self.layers.iter().enumerate() {
                         // Attention RMSNorm + Q8_1
                         if layer.d_attn_norm.size_bytes() > 0 {
+                            let norm_out_ptr = if layer.q_quant == 1 { std::ptr::null_mut() } else { d_norm_ptr };
                             unsafe {
                                 driver::launch_cuda_fused_rmsnorm_q8_1(
-                                    d_norm_ptr,
+                                    norm_out_ptr,
                                     d_q8_1_ptr,
                                     d_hid_ptr,
                                     layer.d_attn_norm.as_typed_ptr::<f32>(),
@@ -4430,9 +4431,10 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN RMSNorm + Q8_1
                         if layer.d_ffn_norm.size_bytes() > 0 {
+                            let norm_ffn_out_ptr = if layer.gate_quant == 1 { std::ptr::null_mut() } else { d_norm_ptr };
                             unsafe {
                                 driver::launch_cuda_fused_rmsnorm_q8_1(
-                                    d_norm_ptr,
+                                    norm_ffn_out_ptr,
                                     d_q8_1_ptr,
                                     d_hid_ptr,
                                     layer.d_ffn_norm.as_typed_ptr::<f32>(),

@@ -151,6 +151,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let dt_w2_q4 = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
 
             // 11. LM Head Q6_K (m=151936, k=4096)
+            driver::launch_cuda_fused_rmsnorm_q8_1(d_norm_ptr, d_q8_1_ptr, d_hid_ptr, eng.backend.d_output_norm.as_ref().unwrap().as_typed_ptr::<f32>(), 1, h as i32, 1e-6, 0.0, stream);
+            let _ = stream_obj.synchronize();
             let t0 = Instant::now();
             for _ in 0..20 {
                 driver::launch_cuda_gemv_q6_k(d_logits_ptr, d_lm_ptr, d_q8_1_ptr, vocab_size as i32, h as i32, stream);
