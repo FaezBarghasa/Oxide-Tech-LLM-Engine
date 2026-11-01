@@ -1,2 +1,4 @@
 /target
 /reference
+*.sqlite
+*.nsys-rep
