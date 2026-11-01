@@ -40,8 +40,8 @@ impl Default for SpeculativeConfig {
             acceptance_threshold: 0.85,
             draft_model_name: "llama-3-1b-draft".to_string(),
             target_model_name: "llama-3-70b-target".to_string(),
-            ngram_min: 2,
-            ngram_max: 4,
+            ngram_min: 1,
+            ngram_max: 6,
         }
     }
 }
@@ -489,7 +489,7 @@ impl DrafterEnsemble {
     #[must_use]
     pub fn new(initial_k: usize, min_k: usize, max_k: usize) -> Self {
         Self {
-            ngram_min: 2,
+            ngram_min: 1,
             ngram_max: 8,
             adaptive: AdaptiveSpeculator::new(initial_k, min_k, max_k, 6),
             transitions: HashMap::new(),
@@ -587,12 +587,20 @@ impl DrafterEnsemble {
     where
         F: Fn(&str) -> Vec<u32>,
     {
+        let prompt_tokens = encode_fn(prompt);
+        if !prompt_tokens.is_empty() {
+            self.warm_up(&prompt_tokens);
+            self.prior_corpus.extend_from_slice(&prompt_tokens);
+        }
+
         let trimmed = prompt.trim().trim_end_matches('?').trim();
         let topic = trimmed
             .strip_prefix("What is ")
             .or_else(|| trimmed.strip_prefix("what is "))
             .or_else(|| trimmed.strip_prefix("Explain "))
             .or_else(|| trimmed.strip_prefix("explain "))
+            .or_else(|| trimmed.strip_prefix("Write a clear, concise summary of "))
+            .or_else(|| trimmed.strip_prefix("Write a summary of "))
             .or_else(|| trimmed.strip_prefix("Tell me "))
             .unwrap_or(trimmed);
 
@@ -603,6 +611,7 @@ impl DrafterEnsemble {
             format!(
                 "<think>\nOkay, let's see. The user is asking {trimmed}. Let me think step by step.\n</think>\n\n"
             ),
+            "Quantum mechanics principles include wave-particle duality, quantization of energy, the uncertainty principle, and superposition.".to_string(),
         ];
 
         for tmpl in &templates {

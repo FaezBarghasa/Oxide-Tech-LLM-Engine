@@ -990,7 +990,8 @@ fn run_chat_session(
         let is_speculative = draft_model.is_some()
             || match speculative {
                 "auto" => greedy || temp <= 0.2,
-                "ensemble" | "dynamic" | "ngram" | "prompt-lookup" | "medusa" | "dflash" => true,
+                "ensemble" | "dynamic" | "ngram" | "n-gram" | "prompt-lookup" | "medusa"
+                | "dflash" => true,
                 _ => false,
             };
 
@@ -1048,8 +1049,8 @@ fn run_chat_session(
                 oxide_engine::SpeculativeConfig {
                     strategy: oxide_engine::SpeculativeStrategy::DynamicEnsemble,
                     max_draft_tokens: draft_tokens.clamp(2, 5),
-                    ngram_min: 2,
-                    ngram_max: 4,
+                    ngram_min: 1,
+                    ngram_max: 6,
                     ..Default::default()
                 },
             ))

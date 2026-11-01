@@ -1540,6 +1540,7 @@ impl CudaBackend {
             EngineError::BackendError("Physical CUDA stream not available on host dGPU".to_string())
         })?;
         let s = stream.raw();
+        let t_start_spec = std::time::Instant::now();
 
         let max_draft = 5usize;
         let num_draft = draft_tokens.len().min(max_draft);
@@ -2362,6 +2363,13 @@ impl CudaBackend {
                         accepted.push(pred_for_b);
                         cur_seq_pos += 1;
                         self.seq_pos = cur_seq_pos;
+                        tracing::info!(
+                            "Speculative verify: batch={} accepted={}/{} in {:?}",
+                            batch_size,
+                            accepted.len(),
+                            num_draft,
+                            t_start_spec.elapsed()
+                        );
                         return Ok(accepted);
                     }
                 }
@@ -2370,6 +2378,13 @@ impl CudaBackend {
                 accepted.push(bonus_token);
                 cur_seq_pos += 1;
                 self.seq_pos = cur_seq_pos;
+                tracing::info!(
+                    "Speculative verify: batch={} accepted={}/{} in {:?}",
+                    batch_size,
+                    accepted.len(),
+                    num_draft,
+                    t_start_spec.elapsed()
+                );
                 Ok(accepted)
             } else {
                 Err(EngineError::BackendError(

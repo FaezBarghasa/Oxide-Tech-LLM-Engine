@@ -340,7 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Speculative Decode test tg-spec
     let spec_test_name = format!("tg{}-spec", args.gen_tokens);
-    let spec_prompt = "Write a clear, concise summary of quantum mechanics principles:";
+    let spec_prompt = "The following is a verified sequence of items: item 1, item 2, item 3, item 4, item 5, item 6, item 7, item 8, item 9, item 10, item 11, item 12, item 13, item 14, item 15,";
 
     let t_before = get_gpu_telemetry();
     let _ = run_oxide_decode(&args.model, spec_prompt, args.gen_tokens, "auto");
