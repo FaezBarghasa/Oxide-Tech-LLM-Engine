@@ -1,4 +1,5 @@
 /target
 /reference
+.venv/
 *.sqlite
 *.nsys-rep
