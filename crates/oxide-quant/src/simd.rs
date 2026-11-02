@@ -5,6 +5,14 @@
 //! - `Q4_0` (32 INT4 nibbles * 32 F32 activations)
 //! - `Q4_K` (256 INT4 nibbles * 256 F32 activations)
 //! - Continuous `f32` dot product with 8 independent accumulators to saturate dual FMA ports.
+#![allow(
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::identity_op,
+    clippy::uninlined_format_args,
+    clippy::too_many_lines,
+    clippy::many_single_char_names
+)]
 use rayon::prelude::*;
 
 /// Continuous F32 dot product with dynamic microarchitecture feature detection (AVX-512, AVX2/FMA, AVX, or 8-way unrolled portable).
@@ -429,6 +437,7 @@ unsafe fn dot_q5_0_avx2(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32
         q1_bytes[i] = (((byte >> 4) & 0x0F) | ((h1 as u8) << 4)) as i8 - 16;
     }
 
+    // SAFETY: AVX2 and FMA extensions are validated by caller.
     unsafe {
         let lo_nibbles = _mm_loadu_si128(q0_bytes.as_ptr().cast());
         let hi_nibbles = _mm_loadu_si128(q1_bytes.as_ptr().cast());
@@ -469,11 +478,12 @@ unsafe fn dot_q5_0_q8_0_row_avx2(
         _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm256_and_si256,
         _mm256_castsi128_si256, _mm256_cmpeq_epi8, _mm256_cvtepi32_ps, _mm256_fmadd_ps,
         _mm256_insertf128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_maddubs_epi16,
-        _mm256_or_si256, _mm256_set1_epi16, _mm256_set1_epi32, _mm256_set1_epi64x,
-        _mm256_set1_epi8, _mm256_set1_ps, _mm256_set_epi64x, _mm256_setzero_ps,
-        _mm256_shuffle_epi8, _mm256_sign_epi8, _mm256_storeu_ps, _mm256_sub_epi8,
+        _mm256_or_si256, _mm256_set_epi64x, _mm256_set1_epi8, _mm256_set1_epi16, _mm256_set1_epi32,
+        _mm256_set1_epi64x, _mm256_set1_ps, _mm256_setzero_ps, _mm256_shuffle_epi8,
+        _mm256_sign_epi8, _mm256_storeu_ps, _mm256_sub_epi8,
     };
     let nb = row_weights.len();
+    // SAFETY: AVX2 and FMA extensions are validated by caller.
     unsafe {
         let mut acc = _mm256_setzero_ps();
         let ones_16 = _mm256_set1_epi16(1);
@@ -543,6 +553,7 @@ unsafe fn dot_q8_0_q8_0_row_avx2(
         _mm256_sign_epi8, _mm256_storeu_ps,
     };
     let nb = row_weights.len();
+    // SAFETY: AVX2 and FMA extensions are validated by caller.
     unsafe {
         let mut acc = _mm256_setzero_ps();
         let ones_16 = _mm256_set1_epi16(1);
@@ -1081,6 +1092,7 @@ unsafe fn dot_q6_k_avx2(
         _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
     };
 
+    // SAFETY: AVX2 and FMA extensions are validated by caller.
     unsafe {
         let mask_0f = _mm_set1_epi8(0x0F);
         let mask_03 = _mm_set1_epi8(0x03);
@@ -1272,13 +1284,14 @@ unsafe fn dot_q6_k_q8_k_row_avx2(
 ) -> f32 {
     use core::arch::x86_64::{
         _mm_loadu_si128, _mm_shuffle_epi8, _mm256_add_epi32, _mm256_and_si256,
-        _mm256_cvtepi32_ps, _mm256_cvtepi8_epi16, _mm256_fmadd_ps, _mm256_loadu_si256,
-        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256, _mm256_set1_epi8,
-        _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256, _mm256_slli_epi16,
-        _mm256_slli_epi32, _mm256_srli_epi16, _mm256_storeu_ps, _mm256_sub_epi32,
+        _mm256_cvtepi8_epi16, _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_si256,
+        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256, _mm256_set1_epi8, _mm256_set1_ps,
+        _mm256_setzero_ps, _mm256_setzero_si256, _mm256_slli_epi16, _mm256_slli_epi32,
+        _mm256_srli_epi16, _mm256_storeu_ps, _mm256_sub_epi32,
     };
 
     let nb = row_weights.len();
+    // SAFETY: Microarchitecture targets x86_64 AVX2 and FMA extensions checked by caller.
     unsafe {
         let m3 = _mm256_set1_epi8(3);
         let m12 = _mm256_set1_epi8(12);
@@ -1287,14 +1300,11 @@ unsafe fn dot_q6_k_q8_k_row_avx2(
         let m_c0 = _mm256_set1_epi8(-64); // 0xC0
 
         static K_SHUFFLE: [u8; 128] = [
-            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
-            2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
-            4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
-            6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
-            8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
-            10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11,
-            12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13,
-            14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15,
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3,
+            3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7,
+            7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10,
+            10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13,
+            13, 13, 13, 13, 13, 14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15,
         ];
 
         let mut acc = _mm256_setzero_ps();
@@ -1331,8 +1341,10 @@ unsafe fn dot_q6_k_q8_k_row_avx2(
 
                 let q4_0 = _mm256_or_si256(_mm256_and_si256(q4bits1, m15), q4h_0);
                 let q4_1 = _mm256_or_si256(_mm256_and_si256(q4bits2, m15), q4h_1);
-                let q4_2 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits1, 4), m15), q4h_2);
-                let q4_3 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits2, 4), m15), q4h_3);
+                let q4_2 =
+                    _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits1, 4), m15), q4h_2);
+                let q4_3 =
+                    _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits2, 4), m15), q4h_3);
 
                 let q8_0 = _mm256_loadu_si256(q8_ptr.cast());
                 q8_ptr = q8_ptr.add(32);
@@ -1349,10 +1361,22 @@ unsafe fn dot_q6_k_q8_k_row_avx2(
                 let mut p16_3 = _mm256_maddubs_epi16(q4_3, q8_3);
 
                 let is_base = j * 4;
-                let scale_0 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 0) * 16).cast()));
-                let scale_1 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 1) * 16).cast()));
-                let scale_2 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 2) * 16).cast()));
-                let scale_3 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 3) * 16).cast()));
+                let scale_0 = _mm_shuffle_epi8(
+                    scales,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add(is_base * 16).cast()),
+                );
+                let scale_1 = _mm_shuffle_epi8(
+                    scales,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 1) * 16).cast()),
+                );
+                let scale_2 = _mm_shuffle_epi8(
+                    scales,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 2) * 16).cast()),
+                );
+                let scale_3 = _mm_shuffle_epi8(
+                    scales,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 3) * 16).cast()),
+                );
 
                 p16_0 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_0), p16_0);
                 p16_1 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_1), p16_1);
@@ -1510,19 +1534,22 @@ pub fn gemv_q5_0(
         if m <= 8 {
             for row in 0..m {
                 let row_offset = row * blocks_per_row;
+                // SAFETY: Target architecture supports AVX2 and FMA.
                 output[row] = unsafe {
-                    dot_q5_0_q8_0_row_avx2(&matrix[row_offset..row_offset + blocks_per_row], &act_q8)
+                    dot_q5_0_q8_0_row_avx2(
+                        &matrix[row_offset..row_offset + blocks_per_row],
+                        &act_q8,
+                    )
                 };
             }
         } else {
-            output[..m]
-                .par_chunks_mut(chunk_size)
-                .enumerate()
-                .for_each(|(chunk_idx, out_chunk)| {
+            output[..m].par_chunks_mut(chunk_size).enumerate().for_each(
+                |(chunk_idx, out_chunk)| {
                     let base_row = chunk_idx * chunk_size;
                     for (i, out_val) in out_chunk.iter_mut().enumerate() {
                         let row = base_row + i;
                         let row_offset = row * blocks_per_row;
+                        // SAFETY: Target architecture supports AVX2 and FMA.
                         *out_val = unsafe {
                             dot_q5_0_q8_0_row_avx2(
                                 &matrix[row_offset..row_offset + blocks_per_row],
@@ -1530,7 +1557,8 @@ pub fn gemv_q5_0(
                             )
                         };
                     }
-                });
+                },
+            );
         }
         return;
     }
@@ -1783,19 +1811,22 @@ pub fn gemv_q8_0(
         if m <= 8 {
             for row in 0..m {
                 let row_offset = row * blocks_per_row;
+                // SAFETY: Target architecture supports AVX2 and FMA.
                 output[row] = unsafe {
-                    dot_q8_0_q8_0_row_avx2(&matrix[row_offset..row_offset + blocks_per_row], &act_q8)
+                    dot_q8_0_q8_0_row_avx2(
+                        &matrix[row_offset..row_offset + blocks_per_row],
+                        &act_q8,
+                    )
                 };
             }
         } else {
-            output[..m]
-                .par_chunks_mut(chunk_size)
-                .enumerate()
-                .for_each(|(chunk_idx, out_chunk)| {
+            output[..m].par_chunks_mut(chunk_size).enumerate().for_each(
+                |(chunk_idx, out_chunk)| {
                     let base_row = chunk_idx * chunk_size;
                     for (i, out_val) in out_chunk.iter_mut().enumerate() {
                         let row = base_row + i;
                         let row_offset = row * blocks_per_row;
+                        // SAFETY: Target architecture supports AVX2 and FMA.
                         *out_val = unsafe {
                             dot_q8_0_q8_0_row_avx2(
                                 &matrix[row_offset..row_offset + blocks_per_row],
@@ -1803,7 +1834,8 @@ pub fn gemv_q8_0(
                             )
                         };
                     }
-                });
+                },
+            );
         }
         return;
     }
@@ -2115,16 +2147,16 @@ pub fn swiglu_f32(gate: &[f32], up: &[f32], output: &mut [f32]) {
 #[target_feature(enable = "avx2", enable = "fma")]
 unsafe fn swiglu_f32_avx2(gate: &[f32], up: &[f32], output: &mut [f32]) {
     use core::arch::x86_64::{
-        _mm256_add_ps, _mm256_castsi256_ps, _mm256_cvtps_epi32,
-        _mm256_div_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_max_ps, _mm256_min_ps,
-        _mm256_mul_ps, _mm256_round_ps, _mm256_set1_epi32, _mm256_set1_ps,
-        _mm256_slli_epi32, _mm256_storeu_ps, _mm256_sub_ps, _MM_FROUND_NO_EXC,
-        _MM_FROUND_TO_NEAREST_INT,
+        _MM_FROUND_NO_EXC, _MM_FROUND_TO_NEAREST_INT, _mm256_add_ps, _mm256_castsi256_ps,
+        _mm256_cvtps_epi32, _mm256_div_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_max_ps,
+        _mm256_min_ps, _mm256_mul_ps, _mm256_round_ps, _mm256_set1_epi32, _mm256_set1_ps,
+        _mm256_slli_epi32, _mm256_storeu_ps, _mm256_sub_ps,
     };
 
     let len = gate.len();
     let chunks = len / 8;
 
+    // SAFETY: AVX2 and FMA extensions are validated by caller.
     unsafe {
         let c_log2e = _mm256_set1_ps(core::f32::consts::LOG2_E);
         let c_ln2 = _mm256_set1_ps(core::f32::consts::LN_2);
@@ -2167,7 +2199,8 @@ unsafe fn swiglu_f32_avx2(gate: &[f32], up: &[f32], output: &mut [f32]) {
             let poly = _mm256_fmadd_ps(poly, r, c_one);
 
             // 2^k = (k + 127) << 23
-            let pow2k_bits = _mm256_slli_epi32(core::arch::x86_64::_mm256_add_epi32(k_i32, c_127), 23);
+            let pow2k_bits =
+                _mm256_slli_epi32(core::arch::x86_64::_mm256_add_epi32(k_i32, c_127), 23);
             let pow2k = _mm256_castsi256_ps(pow2k_bits);
 
             let exp_z = _mm256_mul_ps(poly, pow2k);
@@ -2677,12 +2710,11 @@ mod tests {
         let port = dot_q6_k_q8_k_row_portable(row_weights, &q8_k_act);
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Target architecture supports AVX2 and FMA.
             let avx2_res = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, &q8_k_act) };
             assert!(
                 (port - avx2_res).abs() < 1e-4,
-                "AVX2 vs Portable mismatch: {} vs {}",
-                port,
-                avx2_res
+                "AVX2 vs Portable mismatch: {port} vs {avx2_res}"
             );
         }
     }

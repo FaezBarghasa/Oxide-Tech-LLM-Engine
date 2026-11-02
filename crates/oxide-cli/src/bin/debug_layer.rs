@@ -28,16 +28,28 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let SpecializedPipeline::Llama3Dense { ref model, .. } = pipe_cpu {
         let mut emb = vec![0.0f32; model.config.hidden_dim];
         if let Some(ref t) = model.token_embd_tensor {
-            println!("token_embd_tensor quant_type={}, shape={}x{}, bytes_len={}", t.quant_type(), t.rows(), t.cols(), t.as_raw_bytes().len());
+            println!(
+                "token_embd_tensor quant_type={}, shape={}x{}, bytes_len={}",
+                t.quant_type(),
+                t.rows(),
+                t.cols(),
+                t.as_raw_bytes().len()
+            );
             t.extract_row(17, &mut emb);
             println!("CPU token 17 embedding (first 5): {:?}", &emb[..5]);
         }
     }
     let cmd = oxide_core::StepCommand::new(1, tokens[0], 0, false);
     let res_cpu = pipe_cpu.step(&cmd)?;
-    println!("CPU step 0: tok {} -> sampled {}", tokens[0], res_cpu.sampled_token);
+    println!(
+        "CPU step 0: tok {} -> sampled {}",
+        tokens[0], res_cpu.sampled_token
+    );
     if let SpecializedPipeline::Llama3Dense { ref scratch, .. } = pipe_cpu {
-        println!("CPU hidden after all layers (first 5): {:?}", &scratch.hidden[..5]);
+        println!(
+            "CPU hidden after all layers (first 5): {:?}",
+            &scratch.hidden[..5]
+        );
         let mut top: Vec<(usize, f32)> = scratch.logits.iter().copied().enumerate().collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         println!("CPU top 5 logits: {:?}", &top[..5]);
@@ -76,12 +88,20 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chunk_sampled = res.unwrap_or(0);
         }
 
-        let match_str = if step_sampled == chunk_sampled { "MATCH" } else { "MISMATCH" };
-        println!("Len {}: step={} ({:?}) vs chunk={} ({:?}) -> {}",
+        let match_str = if step_sampled == chunk_sampled {
+            "MATCH"
+        } else {
+            "MISMATCH"
+        };
+        println!(
+            "Len {}: step={} ({:?}) vs chunk={} ({:?}) -> {}",
             len,
-            step_sampled, tokenizer.decode_token(step_sampled),
-            chunk_sampled, tokenizer.decode_token(chunk_sampled),
-            match_str);
+            step_sampled,
+            tokenizer.decode_token(step_sampled),
+            chunk_sampled,
+            tokenizer.decode_token(chunk_sampled),
+            match_str
+        );
     }
 
     Ok(())

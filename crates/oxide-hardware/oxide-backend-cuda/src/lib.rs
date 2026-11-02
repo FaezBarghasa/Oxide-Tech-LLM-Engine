@@ -26,7 +26,11 @@
     clippy::cast_precision_loss,
     clippy::approx_constant,
     clippy::needless_range_loop,
-    clippy::manual_memcpy
+    clippy::manual_memcpy,
+    clippy::if_not_else,
+    clippy::uninlined_format_args,
+    clippy::overly_complex_bool_expr,
+    clippy::items_after_statements
 )]
 
 pub mod arch;
@@ -1795,7 +1799,9 @@ impl CudaBackend {
                         ) {
                             let req_w_bytes = layer.q_m.max(layer.kv_m) * layer.q_k * 2;
                             let req_x_bytes = batch_size * layer.q_k * 2;
-                            if false && batch_size >= 8
+                            let enable_batched_wmma = false;
+                            if enable_batched_wmma
+                                && batch_size >= 8
                                 && layer.q_quant == 1
                                 && layer.k_quant == 1
                                 && (layer.v_quant == 1 || layer.v_quant == 2)
@@ -2013,7 +2019,9 @@ impl CudaBackend {
                     }
 
                     if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                        if let (Some(d_q), Some(d_k), Some(d_v)) = (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v) {
+                        if let (Some(d_q), Some(d_k), Some(d_v)) =
+                            (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v)
+                        {
                             let mut h_q = [0.0f32; 4];
                             let mut h_k = [0.0f32; 4];
                             let mut h_v = [0.0f32; 4];
@@ -2134,7 +2142,8 @@ impl CudaBackend {
                             let req_w_bytes = o_m * o_k * 2;
                             let req_x_bytes = tail_batch * o_k * 2;
                             if layer.o_quant == 1
-                                && false && tail_batch >= 8
+                                && false
+                                && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -2226,7 +2235,8 @@ impl CudaBackend {
                             let req_x_bytes = tail_batch * h * 2;
                             if layer.gate_quant == 1
                                 && layer.up_quant == 1
-                                && false && tail_batch >= 8
+                                && false
+                                && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -2340,7 +2350,8 @@ impl CudaBackend {
                             let req_w_bytes = h * layer.inter_m * 2;
                             let req_x_bytes = tail_batch * layer.inter_m * 2;
                             if layer.down_quant == 2
-                                && false && tail_batch >= 8
+                                && false
+                                && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -2741,7 +2752,9 @@ impl CudaBackend {
                         ) {
                             let req_w_bytes = layer.q_m.max(layer.kv_m) * layer.q_k * 2;
                             let req_x_bytes = batch_size * layer.q_k * 2;
-                            if false && batch_size >= 8
+                            let enable_batched_wmma = false;
+                            if enable_batched_wmma
+                                && batch_size >= 8
                                 && layer.q_quant == 1
                                 && layer.k_quant == 1
                                 && (layer.v_quant == 1 || layer.v_quant == 2)
@@ -2959,7 +2972,9 @@ impl CudaBackend {
                     }
 
                     if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                        if let (Some(d_q), Some(d_k), Some(d_v)) = (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v) {
+                        if let (Some(d_q), Some(d_k), Some(d_v)) =
+                            (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v)
+                        {
                             let mut h_q = [0.0f32; 4];
                             let mut h_k = [0.0f32; 4];
                             let mut h_v = [0.0f32; 4];
@@ -3080,7 +3095,8 @@ impl CudaBackend {
                             let req_w_bytes = o_m * o_k * 2;
                             let req_x_bytes = tail_batch * o_k * 2;
                             if layer.o_quant == 1
-                                && false && tail_batch >= 8
+                                && false
+                                && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -3172,7 +3188,8 @@ impl CudaBackend {
                             let req_x_bytes = tail_batch * h * 2;
                             if layer.gate_quant == 1
                                 && layer.up_quant == 1
-                                && false && tail_batch >= 8
+                                && false
+                                && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -3286,7 +3303,8 @@ impl CudaBackend {
                             let req_w_bytes = h * layer.inter_m * 2;
                             let req_x_bytes = tail_batch * layer.inter_m * 2;
                             if layer.down_quant == 2
-                                && false && tail_batch >= 8
+                                && false
+                                && tail_batch >= 8
                                 && d_w_f16.size_bytes() >= req_w_bytes
                                 && d_x_f16.size_bytes() >= req_x_bytes
                             {
@@ -4513,7 +4531,13 @@ impl HardwareBackend for CudaBackend {
                         }
 
                         // Write computed V to FP16 V-cache if not done in grouped GEMV
-                        if !v_cache_ptr.is_null() && !(layer.q_quant == 1 && layer.k_quant == 1 && (layer.v_quant == 1 || layer.v_quant == 2) && layer.d_q_bias.is_none() && layer.d_v_bias.is_none()) {
+                        if !v_cache_ptr.is_null()
+                            && !(layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && (layer.v_quant == 1 || layer.v_quant == 2)
+                                && layer.d_q_bias.is_none()
+                                && layer.d_v_bias.is_none())
+                        {
                             unsafe {
                                 driver::launch_cuda_write_v_cache_ptr(
                                     v_cache_ptr,
@@ -4650,15 +4674,14 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN Gate + Up GEMV
                         unsafe {
-                            let (pass_up_ptr, pass_swiglu_up) =
-                                if !self.is_gemma
-                                    && ((layer.gate_quant == 1 && layer.up_quant == 1)
-                                        || (layer.gate_quant == 9 && layer.up_quant == 9))
-                                {
-                                    (std::ptr::null_mut(), std::ptr::null())
-                                } else {
-                                    (d_up_ptr, d_up_ptr.cast_const())
-                                };
+                            let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma
+                                && ((layer.gate_quant == 1 && layer.up_quant == 1)
+                                    || (layer.gate_quant == 9 && layer.up_quant == 9))
+                            {
+                                (std::ptr::null_mut(), std::ptr::null())
+                            } else {
+                                (d_up_ptr, d_up_ptr.cast_const())
+                            };
 
                             if layer.gate_quant == 1 && layer.up_quant == 1 {
                                 driver::launch_cuda_gemv_gate_up_q4_k(
@@ -4671,7 +4694,10 @@ impl HardwareBackend for CudaBackend {
                                     h as i32,
                                     s,
                                 );
-                            } else if layer.gate_quant == 9 && layer.up_quant == 9 && !d_q8_1_ptr.is_null() {
+                            } else if layer.gate_quant == 9
+                                && layer.up_quant == 9
+                                && !d_q8_1_ptr.is_null()
+                            {
                                 driver::launch_cuda_gemv_gate_up_q5_0(
                                     d_gate_ptr,
                                     pass_up_ptr,
@@ -5360,7 +5386,9 @@ impl HardwareBackend for CudaBackend {
                         }
 
                         if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                            if let (Some(d_q), Some(d_k), Some(d_v)) = (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v) {
+                            if let (Some(d_q), Some(d_k), Some(d_v)) =
+                                (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v)
+                            {
                                 let mut h_q = [0.0f32; 4];
                                 let mut h_k = [0.0f32; 4];
                                 let mut h_v = [0.0f32; 4];
