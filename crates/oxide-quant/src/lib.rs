@@ -65,7 +65,6 @@ pub use fwht::{
     fused_rmsnorm_fwht, fwht_butterfly_in_place, fwht_row_in_place, fwht_signed_row_in_place,
 };
 pub use gemm_avx2::{gemm_q4_k_tiled_prefill, gemm_q6_k_tiled_prefill};
-pub use gemm_avx2::{gemm_q4_k_tiled_prefill, gemm_q6_k_tiled_prefill};
 pub use gguf_quants::{
     BlockIQ1_M, BlockIQ1_S, BlockIQ2_M, BlockIQ2_S, BlockIQ2_XS, BlockIQ2_XXS, BlockIQ3_M,
     BlockIQ3_S, BlockIQ3_XS, BlockIQ3_XXS, BlockIQ4_NL, BlockIQ4_XS, BlockQ2_K_S, BlockQ3_K_L,

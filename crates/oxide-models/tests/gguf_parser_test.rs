@@ -103,7 +103,10 @@ fn test_real_gguf_models_in_home_dir() {
                 }
                 println!("  -- LFM3 blk.0, blk.1, blk.2 tensors --");
                 for t_name in parsed.tensors.keys() {
-                    if t_name.starts_with("blk.0.") || t_name.starts_with("blk.1.") || t_name.starts_with("blk.2.") {
+                    if t_name.starts_with("blk.0.")
+                        || t_name.starts_with("blk.1.")
+                        || t_name.starts_with("blk.2.")
+                    {
                         let t = &parsed.tensors[t_name];
                         println!(
                             "    {}: dims={:?}, quant={:?}",
@@ -167,7 +170,10 @@ fn test_real_gguf_models_in_home_dir() {
                 }
             }
             if name == &"LFM3-1.7B-Q4_K_M.gguf" {
-                println!("--- Testing Llama3Model forward step & prefill on {} ---", name);
+                println!(
+                    "--- Testing Llama3Model forward step & prefill on {} ---",
+                    name
+                );
                 let mut model = oxide_models::llama3::Llama3Model::new_empty(cfg);
                 let static_slice: &'static [u8] =
                     unsafe { std::slice::from_raw_parts(mmap.as_ptr(), mmap.len()) };
@@ -178,7 +184,11 @@ fn test_real_gguf_models_in_home_dir() {
                 let mut scratch = model.create_scratch();
                 let prompt = "Liquid foundation models are";
                 let prompt_tokens = tok.encode(prompt);
-                println!("LFM3 prompt tokens (len={}): {:?}", prompt_tokens.len(), prompt_tokens);
+                println!(
+                    "LFM3 prompt tokens (len={}): {:?}",
+                    prompt_tokens.len(),
+                    prompt_tokens
+                );
                 for (pos, &t) in prompt_tokens.iter().enumerate() {
                     model
                         .forward_step_with_scratch(t, pos, &mut kv_cache, &mut scratch)

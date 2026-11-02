@@ -277,7 +277,9 @@ impl SpecializedPipeline {
         } = self
         {
             let seq_id = 1u64;
-            let cache = kv_cache.entry(seq_id).or_insert_with(|| model.create_kv_cache());
+            let cache = kv_cache
+                .entry(seq_id)
+                .or_insert_with(|| model.create_kv_cache());
             let start_pos = *seq_positions.entry(seq_id).or_insert(0);
             let logits = model.forward_batch(prompt_tokens, start_pos, cache)?;
             seq_positions.insert(seq_id, start_pos + prompt_tokens.len());

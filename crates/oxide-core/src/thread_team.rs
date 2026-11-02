@@ -109,11 +109,15 @@ impl ThreadTeam {
                             if spins >= SPIN_LIMIT {
                                 shared_clone.asleep.fetch_or(worker_mask, Ordering::SeqCst);
                                 if shared_clone.epoch.load(Ordering::Acquire) != local_epoch {
-                                    shared_clone.asleep.fetch_and(!worker_mask, Ordering::SeqCst);
+                                    shared_clone
+                                        .asleep
+                                        .fetch_and(!worker_mask, Ordering::SeqCst);
                                     break;
                                 }
                                 thread::park();
-                                shared_clone.asleep.fetch_and(!worker_mask, Ordering::SeqCst);
+                                shared_clone
+                                    .asleep
+                                    .fetch_and(!worker_mask, Ordering::SeqCst);
                                 spins = 0;
                             }
                         }

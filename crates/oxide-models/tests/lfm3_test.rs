@@ -23,7 +23,7 @@ fn test_lfm3_real_model_inference() {
     assert_eq!(cfg.num_layers, 24);
     assert_eq!(cfg.conv_l_cache, 7);
 
-    let tok = GgufTokenizer::from_gguf(&gguf).expect("tokenizer");
+    let tok = GgufTokenizer::from_gguf(&gguf);
 
     let mut model = Llama3Model::new_empty(cfg);
     model

@@ -256,8 +256,7 @@ impl Llama3Config {
             .unwrap_or(7) as usize;
         let mut shortconv_layers_mask = 0u64;
         if is_lfm3 {
-            if let Some(kv_counts) =
-                gguf.get_u32_array(&format!("{arch}.attention.head_count_kv"))
+            if let Some(kv_counts) = gguf.get_u32_array(&format!("{arch}.attention.head_count_kv"))
             {
                 for (i, &kv_cnt) in kv_counts.iter().enumerate().take(num_layers) {
                     if kv_cnt == 0 && i < 64 {
@@ -1317,10 +1316,22 @@ impl QuantizedTensor {
     ) {
         match self {
             Self::Q4_K { blocks, m, n } => {
-                oxide_quant::simd::gemv_q4_k_prequantized(blocks.as_ref(), q8_k_act, *m, *n, output);
+                oxide_quant::simd::gemv_q4_k_prequantized(
+                    blocks.as_ref(),
+                    q8_k_act,
+                    *m,
+                    *n,
+                    output,
+                );
             }
             Self::Q6_K { blocks, m, n } => {
-                oxide_quant::simd::gemv_q6_k_prequantized(blocks.as_ref(), q8_k_act, *m, *n, output);
+                oxide_quant::simd::gemv_q6_k_prequantized(
+                    blocks.as_ref(),
+                    q8_k_act,
+                    *m,
+                    *n,
+                    output,
+                );
             }
             _ => {
                 self.gemv(vector, output);
@@ -1343,10 +1354,22 @@ impl QuantizedTensor {
         let m = self.rows();
         match self {
             Self::Q4_K { blocks, n, .. } => {
-                oxide_quant::simd::gemm_q4_k_prequantized_batch(blocks.as_ref(), batch_q8, m, *n, output);
+                oxide_quant::simd::gemm_q4_k_prequantized_batch(
+                    blocks.as_ref(),
+                    batch_q8,
+                    m,
+                    *n,
+                    output,
+                );
             }
             Self::Q6_K { blocks, n, .. } => {
-                oxide_quant::simd::gemm_q6_k_prequantized_batch(blocks.as_ref(), batch_q8, m, *n, output);
+                oxide_quant::simd::gemm_q6_k_prequantized_batch(
+                    blocks.as_ref(),
+                    batch_q8,
+                    m,
+                    *n,
+                    output,
+                );
             }
             _ => {
                 for (t, vec) in batch_f32.iter().enumerate() {
@@ -2990,28 +3013,28 @@ impl Llama3Model {
                 let conv_in_name = format!("blk.{i}.shortconv.in_proj.weight");
                 let conv_out_name = format!("blk.{i}.shortconv.out_proj.weight");
 
-                if gguf.tensors.contains_key(&conv_w_name) {
-                    if let (Some(in_proj), Some(out_proj)) = (
+                if gguf.tensors.contains_key(&conv_w_name)
+                    && let (Some(in_proj), Some(out_proj)) = (
                         Self::extract_gguf_tensor(gguf, &conv_in_name, data_slice, 3 * h, h),
                         Self::extract_gguf_tensor(gguf, &conv_out_name, data_slice, h, h),
-                    ) {
-                        let k_size = 7;
-                        let mut conv_weights = vec![0.0f32; h * k_size];
-                        Self::extract_gguf_tensor_to_buffer(
-                            gguf,
-                            &conv_w_name,
-                            data_slice,
-                            &mut conv_weights,
-                        );
-                        layer.shortconv = Some(crate::shortconv::Lfm3ShortConvLayer {
-                            in_proj,
-                            conv_weights,
-                            conv_bias: None,
-                            out_proj,
-                            kernel_size: k_size,
-                            channels: h,
-                        });
-                    }
+                    )
+                {
+                    let k_size = 7;
+                    let mut conv_weights = vec![0.0f32; h * k_size];
+                    Self::extract_gguf_tensor_to_buffer(
+                        gguf,
+                        &conv_w_name,
+                        data_slice,
+                        &mut conv_weights,
+                    );
+                    layer.shortconv = Some(crate::shortconv::Lfm3ShortConvLayer {
+                        in_proj,
+                        conv_weights,
+                        conv_bias: None,
+                        out_proj,
+                        kernel_size: k_size,
+                        channels: h,
+                    });
                 }
 
                 let attn_gate_name = format!("blk.{i}.attn_gate.weight");
@@ -3905,7 +3928,10 @@ impl Llama3Model {
         let mut batch_act = vec![0.0f32; b * max_inter];
         let mut batch_act_q8 = vec![Vec::with_capacity(max_inter / 256); b];
         for q8 in &mut batch_act_q8 {
-            q8.resize(max_inter / 256, oxide_quant::int_quant::BlockQ8_K::default());
+            q8.resize(
+                max_inter / 256,
+                oxide_quant::int_quant::BlockQ8_K::default(),
+            );
         }
         let mut batch_mlp_out = vec![0.0f32; b * h];
 
@@ -3982,8 +4008,8 @@ impl Llama3Model {
                         .checked_div(cur_heads)
                         .unwrap_or(self.config.head_dim);
 
-                    let is_swa =
-                        cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
+                    let is_swa = cur_head_dim <= self.config.head_dim
+                        && self.config.sliding_window.is_some();
                     let sliding_window = if is_swa {
                         self.config.sliding_window
                     } else {
@@ -4208,20 +4234,29 @@ impl Llama3Model {
                 for t in 0..b {
                     let hid_t = &batch_hidden[t * h..(t + 1) * h];
                     let ffn_norm_t = &mut batch_ffn_norm[t * h..(t + 1) * h];
-                    Self::rms_norm(hid_t, &layer.ffn_norm, ffn_norm_t, eps, self.config.is_gemma);
+                    Self::rms_norm(
+                        hid_t,
+                        &layer.ffn_norm,
+                        ffn_norm_t,
+                        eps,
+                        self.config.is_gemma,
+                    );
                     oxide_quant::simd::quantize_row_q8_k(ffn_norm_t, &mut batch_q8[t]);
                 }
 
-                let ffn_norm_slices: Vec<&[f32]> =
-                    (0..b).map(|t| &batch_ffn_norm[t * h..(t + 1) * h]).collect();
+                let ffn_norm_slices: Vec<&[f32]> = (0..b)
+                    .map(|t| &batch_ffn_norm[t * h..(t + 1) * h])
+                    .collect();
                 layer.gate_proj.gemm_batch(
                     &batch_q8,
                     &ffn_norm_slices,
                     &mut batch_gate[..b * cur_inter],
                 );
-                layer
-                    .up_proj
-                    .gemm_batch(&batch_q8, &ffn_norm_slices, &mut batch_up[..b * cur_inter]);
+                layer.up_proj.gemm_batch(
+                    &batch_q8,
+                    &ffn_norm_slices,
+                    &mut batch_up[..b * cur_inter],
+                );
 
                 // Activation function (SwiGLU / GeLU)
                 if self.config.is_gemma {

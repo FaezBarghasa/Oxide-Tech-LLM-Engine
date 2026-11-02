@@ -201,6 +201,7 @@ impl Lfm3ShortConvLayer {
     }
 
     /// Evaluates a multi-token prefill pass through the short-convolution block.
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_prefill(
         &self,
         norm_in: &[f32], // [seq_len, channels]
@@ -316,13 +317,7 @@ mod tests {
 
         // Prefill pass
         let mut prefill_out = vec![0.0f32; seq_len * channels];
-        prefill_state.forward_prefill(
-            &prompt,
-            seq_len,
-            &conv_weights,
-            None,
-            &mut prefill_out,
-        );
+        prefill_state.forward_prefill(&prompt, seq_len, &conv_weights, None, &mut prefill_out);
 
         // Step-by-step decode pass over identical tokens
         let mut decode_out = vec![0.0f32; seq_len * channels];

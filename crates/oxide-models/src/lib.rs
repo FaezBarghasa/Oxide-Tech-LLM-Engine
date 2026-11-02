@@ -74,6 +74,7 @@ pub use dflash::{DFlashConfig, DFlashModel, MedusaConfig, MedusaTreeDrafter};
 pub use dspark::{DSparkConfig, DSparkModel};
 pub use gdn::{GatedDeltaNet, GdnReplayState, GdnStepInputs, GdnUpdateRecord};
 pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};
+pub use shortconv::{Lfm3ShortConvLayer, ShortConv1DState};
 pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
 pub use tokenspeed_mla::{
     MLA_MAX_TILE_HEADS, MlaTileOptimizer, TokenSpeedMlaConfig, TokenSpeedMlaEngine,
