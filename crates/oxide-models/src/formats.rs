@@ -486,6 +486,46 @@ impl GgufFile {
     }
 
     #[must_use]
+    pub fn get_u32_array(&self, key: &str) -> Option<Vec<u32>> {
+        match self.metadata.get(key) {
+            Some(GgufValue::Array(arr)) => {
+                let mut res = Vec::with_capacity(arr.len());
+                for item in arr {
+                    match item {
+                        GgufValue::Uint32(v) => res.push(*v),
+                        GgufValue::Int32(v) => res.push(*v as u32),
+                        GgufValue::Uint64(v) => res.push(*v as u32),
+                        GgufValue::Int64(v) => res.push(*v as u32),
+                        _ => return None,
+                    }
+                }
+                Some(res)
+            }
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn get_bool_array(&self, key: &str) -> Option<Vec<bool>> {
+        match self.metadata.get(key) {
+            Some(GgufValue::Array(arr)) => {
+                let mut res = Vec::with_capacity(arr.len());
+                for item in arr {
+                    match item {
+                        GgufValue::Bool(v) => res.push(*v),
+                        GgufValue::Uint32(v) => res.push(*v != 0),
+                        GgufValue::Int32(v) => res.push(*v != 0),
+                        GgufValue::Uint8(v) => res.push(*v != 0),
+                        _ => return None,
+                    }
+                }
+                Some(res)
+            }
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn architecture(&self) -> &str {
         self.get_string("general.architecture").unwrap_or("llama")
     }

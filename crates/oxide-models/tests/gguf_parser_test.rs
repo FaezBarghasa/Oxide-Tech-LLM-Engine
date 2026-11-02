@@ -66,6 +66,7 @@ fn test_real_gguf_models_in_home_dir() {
     }
 
     let targets = [
+        "LFM3-1.7B-Q4_K_M.gguf",
         "Ornith-1.5-9B-Q4_K_M.gguf",
         "NVIDIA-Nemotron-3.5-Bolt-E4B-Uncensored-AD-Q4_K_M-00001-of-00001.gguf",
         "gemma-4-e2b-it.Q8_0.gguf",
@@ -93,6 +94,24 @@ fn test_real_gguf_models_in_home_dir() {
             println!("  'What is 2 + 2?' -> {:?}", encoded);
             println!("  Decoded -> {:?}", tok.decode(&encoded));
 
+            if name.contains("LFM3") {
+                println!("  -- LFM3 metadata --");
+                for (k, v) in &parsed.metadata {
+                    if k.starts_with("lfm3.") {
+                        println!("    {k} = {v:?}");
+                    }
+                }
+                println!("  -- LFM3 blk.0, blk.1, blk.2 tensors --");
+                for t_name in parsed.tensors.keys() {
+                    if t_name.starts_with("blk.0.") || t_name.starts_with("blk.1.") || t_name.starts_with("blk.2.") {
+                        let t = &parsed.tensors[t_name];
+                        println!(
+                            "    {}: dims={:?}, quant={:?}",
+                            t_name, t.dimensions, t.quant_type
+                        );
+                    }
+                }
+            }
             if name.contains("Ornith") {
                 println!("  -- Ornith blk.0 and blk.1 tensors --");
                 for t_name in parsed.tensors.keys() {
@@ -145,6 +164,36 @@ fn test_real_gguf_models_in_home_dir() {
                             t.dimensions, t.quant_type
                         );
                     }
+                }
+            }
+            if name == &"LFM3-1.7B-Q4_K_M.gguf" {
+                println!("--- Testing Llama3Model forward step & prefill on {} ---", name);
+                let mut model = oxide_models::llama3::Llama3Model::new_empty(cfg);
+                let static_slice: &'static [u8] =
+                    unsafe { std::slice::from_raw_parts(mmap.as_ptr(), mmap.len()) };
+                model
+                    .load_from_gguf(&parsed, static_slice)
+                    .expect("load_from_gguf LFM3");
+                let mut kv_cache = model.create_kv_cache();
+                let mut scratch = model.create_scratch();
+                let prompt = "Liquid foundation models are";
+                let prompt_tokens = tok.encode(prompt);
+                println!("LFM3 prompt tokens (len={}): {:?}", prompt_tokens.len(), prompt_tokens);
+                for (pos, &t) in prompt_tokens.iter().enumerate() {
+                    model
+                        .forward_step_with_scratch(t, pos, &mut kv_cache, &mut scratch)
+                        .expect("forward_step");
+                    let norm = oxide_quant::simd::dot_f32(&scratch.hidden, &scratch.hidden).sqrt();
+                    println!("  LFM3 pos {pos} (token {t}): hidden norm = {norm:.4}");
+                }
+                let mut indexed_logits: Vec<_> =
+                    scratch.logits.iter().copied().enumerate().collect();
+                indexed_logits
+                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                println!("Top 5 logits after prompt:");
+                for (rank, (idx, val)) in indexed_logits.iter().take(5).enumerate() {
+                    let text = tok.decode_token(*idx as u32);
+                    println!("  #{rank}: token {idx} ('{text}') = {val:.4}");
                 }
             }
             if name == &"gemma-4-e2b-it.Q8_0.gguf" {

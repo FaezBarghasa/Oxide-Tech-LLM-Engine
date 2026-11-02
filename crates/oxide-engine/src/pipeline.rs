@@ -269,6 +269,29 @@ impl SpecializedPipeline {
                     "Prefill completed without producing sampled token".to_string(),
                 )
             })
+        } else if let Self::Llama3Dense {
+            model,
+            kv_cache,
+            seq_positions,
+            scratch,
+        } = self
+        {
+            let seq_id = 1u64;
+            let cache = kv_cache.entry(seq_id).or_insert_with(|| model.create_kv_cache());
+            let start_pos = *seq_positions.entry(seq_id).or_insert(0);
+            let logits = model.forward_batch(prompt_tokens, start_pos, cache)?;
+            seq_positions.insert(seq_id, start_pos + prompt_tokens.len());
+            scratch.logits = logits;
+            // Greedy / argmax sampling for prefill prompt exit
+            let mut best_id = 0u32;
+            let mut best_val = f32::NEG_INFINITY;
+            for (i, &l) in scratch.logits.iter().enumerate() {
+                if l > best_val {
+                    best_val = l;
+                    best_id = i as u32;
+                }
+            }
+            Ok(best_id)
         } else {
             let mut cur = 1u32;
             for (i, &tok) in prompt_tokens.iter().enumerate() {
@@ -320,11 +343,9 @@ impl SpecializedPipeline {
                 scratch,
             } => {
                 let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
-                let seq_kv = kv_cache.entry(cmd.sequence_id).or_insert_with(|| {
-                    (0..model.config.num_layers)
-                        .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
-                        .collect()
-                });
+                let seq_kv = kv_cache
+                    .entry(cmd.sequence_id)
+                    .or_insert_with(|| model.create_kv_cache());
                 model.forward_step_with_scratch(cmd.input_token, *pos, seq_kv, scratch)?;
                 *pos += 1;
                 let mut max_idx = 0;
@@ -379,11 +400,9 @@ impl SpecializedPipeline {
                 topology,
             } => {
                 let pos = seq_positions.entry(cmd.sequence_id).or_insert(0);
-                let seq_kv = kv_cache.entry(cmd.sequence_id).or_insert_with(|| {
-                    (0..model.config.num_layers)
-                        .map(|_| oxide_models::llama3::Llama3KvCacheLayer::default())
-                        .collect()
-                });
+                let seq_kv = kv_cache
+                    .entry(cmd.sequence_id)
+                    .or_insert_with(|| model.create_kv_cache());
 
                 // 1. Token Embedding lookup on host DDR5
                 let h = model.config.hidden_dim;

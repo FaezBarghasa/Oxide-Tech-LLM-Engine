@@ -57,6 +57,7 @@ pub mod needle;
 pub mod projector;
 pub mod registry;
 pub mod rope;
+pub mod shortconv;
 pub mod specialized;
 pub mod speculative;
 pub mod tokenizer;
@@ -68,6 +69,7 @@ pub use decision::{
     DecisionScorer, LabelLogits, LabelPrompt, LabelPromptResult, MAX_LABEL_PROMPTS,
     MAX_LABELS_PER_PROMPT, TokenizedLabelPrompt, shared_prefix_len, softmax,
 };
+pub use shortconv::{Lfm3ShortConvLayer, ShortConv1DState};
 pub use dflash::{DFlashConfig, DFlashModel, MedusaConfig, MedusaTreeDrafter};
 pub use dspark::{DSparkConfig, DSparkModel};
 pub use gdn::{GatedDeltaNet, GdnReplayState, GdnStepInputs, GdnUpdateRecord};

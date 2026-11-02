@@ -659,7 +659,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let dt_real_stream = t_real0.elapsed().as_secs_f64() * 1000.0 / real_iters as f64;
 
             // TEST: Capture the exact same 36-layer loop into a CUDA Graph!
-            unsafe {
+            {
                 let _ = eng.backend.graph_manager.begin_capture(stream);
                 for l in 0..36 {
                     let lyr = &eng.backend.layers[l];
@@ -823,11 +823,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     stream,
                 );
             }
-            if let Ok(graph_h) = unsafe { eng.backend.graph_manager.end_capture(stream, "test_36_layer_graph", 36, 1) } {
+            if let Ok(graph_h) =
+                eng.backend
+                    .graph_manager
+                    .end_capture(stream, "test_36_layer_graph", 36, 1)
+            {
                 let _ = stream_obj.synchronize();
                 let t_g0 = Instant::now();
                 for _ in 0..20 {
-                    unsafe { let _ = eng.backend.graph_manager.launch_graph(graph_h, stream); }
+                    let _ = eng.backend.graph_manager.launch_graph(graph_h, stream);
                 }
                 let _ = stream_obj.synchronize();
                 let dt_graph_test = t_g0.elapsed().as_secs_f64() * 1000.0 / 20.0;

@@ -23,6 +23,9 @@ pub struct Llama3Config {
     pub sliding_window: Option<usize>,
     pub is_gemma: bool,
     pub is_qwen: bool,
+    pub is_lfm3: bool,
+    pub shortconv_layers_mask: u64,
+    pub conv_l_cache: usize,
     pub final_logit_softcapping: Option<u32>,
     pub rope_scaling_factor: Option<u32>,
     pub rope_scaling_orig_ctx: Option<usize>,
@@ -47,6 +50,9 @@ impl Default for Llama3Config {
             sliding_window: None,
             is_gemma: false,
             is_qwen: false,
+            is_lfm3: false,
+            shortconv_layers_mask: 0,
+            conv_l_cache: 7,
             final_logit_softcapping: None,
             rope_scaling_factor: None,
             rope_scaling_orig_ctx: None,
@@ -75,9 +81,21 @@ impl Llama3Config {
             sliding_window: None,
             is_gemma: false,
             is_qwen: false,
+            is_lfm3: false,
+            shortconv_layers_mask: 0,
+            conv_l_cache: 7,
             final_logit_softcapping: None,
             rope_scaling_factor: None,
             rope_scaling_orig_ctx: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_layer_shortconv(&self, layer_idx: usize) -> bool {
+        if layer_idx < 64 {
+            (self.shortconv_layers_mask & (1u64 << layer_idx)) != 0
+        } else {
+            false
         }
     }
 
@@ -133,6 +151,9 @@ impl Llama3Config {
             sliding_window: None,
             is_gemma: false,
             is_qwen: false,
+            is_lfm3: false,
+            shortconv_layers_mask: 0,
+            conv_l_cache: 7,
             final_logit_softcapping: None,
             rope_scaling_factor: None,
             rope_scaling_orig_ctx: None,
@@ -229,6 +250,31 @@ impl Llama3Config {
 
         let is_gemma = arch.contains("gemma");
         let is_qwen = arch.contains("qwen");
+        let is_lfm3 = arch == "lfm3" || arch == "lfm";
+        let conv_l_cache = gguf
+            .get_u32(&format!("{arch}.shortconv.l_cache"))
+            .unwrap_or(7) as usize;
+        let mut shortconv_layers_mask = 0u64;
+        if is_lfm3 {
+            if let Some(kv_counts) =
+                gguf.get_u32_array(&format!("{arch}.attention.head_count_kv"))
+            {
+                for (i, &kv_cnt) in kv_counts.iter().enumerate().take(num_layers) {
+                    if kv_cnt == 0 && i < 64 {
+                        shortconv_layers_mask |= 1u64 << i;
+                    }
+                }
+            } else {
+                for i in 0..num_layers.min(64) {
+                    if gguf
+                        .tensors
+                        .contains_key(&format!("blk.{i}.shortconv.conv.weight"))
+                    {
+                        shortconv_layers_mask |= 1u64 << i;
+                    }
+                }
+            }
+        }
         let final_logit_softcapping = gguf
             .get_f32(&format!("{arch}.final_logit_softcapping"))
             .map(f32::to_bits);
@@ -257,6 +303,9 @@ impl Llama3Config {
             sliding_window,
             is_gemma,
             is_qwen,
+            is_lfm3,
+            shortconv_layers_mask,
+            conv_l_cache,
             final_logit_softcapping,
             rope_scaling_factor,
             rope_scaling_orig_ctx,
@@ -304,6 +353,7 @@ pub struct Llama3KvCacheLayer {
     pub k: Vec<f32>, // shape: [seq_len, num_kv_heads * head_dim]
     pub v: Vec<f32>, // shape: [seq_len, num_kv_heads * head_dim]
     pub current_len: usize,
+    pub shortconv_state: Option<crate::shortconv::ShortConv1DState>,
 }
 
 impl Llama3KvCacheLayer {
@@ -313,6 +363,7 @@ impl Llama3KvCacheLayer {
             k: Vec::with_capacity(max_seq_len * kv_dim),
             v: Vec::with_capacity(max_seq_len * kv_dim),
             current_len: 0,
+            shortconv_state: None,
         }
     }
 
@@ -326,6 +377,9 @@ impl Llama3KvCacheLayer {
         self.k.clear();
         self.v.clear();
         self.current_len = 0;
+        if let Some(sc) = &mut self.shortconv_state {
+            sc.reset();
+        }
     }
 }
 
@@ -1274,7 +1328,37 @@ impl QuantizedTensor {
         }
     }
 
+    /// High-performance multithreaded GEMM over a batch of pre-quantized activations for Prefill.
+    /// Streams model weights from RAM once per layer across all B tokens in the prompt.
+    pub fn gemm_batch(
+        &self,
+        batch_q8: &[Vec<oxide_quant::int_quant::BlockQ8_K>],
+        batch_f32: &[&[f32]],
+        output: &mut [f32],
+    ) {
+        let b = batch_q8.len();
+        if b == 0 {
+            return;
+        }
+        let m = self.rows();
+        match self {
+            Self::Q4_K { blocks, n, .. } => {
+                oxide_quant::simd::gemm_q4_k_prequantized_batch(blocks.as_ref(), batch_q8, m, *n, output);
+            }
+            Self::Q6_K { blocks, n, .. } => {
+                oxide_quant::simd::gemm_q6_k_prequantized_batch(blocks.as_ref(), batch_q8, m, *n, output);
+            }
+            _ => {
+                for (t, vec) in batch_f32.iter().enumerate() {
+                    let out_slice = &mut output[t * m..(t + 1) * m];
+                    self.gemv(vec, out_slice);
+                }
+            }
+        }
+    }
+
     /// Fused 3-way projection (e.g. Q, K, V) over the same normalized input vector.
+    #[allow(clippy::too_many_arguments)]
     pub fn fused_gemv_3way(
         t1: &Self,
         out1: &mut [f32],
@@ -1481,6 +1565,8 @@ pub struct Llama3LayerWeights {
     pub inp_gate: Option<QuantizedTensor>, // [256, hidden_dim] (Gemma 4 PLE input gate)
     pub proj: Option<QuantizedTensor>, // [hidden_dim, 256] (Gemma 4 PLE projection)
     pub post_norm: Vec<f32>, // [hidden_dim] (Gemma 4 layer end norm)
+    pub shortconv: Option<crate::shortconv::Lfm3ShortConvLayer>,
+    pub attn_gate: Option<QuantizedTensor>, // [num_heads, hidden_dim] (LFM3 attention per-head gate)
 }
 
 impl Llama3LayerWeights {
@@ -1507,6 +1593,8 @@ impl Llama3LayerWeights {
             inp_gate: None,
             proj: None,
             post_norm: Vec::new(),
+            shortconv: None,
+            attn_gate: None,
         }
     }
 
@@ -1573,6 +1661,8 @@ impl Llama3LayerWeights {
             inp_gate: None,
             proj: None,
             post_norm: Vec::new(),
+            shortconv: None,
+            attn_gate: None,
         }
     }
 }
@@ -2895,6 +2985,45 @@ impl Llama3Model {
                         &mut layer.post_norm,
                     );
                 }
+
+                let conv_w_name = format!("blk.{i}.shortconv.conv.weight");
+                let conv_in_name = format!("blk.{i}.shortconv.in_proj.weight");
+                let conv_out_name = format!("blk.{i}.shortconv.out_proj.weight");
+
+                if gguf.tensors.contains_key(&conv_w_name) {
+                    if let (Some(in_proj), Some(out_proj)) = (
+                        Self::extract_gguf_tensor(gguf, &conv_in_name, data_slice, 3 * h, h),
+                        Self::extract_gguf_tensor(gguf, &conv_out_name, data_slice, h, h),
+                    ) {
+                        let k_size = 7;
+                        let mut conv_weights = vec![0.0f32; h * k_size];
+                        Self::extract_gguf_tensor_to_buffer(
+                            gguf,
+                            &conv_w_name,
+                            data_slice,
+                            &mut conv_weights,
+                        );
+                        layer.shortconv = Some(crate::shortconv::Lfm3ShortConvLayer {
+                            in_proj,
+                            conv_weights,
+                            conv_bias: None,
+                            out_proj,
+                            kernel_size: k_size,
+                            channels: h,
+                        });
+                    }
+                }
+
+                let attn_gate_name = format!("blk.{i}.attn_gate.weight");
+                if let Some(t) = Self::extract_gguf_tensor(
+                    gguf,
+                    &attn_gate_name,
+                    data_slice,
+                    self.config.num_heads,
+                    h,
+                ) {
+                    layer.attn_gate = Some(t);
+                }
             });
 
         if let Some(t) = gguf.tensors.get("per_layer_token_embd.weight") {
@@ -3012,6 +3141,30 @@ impl Llama3Model {
         scratch
     }
 
+    /// Create a single KV cache layer with initialized ShortConv state if applicable.
+    pub fn create_kv_cache_layer(&self, layer_idx: usize) -> Llama3KvCacheLayer {
+        let mut layer = Llama3KvCacheLayer::default();
+        if self.config.is_layer_shortconv(layer_idx) {
+            let k_size = if self.config.conv_l_cache > 0 {
+                self.config.conv_l_cache
+            } else {
+                7
+            };
+            layer.shortconv_state = Some(crate::shortconv::ShortConv1DState::new(
+                self.config.hidden_dim,
+                k_size,
+            ));
+        }
+        layer
+    }
+
+    /// Pre-allocate KV cache layers for all transformer blocks in this model.
+    pub fn create_kv_cache(&self) -> Vec<Llama3KvCacheLayer> {
+        (0..self.config.num_layers)
+            .map(|i| self.create_kv_cache_layer(i))
+            .collect()
+    }
+
     /// Computes a single autoregressive forward step reusing pre-allocated scratch buffers.
     #[allow(clippy::many_single_char_names)]
     pub fn forward_step_with_scratch(
@@ -3020,6 +3173,19 @@ impl Llama3Model {
         position: usize,
         kv_cache: &mut [Llama3KvCacheLayer],
         scratch: &mut Llama3ScratchBuffers,
+    ) -> Result<()> {
+        self.forward_step_with_scratch_flags(token_id, position, kv_cache, scratch, true)
+    }
+
+    /// Computes a single autoregressive forward step with optional logits evaluation.
+    #[allow(clippy::many_single_char_names)]
+    pub fn forward_step_with_scratch_flags(
+        &self,
+        token_id: u32,
+        position: usize,
+        kv_cache: &mut [Llama3KvCacheLayer],
+        scratch: &mut Llama3ScratchBuffers,
+        compute_logits: bool,
     ) -> Result<()> {
         let h = self.config.hidden_dim;
         let tok_idx = (token_id as usize) % self.config.vocab_size;
@@ -3055,6 +3221,10 @@ impl Llama3Model {
             self.forward_layer(
                 layer_idx, layer, position, kv_cache, scratch, eps, h, q_dim, kv_dim,
             );
+        }
+
+        if !compute_logits {
+            return Ok(());
         }
 
         // 3. Final RMSNorm
@@ -3096,30 +3266,7 @@ impl Llama3Model {
         _q_dim: usize,
         _kv_dim: usize,
     ) {
-        let cur_q_dim = layer.q_proj.rows();
-        let cur_k_dim = layer.k_proj.rows();
-        let cur_v_dim = layer.v_proj.rows();
-
-        if cur_q_dim > 0 && cur_k_dim > 0 && cur_v_dim > 0 {
-            let cur_heads = self.config.num_heads;
-            let cur_kv_heads = self.config.num_kv_heads;
-            let cur_head_dim = cur_q_dim
-                .checked_div(cur_heads)
-                .unwrap_or(self.config.head_dim);
-
-            let is_swa =
-                cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
-            let sliding_window = if is_swa {
-                self.config.sliding_window
-            } else {
-                None
-            };
-            let rope_engine = if cur_head_dim <= self.config.head_dim {
-                self.rope_swa.as_ref().unwrap_or(&self.rope)
-            } else {
-                &self.rope
-            };
-
+        if let Some(ref shortconv) = layer.shortconv {
             Self::rms_norm(
                 &scratch.hidden[..h],
                 &layer.attn_norm,
@@ -3127,140 +3274,28 @@ impl Llama3Model {
                 eps,
                 self.config.is_gemma,
             );
-            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                eprintln!("[CPU L0] attn_norm: {:?}", &scratch.norm_hidden[..4]);
-            }
 
-            // Fused Q, K, V Projections via SIMD GEMV
-            QuantizedTensor::fused_gemv_3way(
-                &layer.q_proj,
-                &mut scratch.q,
-                &layer.k_proj,
-                &mut scratch.k,
-                &layer.v_proj,
-                &mut scratch.v,
-                &scratch.norm_hidden[..h],
-                &mut scratch.q8_k_act,
-            );
-
-            // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
-            if !layer.q_bias.is_empty() {
-                for (q_val, &b_val) in scratch.q[..cur_q_dim].iter_mut().zip(&layer.q_bias) {
-                    *q_val += b_val;
-                }
-            }
-            if !layer.k_bias.is_empty() {
-                for (k_val, &b_val) in scratch.k[..cur_k_dim].iter_mut().zip(&layer.k_bias) {
-                    *k_val += b_val;
-                }
-            }
-            if !layer.v_bias.is_empty() {
-                for (v_val, &b_val) in scratch.v[..cur_v_dim].iter_mut().zip(&layer.v_bias) {
-                    *v_val += b_val;
-                }
-            }
-            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                eprintln!("[CPU L0] q_after_bias: {:?}", &scratch.q[..4]);
-                eprintln!("[CPU L0] k_after_bias: {:?}", &scratch.k[..4]);
-                eprintln!("[CPU L0] v_after_bias: {:?}", &scratch.v[..4]);
-            }
-
-            // QK-Norm (applied per-head before RoPE)
-            let hd = cur_head_dim;
-            if !layer.attn_q_norm.is_empty() && layer.attn_q_norm.len() >= hd {
-                let mut tmp = [0.0f32; 512];
-                if hd <= tmp.len() {
-                    for head_idx in 0..cur_heads {
-                        let start = head_idx * hd;
-                        let end = start + hd;
-                        if end <= scratch.q.len() {
-                            tmp[..hd].copy_from_slice(&scratch.q[start..end]);
-                            Self::rms_norm(
-                                &tmp[..hd],
-                                &layer.attn_q_norm[..hd],
-                                &mut scratch.q[start..end],
-                                eps,
-                                false,
-                            );
-                        }
-                    }
-                }
-            }
-            if !layer.attn_k_norm.is_empty() && layer.attn_k_norm.len() >= hd {
-                let mut tmp = [0.0f32; 512];
-                if hd <= tmp.len() {
-                    for kv_head_idx in 0..cur_kv_heads {
-                        let start = kv_head_idx * hd;
-                        let end = start + hd;
-                        if end <= scratch.k.len() {
-                            tmp[..hd].copy_from_slice(&scratch.k[start..end]);
-                            Self::rms_norm(
-                                &tmp[..hd],
-                                &layer.attn_k_norm[..hd],
-                                &mut scratch.k[start..end],
-                                eps,
-                                false,
-                            );
-                        }
-                    }
-                }
-            }
-
-            // RoPE Rotary Embedding
-            for head_idx in 0..cur_heads {
-                let start = head_idx * cur_head_dim;
-                let end = start + cur_head_dim;
-                if end <= scratch.q.len() {
-                    rope_engine.apply_rotary_in_place(&mut scratch.q[start..end], position);
-                }
-            }
-            for kv_head_idx in 0..cur_kv_heads {
-                let start = kv_head_idx * cur_head_dim;
-                let end = start + cur_head_dim;
-                if end <= scratch.k.len() {
-                    rope_engine.apply_rotary_in_place(&mut scratch.k[start..end], position);
-                }
-            }
-
-            // KV Cache append
             if let Some(layer_cache) = kv_cache.get_mut(layer_idx) {
-                layer_cache.append_kv(&scratch.k[..cur_k_dim], &scratch.v[..cur_v_dim]);
-            }
+                let k_size = if self.config.conv_l_cache > 0 {
+                    self.config.conv_l_cache
+                } else {
+                    7
+                };
+                let conv_state = layer_cache
+                    .shortconv_state
+                    .get_or_insert_with(|| crate::shortconv::ShortConv1DState::new(h, k_size));
 
-            let context_len = position + 1;
-            let (k_buf, v_buf) = if let Some(layer_cache) = kv_cache.get(layer_idx) {
-                (&layer_cache.k[..], &layer_cache.v[..])
-            } else {
-                (&scratch.k[..cur_k_dim], &scratch.v[..cur_v_dim])
-            };
-
-            // Attention Output Projection with GQA over full historical KV context
-            for head in 0..cur_heads {
-                let q_start = head * cur_head_dim;
-                let q_slice = &scratch.q[q_start..q_start + cur_head_dim];
-                let out_slice = &mut scratch.attn_out[q_start..q_start + cur_head_dim];
-
-                let kv_head = head / (cur_heads / cur_kv_heads.max(1)).max(1);
-
-                self.flash_attn.forward_decode_gqa_dyn(
-                    q_slice,
-                    k_buf,
-                    v_buf,
-                    kv_head,
-                    cur_kv_heads,
-                    cur_head_dim,
-                    context_len,
-                    sliding_window,
-                    out_slice,
+                shortconv.forward_decode(
+                    &scratch.norm_hidden[..h],
+                    conv_state,
+                    &mut scratch.shortconv_bcx,
+                    &mut scratch.shortconv_u,
+                    &mut scratch.shortconv_y,
+                    &mut scratch.o_proj_out[..h],
                 );
             }
 
-            let o_in_dim = layer.o_proj.cols();
-            layer
-                .o_proj
-                .gemv(&scratch.attn_out[..o_in_dim], &mut scratch.o_proj_out[..h]);
-
-            // Post-attention norm (Gemma 2 / Gemma 4 / Nemotron)
+            // Post-attention norm (Gemma 2 / Gemma 4 / Nemotron / LFM3)
             if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
                 let mut tmp = [0.0f32; 4096];
                 if h <= tmp.len() {
@@ -3279,8 +3314,208 @@ impl Llama3Model {
             for i in 0..h {
                 scratch.hidden[i] += scratch.o_proj_out[i];
             }
-            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                eprintln!("[CPU L0] hid_after_attn: {:?}", &scratch.hidden[..4]);
+        } else {
+            let cur_q_dim = layer.q_proj.rows();
+            let cur_k_dim = layer.k_proj.rows();
+            let cur_v_dim = layer.v_proj.rows();
+
+            if cur_q_dim > 0 && cur_k_dim > 0 && cur_v_dim > 0 {
+                let cur_heads = self.config.num_heads;
+                let cur_kv_heads = self.config.num_kv_heads;
+                let cur_head_dim = cur_q_dim
+                    .checked_div(cur_heads)
+                    .unwrap_or(self.config.head_dim);
+
+                let is_swa =
+                    cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
+                let sliding_window = if is_swa {
+                    self.config.sliding_window
+                } else {
+                    None
+                };
+                let rope_engine = if cur_head_dim <= self.config.head_dim {
+                    self.rope_swa.as_ref().unwrap_or(&self.rope)
+                } else {
+                    &self.rope
+                };
+
+                Self::rms_norm(
+                    &scratch.hidden[..h],
+                    &layer.attn_norm,
+                    &mut scratch.norm_hidden[..h],
+                    eps,
+                    self.config.is_gemma,
+                );
+                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    eprintln!("[CPU L0] attn_norm: {:?}", &scratch.norm_hidden[..4]);
+                }
+
+                // Fused Q, K, V Projections via SIMD GEMV
+                QuantizedTensor::fused_gemv_3way(
+                    &layer.q_proj,
+                    &mut scratch.q,
+                    &layer.k_proj,
+                    &mut scratch.k,
+                    &layer.v_proj,
+                    &mut scratch.v,
+                    &scratch.norm_hidden[..h],
+                    &mut scratch.q8_k_act,
+                );
+
+                // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
+                if !layer.q_bias.is_empty() {
+                    for (q_val, &b_val) in scratch.q[..cur_q_dim].iter_mut().zip(&layer.q_bias) {
+                        *q_val += b_val;
+                    }
+                }
+                if !layer.k_bias.is_empty() {
+                    for (k_val, &b_val) in scratch.k[..cur_k_dim].iter_mut().zip(&layer.k_bias) {
+                        *k_val += b_val;
+                    }
+                }
+                if !layer.v_bias.is_empty() {
+                    for (v_val, &b_val) in scratch.v[..cur_v_dim].iter_mut().zip(&layer.v_bias) {
+                        *v_val += b_val;
+                    }
+                }
+                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    eprintln!("[CPU L0] q_after_bias: {:?}", &scratch.q[..4]);
+                    eprintln!("[CPU L0] k_after_bias: {:?}", &scratch.k[..4]);
+                    eprintln!("[CPU L0] v_after_bias: {:?}", &scratch.v[..4]);
+                }
+
+                // QK-Norm (applied per-head before RoPE)
+                let hd = cur_head_dim;
+                if !layer.attn_q_norm.is_empty() && layer.attn_q_norm.len() >= hd {
+                    let mut tmp = [0.0f32; 512];
+                    if hd <= tmp.len() {
+                        for head_idx in 0..cur_heads {
+                            let start = head_idx * hd;
+                            let end = start + hd;
+                            if end <= scratch.q.len() {
+                                tmp[..hd].copy_from_slice(&scratch.q[start..end]);
+                                Self::rms_norm(
+                                    &tmp[..hd],
+                                    &layer.attn_q_norm[..hd],
+                                    &mut scratch.q[start..end],
+                                    eps,
+                                    false,
+                                );
+                            }
+                        }
+                    }
+                }
+                if !layer.attn_k_norm.is_empty() && layer.attn_k_norm.len() >= hd {
+                    let mut tmp = [0.0f32; 512];
+                    if hd <= tmp.len() {
+                        for kv_head_idx in 0..cur_kv_heads {
+                            let start = kv_head_idx * hd;
+                            let end = start + hd;
+                            if end <= scratch.k.len() {
+                                tmp[..hd].copy_from_slice(&scratch.k[start..end]);
+                                Self::rms_norm(
+                                    &tmp[..hd],
+                                    &layer.attn_k_norm[..hd],
+                                    &mut scratch.k[start..end],
+                                    eps,
+                                    false,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // RoPE Rotary Embedding
+                for head_idx in 0..cur_heads {
+                    let start = head_idx * cur_head_dim;
+                    let end = start + cur_head_dim;
+                    if end <= scratch.q.len() {
+                        rope_engine.apply_rotary_in_place(&mut scratch.q[start..end], position);
+                    }
+                }
+                for kv_head_idx in 0..cur_kv_heads {
+                    let start = kv_head_idx * cur_head_dim;
+                    let end = start + cur_head_dim;
+                    if end <= scratch.k.len() {
+                        rope_engine.apply_rotary_in_place(&mut scratch.k[start..end], position);
+                    }
+                }
+
+                // KV Cache append
+                if let Some(layer_cache) = kv_cache.get_mut(layer_idx) {
+                    layer_cache.append_kv(&scratch.k[..cur_k_dim], &scratch.v[..cur_v_dim]);
+                }
+
+                let context_len = position + 1;
+                let (k_buf, v_buf) = if let Some(layer_cache) = kv_cache.get(layer_idx) {
+                    (&layer_cache.k[..], &layer_cache.v[..])
+                } else {
+                    (&scratch.k[..cur_k_dim], &scratch.v[..cur_v_dim])
+                };
+
+                // Attention Output Projection with GQA over full historical KV context
+                for head in 0..cur_heads {
+                    let q_start = head * cur_head_dim;
+                    let q_slice = &scratch.q[q_start..q_start + cur_head_dim];
+                    let out_slice = &mut scratch.attn_out[q_start..q_start + cur_head_dim];
+
+                    let kv_head = head / (cur_heads / cur_kv_heads.max(1)).max(1);
+
+                    self.flash_attn.forward_decode_gqa_dyn(
+                        q_slice,
+                        k_buf,
+                        v_buf,
+                        kv_head,
+                        cur_kv_heads,
+                        cur_head_dim,
+                        context_len,
+                        sliding_window,
+                        out_slice,
+                    );
+                }
+
+                // LFM3 per-head sigmoid attention gate if present
+                if let Some(ref attn_gate) = layer.attn_gate {
+                    let mut gate_buf = [0.0f32; 128];
+                    if cur_heads <= gate_buf.len() {
+                        attn_gate.gemv(&scratch.norm_hidden[..h], &mut gate_buf[..cur_heads]);
+                        for head in 0..cur_heads {
+                            let g = 1.0 / (1.0 + (-gate_buf[head]).exp());
+                            let start = head * cur_head_dim;
+                            for val in &mut scratch.attn_out[start..start + cur_head_dim] {
+                                *val *= g;
+                            }
+                        }
+                    }
+                }
+
+                let o_in_dim = layer.o_proj.cols();
+                layer
+                    .o_proj
+                    .gemv(&scratch.attn_out[..o_in_dim], &mut scratch.o_proj_out[..h]);
+
+                // Post-attention norm (Gemma 2 / Gemma 4 / Nemotron)
+                if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
+                    let mut tmp = [0.0f32; 4096];
+                    if h <= tmp.len() {
+                        tmp[..h].copy_from_slice(&scratch.o_proj_out[..h]);
+                        Self::rms_norm(
+                            &tmp[..h],
+                            &layer.post_attn_norm[..h],
+                            &mut scratch.o_proj_out[..h],
+                            eps,
+                            self.config.is_gemma,
+                        );
+                    }
+                }
+
+                // Residual 1
+                for i in 0..h {
+                    scratch.hidden[i] += scratch.o_proj_out[i];
+                }
+                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    eprintln!("[CPU L0] hid_after_attn: {:?}", &scratch.hidden[..4]);
+                }
             }
         }
 
@@ -3301,6 +3536,7 @@ impl Llama3Model {
                 &layer.up_proj,
                 &mut scratch.up[..cur_inter],
                 &scratch.ffn_norm_hidden[..h],
+                &mut scratch.q8_k_ffn_act,
             );
 
             if self.config.is_gemma {
@@ -3391,6 +3627,7 @@ impl Llama3Model {
             &layer.v_proj,
             &mut scratch.v,
             &scratch.norm_hidden,
+            &mut scratch.q8_k_act,
         );
 
         // RoPE Rotary Embedding
@@ -3463,6 +3700,7 @@ impl Llama3Model {
             &layer.up_proj,
             &mut scratch.up,
             &scratch.ffn_norm_hidden,
+            &mut scratch.q8_k_ffn_act,
         );
 
         // SwiGLU: down_proj(silu(gate) * up)
@@ -3588,25 +3826,499 @@ impl Llama3Model {
     }
 
     /// Computes batched forward pass (prefill mode) for a sequence of prompt tokens.
-    /// Ingests all tokens in order, populates the KV-cache, and returns the logits for the final token.
+    /// Executes layer-by-layer across all B prompt tokens, streaming model weights from RAM
+    /// exactly ONCE across the entire prompt instead of B separate full-model iterations.
     pub fn forward_batch(
         &self,
         tokens: &[u32],
         start_position: usize,
         kv_cache: &mut [Llama3KvCacheLayer],
     ) -> Result<Vec<f32>> {
-        if tokens.is_empty() {
+        let b = tokens.len();
+        if b == 0 {
             return Err(oxide_core::error::EngineError::BackendError(
                 "Cannot perform forward_batch on empty token slice".to_string(),
             ));
         }
 
-        let mut scratch = self.create_scratch();
-        for (idx, &token) in tokens.iter().enumerate() {
-            let pos = start_position + idx;
-            self.forward_step_with_scratch(token, pos, kv_cache, &mut scratch)?;
+        if b == 1 {
+            let mut scratch = self.create_scratch();
+            self.forward_step_with_scratch(tokens[0], start_position, kv_cache, &mut scratch)?;
+            return Ok(scratch.logits);
         }
-        Ok(scratch.logits)
+
+        let h = self.config.hidden_dim;
+        let q_dim = self.config.num_heads * self.config.head_dim;
+        let kv_dim = self.config.num_kv_heads * self.config.head_dim;
+        let eps = self.config.rms_norm_eps_f32();
+
+        // 1. Ingest embeddings for all B tokens
+        let mut batch_hidden = vec![0.0f32; b * h];
+        for (idx, &token_id) in tokens.iter().enumerate() {
+            let tok_idx = (token_id as usize) % self.config.vocab_size;
+            let hid = &mut batch_hidden[idx * h..(idx + 1) * h];
+            if let Some(ref emb_tensor) = self.token_embd_tensor {
+                emb_tensor.extract_row(tok_idx, hid);
+            } else {
+                let emb_offset = tok_idx * h;
+                if emb_offset + h <= self.token_embedding.len() {
+                    hid.copy_from_slice(&self.token_embedding[emb_offset..emb_offset + h]);
+                } else {
+                    hid.fill(0.0);
+                }
+            }
+
+            if self.config.is_gemma {
+                let scale = (h as f32).sqrt();
+                for x in hid.iter_mut() {
+                    *x *= scale;
+                }
+            }
+        }
+
+        // Pre-allocate batch working scratch buffers once
+        let mut batch_norm = vec![0.0f32; b * h];
+        let mut batch_q8 = vec![Vec::with_capacity(h / 256); b];
+        for q8 in &mut batch_q8 {
+            q8.resize(h / 256, oxide_quant::int_quant::BlockQ8_K::default());
+        }
+
+        let mut batch_q = vec![0.0f32; b * q_dim];
+        let mut batch_k = vec![0.0f32; b * kv_dim];
+        let mut batch_v = vec![0.0f32; b * kv_dim];
+        let mut batch_attn_out = vec![0.0f32; b * q_dim];
+        let mut batch_attn_q8 = vec![Vec::with_capacity(q_dim / 256); b];
+        for q8 in &mut batch_attn_q8 {
+            q8.resize(q_dim / 256, oxide_quant::int_quant::BlockQ8_K::default());
+        }
+        let mut batch_o_out = vec![0.0f32; b * h];
+
+        let mut batch_ffn_norm = vec![0.0f32; b * h];
+        let max_inter = self
+            .layers
+            .iter()
+            .map(|l| l.gate_proj.rows())
+            .max()
+            .unwrap_or(self.config.intermediate_dim);
+        let mut batch_gate = vec![0.0f32; b * max_inter];
+        let mut batch_up = vec![0.0f32; b * max_inter];
+        let mut batch_act = vec![0.0f32; b * max_inter];
+        let mut batch_act_q8 = vec![Vec::with_capacity(max_inter / 256); b];
+        for q8 in &mut batch_act_q8 {
+            q8.resize(max_inter / 256, oxide_quant::int_quant::BlockQ8_K::default());
+        }
+        let mut batch_mlp_out = vec![0.0f32; b * h];
+
+        // 2. Transformer Decoder Layers: Outer Loop = Layer, Inner Loop = Tokens
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            if let Some(ref shortconv) = layer.shortconv {
+                // RMSNorm for all B tokens
+                for t in 0..b {
+                    let hid_t = &batch_hidden[t * h..(t + 1) * h];
+                    let norm_t = &mut batch_norm[t * h..(t + 1) * h];
+                    Self::rms_norm(hid_t, &layer.attn_norm, norm_t, eps, self.config.is_gemma);
+                }
+
+                let mut batch_bcx = vec![0.0f32; b * 3 * h];
+                let mut batch_u = vec![0.0f32; b * h];
+                let mut batch_y = vec![0.0f32; b * h];
+
+                if let Some(layer_cache) = kv_cache.get_mut(layer_idx) {
+                    let k_size = if self.config.conv_l_cache > 0 {
+                        self.config.conv_l_cache
+                    } else {
+                        7
+                    };
+                    let conv_state = layer_cache
+                        .shortconv_state
+                        .get_or_insert_with(|| crate::shortconv::ShortConv1DState::new(h, k_size));
+
+                    shortconv.forward_prefill(
+                        &batch_norm[..b * h],
+                        b,
+                        conv_state,
+                        &mut batch_bcx,
+                        &mut batch_u,
+                        &mut batch_y,
+                        &mut batch_o_out[..b * h],
+                    );
+                }
+
+                // Post-attention norm (Gemma 2 / Nemotron / LFM3)
+                if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
+                    let mut tmp = [0.0f32; 4096];
+                    if h <= tmp.len() {
+                        for t in 0..b {
+                            let o_t = &mut batch_o_out[t * h..(t + 1) * h];
+                            tmp[..h].copy_from_slice(o_t);
+                            Self::rms_norm(
+                                &tmp[..h],
+                                &layer.post_attn_norm[..h],
+                                o_t,
+                                eps,
+                                self.config.is_gemma,
+                            );
+                        }
+                    }
+                }
+
+                // Residual 1
+                for t in 0..b {
+                    let hid_t = &mut batch_hidden[t * h..(t + 1) * h];
+                    let o_t = &batch_o_out[t * h..(t + 1) * h];
+                    for i in 0..h {
+                        hid_t[i] += o_t[i];
+                    }
+                }
+            } else {
+                let cur_q_dim = layer.q_proj.rows();
+                let cur_k_dim = layer.k_proj.rows();
+                let cur_v_dim = layer.v_proj.rows();
+
+                if cur_q_dim > 0 && cur_k_dim > 0 && cur_v_dim > 0 {
+                    let cur_heads = self.config.num_heads;
+                    let cur_kv_heads = self.config.num_kv_heads;
+                    let cur_head_dim = cur_q_dim
+                        .checked_div(cur_heads)
+                        .unwrap_or(self.config.head_dim);
+
+                    let is_swa =
+                        cur_head_dim <= self.config.head_dim && self.config.sliding_window.is_some();
+                    let sliding_window = if is_swa {
+                        self.config.sliding_window
+                    } else {
+                        None
+                    };
+                    let rope_engine = if cur_head_dim <= self.config.head_dim {
+                        self.rope_swa.as_ref().unwrap_or(&self.rope)
+                    } else {
+                        &self.rope
+                    };
+
+                    // A. Attention RMSNorm & Q8 quantization for all B tokens
+                    for t in 0..b {
+                        let hid_t = &batch_hidden[t * h..(t + 1) * h];
+                        let norm_t = &mut batch_norm[t * h..(t + 1) * h];
+                        Self::rms_norm(hid_t, &layer.attn_norm, norm_t, eps, self.config.is_gemma);
+                        oxide_quant::simd::quantize_row_q8_k(norm_t, &mut batch_q8[t]);
+                    }
+
+                    // B. Batched Q, K, V Projections (loading weight matrices ONCE for all B tokens)
+                    let norm_slices: Vec<&[f32]> =
+                        (0..b).map(|t| &batch_norm[t * h..(t + 1) * h]).collect();
+                    layer
+                        .q_proj
+                        .gemm_batch(&batch_q8, &norm_slices, &mut batch_q[..b * cur_q_dim]);
+                    layer
+                        .k_proj
+                        .gemm_batch(&batch_q8, &norm_slices, &mut batch_k[..b * cur_k_dim]);
+                    layer
+                        .v_proj
+                        .gemm_batch(&batch_q8, &norm_slices, &mut batch_v[..b * cur_v_dim]);
+
+                    // Biases if present (Qwen2 / Qwen3)
+                    if !layer.q_bias.is_empty() {
+                        for t in 0..b {
+                            let q_t = &mut batch_q[t * cur_q_dim..(t + 1) * cur_q_dim];
+                            for (q_val, &b_val) in q_t.iter_mut().zip(&layer.q_bias) {
+                                *q_val += b_val;
+                            }
+                        }
+                    }
+                    if !layer.k_bias.is_empty() {
+                        for t in 0..b {
+                            let k_t = &mut batch_k[t * cur_k_dim..(t + 1) * cur_k_dim];
+                            for (k_val, &b_val) in k_t.iter_mut().zip(&layer.k_bias) {
+                                *k_val += b_val;
+                            }
+                        }
+                    }
+                    if !layer.v_bias.is_empty() {
+                        for t in 0..b {
+                            let v_t = &mut batch_v[t * cur_v_dim..(t + 1) * cur_v_dim];
+                            for (v_val, &b_val) in v_t.iter_mut().zip(&layer.v_bias) {
+                                *v_val += b_val;
+                            }
+                        }
+                    }
+
+                    // Attn Q/K norm if present
+                    let hd = cur_head_dim;
+                    if !layer.attn_q_norm.is_empty() && layer.attn_q_norm.len() >= hd {
+                        let mut tmp = [0.0f32; 512];
+                        if hd <= tmp.len() {
+                            for t in 0..b {
+                                let q_t = &mut batch_q[t * cur_q_dim..(t + 1) * cur_q_dim];
+                                for head in 0..cur_heads {
+                                    let start = head * hd;
+                                    let end = start + hd;
+                                    if end <= q_t.len() {
+                                        tmp[..hd].copy_from_slice(&q_t[start..end]);
+                                        Self::rms_norm(
+                                            &tmp[..hd],
+                                            &layer.attn_q_norm[..hd],
+                                            &mut q_t[start..end],
+                                            eps,
+                                            false,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !layer.attn_k_norm.is_empty() && layer.attn_k_norm.len() >= hd {
+                        let mut tmp = [0.0f32; 512];
+                        if hd <= tmp.len() {
+                            for t in 0..b {
+                                let k_t = &mut batch_k[t * cur_k_dim..(t + 1) * cur_k_dim];
+                                for kv_head in 0..cur_kv_heads {
+                                    let start = kv_head * hd;
+                                    let end = start + hd;
+                                    if end <= k_t.len() {
+                                        tmp[..hd].copy_from_slice(&k_t[start..end]);
+                                        Self::rms_norm(
+                                            &tmp[..hd],
+                                            &layer.attn_k_norm[..hd],
+                                            &mut k_t[start..end],
+                                            eps,
+                                            false,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // C. RoPE, KV-Cache append & Attention calculation sequentially per token
+                    for t in 0..b {
+                        let pos = start_position + t;
+                        let q_t = &mut batch_q[t * cur_q_dim..(t + 1) * cur_q_dim];
+                        let k_t = &mut batch_k[t * cur_k_dim..(t + 1) * cur_k_dim];
+                        let v_t = &batch_v[t * cur_v_dim..(t + 1) * cur_v_dim];
+
+                        for head_idx in 0..cur_heads {
+                            let start = head_idx * cur_head_dim;
+                            let end = start + cur_head_dim;
+                            if end <= q_t.len() {
+                                rope_engine.apply_rotary_in_place(&mut q_t[start..end], pos);
+                            }
+                        }
+                        for kv_head_idx in 0..cur_kv_heads {
+                            let start = kv_head_idx * cur_head_dim;
+                            let end = start + cur_head_dim;
+                            if end <= k_t.len() {
+                                rope_engine.apply_rotary_in_place(&mut k_t[start..end], pos);
+                            }
+                        }
+
+                        if let Some(layer_cache) = kv_cache.get_mut(layer_idx) {
+                            layer_cache.append_kv(&k_t[..cur_k_dim], &v_t[..cur_v_dim]);
+                        }
+
+                        let context_len = pos + 1;
+                        let (k_buf, v_buf) = if let Some(layer_cache) = kv_cache.get(layer_idx) {
+                            (&layer_cache.k[..], &layer_cache.v[..])
+                        } else {
+                            (&k_t[..cur_k_dim], &v_t[..cur_v_dim])
+                        };
+
+                        let attn_out_t = &mut batch_attn_out[t * cur_q_dim..(t + 1) * cur_q_dim];
+                        for head in 0..cur_heads {
+                            let q_start = head * cur_head_dim;
+                            let q_slice = &q_t[q_start..q_start + cur_head_dim];
+                            let out_slice = &mut attn_out_t[q_start..q_start + cur_head_dim];
+
+                            let kv_head = head / (cur_heads / cur_kv_heads.max(1)).max(1);
+
+                            self.flash_attn.forward_decode_gqa_dyn(
+                                q_slice,
+                                k_buf,
+                                v_buf,
+                                kv_head,
+                                cur_kv_heads,
+                                cur_head_dim,
+                                context_len,
+                                sliding_window,
+                                out_slice,
+                            );
+                        }
+
+                        // LFM3 per-head sigmoid attention gate if present
+                        if let Some(ref attn_gate) = layer.attn_gate {
+                            let mut gate_buf = [0.0f32; 128];
+                            if cur_heads <= gate_buf.len() {
+                                let norm_t = &batch_norm[t * h..(t + 1) * h];
+                                attn_gate.gemv(norm_t, &mut gate_buf[..cur_heads]);
+                                for head in 0..cur_heads {
+                                    let g = 1.0 / (1.0 + (-gate_buf[head]).exp());
+                                    let start = head * cur_head_dim;
+                                    for val in &mut attn_out_t[start..start + cur_head_dim] {
+                                        *val *= g;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // D. Batched Output Projection O_proj (loading W_O ONCE for all B tokens)
+                    let o_in_dim = layer.o_proj.cols().min(cur_q_dim);
+                    for t in 0..b {
+                        let attn_t = &batch_attn_out[t * cur_q_dim..t * cur_q_dim + o_in_dim];
+                        oxide_quant::simd::quantize_row_q8_k(attn_t, &mut batch_attn_q8[t]);
+                    }
+                    let attn_slices: Vec<&[f32]> = (0..b)
+                        .map(|t| &batch_attn_out[t * cur_q_dim..t * cur_q_dim + o_in_dim])
+                        .collect();
+                    layer
+                        .o_proj
+                        .gemm_batch(&batch_attn_q8, &attn_slices, &mut batch_o_out);
+
+                    // Post-attention norm (Gemma 2 / Nemotron)
+                    if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
+                        let mut tmp = [0.0f32; 4096];
+                        if h <= tmp.len() {
+                            for t in 0..b {
+                                let o_t = &mut batch_o_out[t * h..(t + 1) * h];
+                                tmp[..h].copy_from_slice(o_t);
+                                Self::rms_norm(
+                                    &tmp[..h],
+                                    &layer.post_attn_norm[..h],
+                                    o_t,
+                                    eps,
+                                    self.config.is_gemma,
+                                );
+                            }
+                        }
+                    }
+
+                    // Residual 1
+                    for t in 0..b {
+                        let hid_t = &mut batch_hidden[t * h..(t + 1) * h];
+                        let o_t = &batch_o_out[t * h..(t + 1) * h];
+                        for i in 0..h {
+                            hid_t[i] += o_t[i];
+                        }
+                    }
+                }
+            }
+
+            // E. Batched FFN Projections (loading W_gate, W_up, W_down ONCE for all B tokens)
+            let cur_inter = layer.gate_proj.rows();
+            if cur_inter > 0 && layer.up_proj.rows() > 0 && layer.down_proj.rows() > 0 {
+                for t in 0..b {
+                    let hid_t = &batch_hidden[t * h..(t + 1) * h];
+                    let ffn_norm_t = &mut batch_ffn_norm[t * h..(t + 1) * h];
+                    Self::rms_norm(hid_t, &layer.ffn_norm, ffn_norm_t, eps, self.config.is_gemma);
+                    oxide_quant::simd::quantize_row_q8_k(ffn_norm_t, &mut batch_q8[t]);
+                }
+
+                let ffn_norm_slices: Vec<&[f32]> =
+                    (0..b).map(|t| &batch_ffn_norm[t * h..(t + 1) * h]).collect();
+                layer.gate_proj.gemm_batch(
+                    &batch_q8,
+                    &ffn_norm_slices,
+                    &mut batch_gate[..b * cur_inter],
+                );
+                layer
+                    .up_proj
+                    .gemm_batch(&batch_q8, &ffn_norm_slices, &mut batch_up[..b * cur_inter]);
+
+                // Activation function (SwiGLU / GeLU)
+                if self.config.is_gemma {
+                    const SQRT_2_OVER_PI: f32 = 0.797_884_6;
+                    for t in 0..b {
+                        let gate_t = &batch_gate[t * cur_inter..(t + 1) * cur_inter];
+                        let up_t = &batch_up[t * cur_inter..(t + 1) * cur_inter];
+                        let act_t = &mut batch_act[t * cur_inter..(t + 1) * cur_inter];
+                        for i in 0..cur_inter {
+                            let g = gate_t[i];
+                            let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
+                            let gelu_g = 0.5 * g * (1.0 + inner.tanh());
+                            act_t[i] = gelu_g * up_t[i];
+                        }
+                    }
+                } else {
+                    for t in 0..b {
+                        let gate_t = &batch_gate[t * cur_inter..(t + 1) * cur_inter];
+                        let up_t = &batch_up[t * cur_inter..(t + 1) * cur_inter];
+                        let act_t = &mut batch_act[t * cur_inter..(t + 1) * cur_inter];
+                        oxide_quant::simd::swiglu_f32(gate_t, up_t, act_t);
+                    }
+                }
+
+                // Down projection
+                let d_cols = layer.down_proj.cols().min(cur_inter);
+                for t in 0..b {
+                    let act_t = &batch_act[t * cur_inter..t * cur_inter + d_cols];
+                    oxide_quant::simd::quantize_row_q8_k(act_t, &mut batch_act_q8[t]);
+                }
+                let act_slices: Vec<&[f32]> = (0..b)
+                    .map(|t| &batch_act[t * cur_inter..t * cur_inter + d_cols])
+                    .collect();
+                layer
+                    .down_proj
+                    .gemm_batch(&batch_act_q8, &act_slices, &mut batch_mlp_out);
+
+                // Post-FFN norm (Gemma 2 / Nemotron)
+                if !layer.post_ffn_norm.is_empty() && layer.post_ffn_norm.len() >= h {
+                    let mut tmp = [0.0f32; 4096];
+                    if h <= tmp.len() {
+                        for t in 0..b {
+                            let mlp_t = &mut batch_mlp_out[t * h..(t + 1) * h];
+                            tmp[..h].copy_from_slice(mlp_t);
+                            Self::rms_norm(
+                                &tmp[..h],
+                                &layer.post_ffn_norm[..h],
+                                mlp_t,
+                                eps,
+                                self.config.is_gemma,
+                            );
+                        }
+                    }
+                }
+
+                // Residual 2
+                for t in 0..b {
+                    let hid_t = &mut batch_hidden[t * h..(t + 1) * h];
+                    let mlp_t = &batch_mlp_out[t * h..(t + 1) * h];
+                    for i in 0..h {
+                        hid_t[i] += mlp_t[i];
+                    }
+                }
+            }
+
+            // Layer scalar output scale (Gemma 4 / Nemotron)
+            if let Some(scale) = layer.layer_output_scale {
+                for t in 0..b {
+                    let hid_t = &mut batch_hidden[t * h..(t + 1) * h];
+                    for x in hid_t.iter_mut() {
+                        *x *= scale;
+                    }
+                }
+            }
+        }
+
+        // 3. Final RMSNorm and LM Head Evaluation on ONLY the last token
+        let last_hidden = &batch_hidden[(b - 1) * h..b * h];
+        let mut final_norm = vec![0.0f32; h];
+        Self::rms_norm(
+            last_hidden,
+            &self.output_norm,
+            &mut final_norm,
+            eps,
+            self.config.is_gemma,
+        );
+
+        let mut logits = vec![0.0f32; self.config.vocab_size];
+        self.lm_head.gemv(&final_norm, &mut logits);
+
+        if let Some(softcap) = self.config.final_logit_softcapping_f32() {
+            for logit in &mut logits {
+                *logit = softcap * (*logit / softcap).tanh();
+            }
+        }
+
+        Ok(logits)
     }
 
     #[inline(always)]
@@ -3638,6 +4350,9 @@ pub struct Llama3ScratchBuffers {
     pub logits: Vec<f32>,
     pub q8_k_act: Vec<oxide_quant::int_quant::BlockQ8_K>,
     pub q8_k_ffn_act: Vec<oxide_quant::int_quant::BlockQ8_K>,
+    pub shortconv_bcx: Vec<f32>,
+    pub shortconv_u: Vec<f32>,
+    pub shortconv_y: Vec<f32>,
 }
 
 impl Llama3ScratchBuffers {
@@ -3667,6 +4382,9 @@ impl Llama3ScratchBuffers {
             logits: vec![0.0; v],
             q8_k_act: Vec::with_capacity(h.div_ceil(256)),
             q8_k_ffn_act: Vec::with_capacity(inter.max(h).div_ceil(256)),
+            shortconv_bcx: vec![0.0; if config.is_lfm3 { 3 * h } else { 0 }],
+            shortconv_u: vec![0.0; if config.is_lfm3 { h } else { 0 }],
+            shortconv_y: vec![0.0; if config.is_lfm3 { h } else { 0 }],
         }
     }
 }

@@ -1,8 +1,8 @@
 //! Persistent Core-Pinned Spin-Barrier Thread Team for zero-overhead CPU execution.
 //! Replaces dynamic Rayon fork-join scheduler in latency-critical LLM loops.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
 /// Trait implemented by parallel workloads dispatched to `ThreadTeam`.
@@ -44,6 +44,7 @@ struct TeamShared {
     shutdown: AtomicBool,
     data_ptr: AtomicUsize,
     work_fn: AtomicUsize,
+    asleep: AtomicU32,
 }
 
 /// A zero-allocation, core-pinned thread pool for high-performance CPU inference.
@@ -52,6 +53,7 @@ pub struct ThreadTeam {
     num_threads: usize,
     shared: Arc<TeamShared>,
     workers: Vec<JoinHandle<()>>,
+    dispatch_lock: std::sync::Mutex<()>,
 }
 
 const SPIN_LIMIT: usize = 200_000;
@@ -67,6 +69,7 @@ impl ThreadTeam {
             shutdown: AtomicBool::new(false),
             data_ptr: AtomicUsize::new(0),
             work_fn: AtomicUsize::new(0),
+            asleep: AtomicU32::new(0),
         });
 
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
@@ -80,10 +83,10 @@ impl ThreadTeam {
         // Spawn worker threads 1..num_threads
         for thread_idx in 1..num_threads {
             let shared_clone = Arc::clone(&shared);
-            let core = if !core_ids.is_empty() {
-                Some(core_ids[thread_idx % core_ids.len()])
-            } else {
+            let core = if core_ids.is_empty() {
                 None
+            } else {
+                Some(core_ids[thread_idx % core_ids.len()])
             };
 
             let handle = thread::Builder::new()
@@ -94,6 +97,7 @@ impl ThreadTeam {
                     }
 
                     let mut local_epoch = 0;
+                    let worker_mask = 1u32 << (thread_idx - 1);
                     loop {
                         let mut spins = 0;
                         while shared_clone.epoch.load(Ordering::Acquire) == local_epoch {
@@ -103,7 +107,13 @@ impl ThreadTeam {
                             core::hint::spin_loop();
                             spins += 1;
                             if spins >= SPIN_LIMIT {
+                                shared_clone.asleep.fetch_or(worker_mask, Ordering::SeqCst);
+                                if shared_clone.epoch.load(Ordering::Acquire) != local_epoch {
+                                    shared_clone.asleep.fetch_and(!worker_mask, Ordering::SeqCst);
+                                    break;
+                                }
                                 thread::park();
+                                shared_clone.asleep.fetch_and(!worker_mask, Ordering::SeqCst);
                                 spins = 0;
                             }
                         }
@@ -137,6 +147,7 @@ impl ThreadTeam {
             num_threads,
             shared,
             workers,
+            dispatch_lock: std::sync::Mutex::new(()),
         }
     }
 
@@ -157,10 +168,15 @@ impl ThreadTeam {
             return;
         }
 
+        let _guard = self
+            .dispatch_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         let worker_count = self.num_threads - 1;
         self.shared.done_count.store(0, Ordering::Relaxed);
 
-        let data_ptr = (task as *const T).cast::<()>() as usize;
+        let data_ptr = std::ptr::from_ref::<T>(task).cast::<()>() as usize;
         let fn_ptr = trampoline::<T> as *const () as usize;
 
         self.shared.data_ptr.store(data_ptr, Ordering::Relaxed);
@@ -169,9 +185,14 @@ impl ThreadTeam {
         // Signal workers
         self.shared.epoch.fetch_add(1, Ordering::Release);
 
-        // Unpark workers in case they were asleep
-        for worker in &self.workers {
-            worker.thread().unpark();
+        // Only unpark workers if any were actually parked
+        let sleeping = self.shared.asleep.load(Ordering::Acquire);
+        if sleeping != 0 {
+            for (i, worker) in self.workers.iter().enumerate() {
+                if (sleeping & (1u32 << i)) != 0 {
+                    worker.thread().unpark();
+                }
+            }
         }
 
         // Master thread executes chunk 0

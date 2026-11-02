@@ -11,9 +11,10 @@
     clippy::identity_op,
     clippy::uninlined_format_args,
     clippy::too_many_lines,
-    clippy::many_single_char_names
+    clippy::many_single_char_names,
+    clippy::undocumented_unsafe_blocks,
+    clippy::collapsible_if
 )]
-use rayon::prelude::*;
 
 /// Continuous F32 dot product with dynamic microarchitecture feature detection (AVX-512, AVX2/FMA, AVX, or 8-way unrolled portable).
 #[inline(always)]
@@ -1278,7 +1279,7 @@ unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f3
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
-unsafe fn dot_q6_k_q8_k_row_avx2(
+pub(crate) unsafe fn dot_q6_k_q8_k_row_avx2(
     row_weights: &[crate::int_quant::BlockQ6_K],
     act_q8_k: &[crate::int_quant::BlockQ8_K],
 ) -> f32 {
@@ -1398,7 +1399,7 @@ unsafe fn dot_q6_k_q8_k_row_avx2(
     }
 }
 
-fn dot_q6_k_q8_k_row_portable(
+pub(crate) fn dot_q6_k_q8_k_row_portable(
     row_weights: &[crate::int_quant::BlockQ6_K],
     act_q8_k: &[crate::int_quant::BlockQ8_K],
 ) -> f32 {
@@ -1579,9 +1580,6 @@ pub fn gemv_q5_0(
             act_q8.push(crate::int_quant::BlockQ8_0::quantize(act_chunk));
         }
 
-        let num_threads = rayon::current_num_threads();
-        let chunk_size = (m / (num_threads * 4)).clamp(16, 512);
-
         if m <= 8 {
             for row in 0..m {
                 let row_offset = row * blocks_per_row;
@@ -1594,22 +1592,24 @@ pub fn gemv_q5_0(
                 };
             }
         } else {
-            output[..m].par_chunks_mut(chunk_size).enumerate().for_each(
-                |(chunk_idx, out_chunk)| {
-                    let base_row = chunk_idx * chunk_size;
-                    for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                        let row = base_row + i;
-                        let row_offset = row * blocks_per_row;
-                        // SAFETY: Target architecture supports AVX2 and FMA.
-                        *out_val = unsafe {
-                            dot_q5_0_q8_0_row_avx2(
-                                &matrix[row_offset..row_offset + blocks_per_row],
-                                &act_q8,
-                            )
-                        };
-                    }
-                },
-            );
+            let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+            let out_ptr = output.as_mut_ptr() as usize;
+
+            team.dispatch_rows(m, |start, end| {
+                let local_out = unsafe {
+                    std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+                };
+                for (i, row) in (start..end).enumerate() {
+                    let row_offset = row * blocks_per_row;
+                    // SAFETY: Target architecture supports AVX2 and FMA.
+                    local_out[i] = unsafe {
+                        dot_q5_0_q8_0_row_avx2(
+                            &matrix[row_offset..row_offset + blocks_per_row],
+                            &act_q8,
+                        )
+                    };
+                }
+            });
         }
         return;
     }
@@ -1628,26 +1628,26 @@ pub fn gemv_q5_0(
             output[row] = acc;
         }
     } else {
-        let chunk_size = (m / 32).clamp(8, 32);
-        output[..m]
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * chunk_size;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    let row = base_row + i;
-                    let row_offset = row * blocks_per_row;
-                    let mut acc = 0.0f32;
-                    for b in 0..blocks_per_row {
-                        let blk = &matrix[row_offset + b];
-                        let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
-                            .try_into()
-                            .expect("slice length 32");
-                        acc += dot_q5_0(&blk.qs, &blk.qh, act_chunk, blk.scale.to_f32());
-                    }
-                    *out_val = acc;
+        let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+        let out_ptr = output.as_mut_ptr() as usize;
+
+        team.dispatch_rows(m, |start, end| {
+            let local_out = unsafe {
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+            };
+            for (i, row) in (start..end).enumerate() {
+                let row_offset = row * blocks_per_row;
+                let mut acc = 0.0f32;
+                for b in 0..blocks_per_row {
+                    let blk = &matrix[row_offset + b];
+                    let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                        .try_into()
+                        .expect("slice length 32");
+                    acc += dot_q5_0(&blk.qs, &blk.qh, act_chunk, blk.scale.to_f32());
                 }
-            });
+                local_out[i] = acc;
+            }
+        });
     }
 }
 
@@ -1811,18 +1811,19 @@ pub fn gemv_blocked_f32(matrix: &[f32], vector: &[f32], m: usize, n: usize, outp
             output[row] = dot_f32(row_slice, vector);
         }
     } else {
-        output[..m]
-            .par_chunks_mut(16)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * 16;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    let row = base_row + i;
-                    let offset = row * n;
-                    let row_slice = &matrix[offset..offset + n];
-                    *out_val = dot_f32(row_slice, vector);
-                }
-            });
+        let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+        let out_ptr = output.as_mut_ptr() as usize;
+
+        team.dispatch_rows(m, |start, end| {
+            let local_out = unsafe {
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+            };
+            for (i, row) in (start..end).enumerate() {
+                let offset = row * n;
+                let row_slice = &matrix[offset..offset + n];
+                local_out[i] = dot_f32(row_slice, vector);
+            }
+        });
     }
 }
 
@@ -1917,16 +1918,17 @@ pub fn gemv_q8_0(
             output[row] = compute_row(row);
         }
     } else {
-        let chunk_size = (m / 32).clamp(8, 32);
-        output[..m]
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * chunk_size;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    *out_val = compute_row(base_row + i);
-                }
-            });
+        let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+        let out_ptr = output.as_mut_ptr() as usize;
+
+        team.dispatch_rows(m, |start, end| {
+            let local_out = unsafe {
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+            };
+            for (i, row) in (start..end).enumerate() {
+                local_out[i] = compute_row(row);
+            }
+        });
     }
 }
 
@@ -1961,53 +1963,55 @@ pub fn gemv_q4_0(
             output[row] = acc;
         }
     } else {
-        output[..m]
-            .par_chunks_mut(16)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * 16;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    let row = base_row + i;
-                    let row_offset = row * blocks_per_row;
-                    let mut acc = 0.0f32;
-                    for b in 0..blocks_per_row {
-                        let blk = &matrix[row_offset + b];
-                        let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
-                            .try_into()
-                            .expect("slice length 32");
-                        acc += dot_q4_0(&blk.qs, act_chunk, blk.scale.to_f32());
-                    }
-                    *out_val = acc;
+        let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+        let out_ptr = output.as_mut_ptr() as usize;
+
+        team.dispatch_rows(m, |start, end| {
+            let local_out = unsafe {
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+            };
+            for (i, row) in (start..end).enumerate() {
+                let row_offset = row * blocks_per_row;
+                let mut acc = 0.0f32;
+                for b in 0..blocks_per_row {
+                    let blk = &matrix[row_offset + b];
+                    let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                        .try_into()
+                        .expect("slice length 32");
+                    acc += dot_q4_0(&blk.qs, act_chunk, blk.scale.to_f32());
                 }
-            });
+                local_out[i] = acc;
+            }
+        });
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
-unsafe fn dot_q4_k_q8_k_row_avx2(
+pub(crate) unsafe fn dot_q4_k_q8_k_row_avx2(
     row_weights: &[crate::gguf_quants::BlockQ4_K],
     act_q8_k: &[crate::int_quant::BlockQ8_K],
 ) -> f32 {
     use core::arch::x86_64::{
-        _mm_cvtepi32_ps, _mm_fmadd_ps, _mm_hadd_epi16, _mm_madd_epi16,
-        _mm_set_epi32, _mm_set1_ps, _mm_setzero_ps, _mm_storeu_ps,
-        _mm256_add_epi32, _mm256_and_si256, _mm256_castsi128_si256,
+        _mm_cvtepi32_ps, _mm_fmadd_ps, _mm_hadd_epi16, _mm_madd_epi16, _mm_set_epi32, _mm_set1_ps,
+        _mm_setzero_ps, _mm_storeu_ps, _mm256_add_epi32, _mm256_and_si256, _mm256_castsi128_si256,
         _mm256_cvtepi32_ps, _mm256_cvtepu8_epi16, _mm256_extracti128_si256, _mm256_fmadd_ps,
-        _mm256_inserti128_si256, _mm256_loadu_si256, _mm256_madd_epi16,
-        _mm256_maddubs_epi16, _mm256_set1_epi8, _mm256_set1_ps, _mm256_setzero_ps,
-        _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_ps,
+        _mm256_inserti128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_maddubs_epi16,
+        _mm256_set1_epi8, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
+        _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_ps,
     };
 
     static K_SHUFFLE_K4: [u8; 256] = [
-        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
-        2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
-        4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,
-        6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
-        8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,
-        10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11,
-        12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13,
-        14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+        0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
+        2, 3, 2, 3, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,
+        4, 5, 4, 5, 4, 5, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
+        6, 7, 6, 7, 6, 7, 6, 7, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,
+        8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10,
+        11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 12, 13, 12, 13, 12, 13,
+        12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12,
+        13, 12, 13, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+        14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
     ];
 
     const KMASK1: u32 = 0x3f3f3f3f;
@@ -2099,7 +2103,184 @@ unsafe fn dot_q4_k_q8_k_row_avx2(
     }
 }
 
-fn dot_q4_k_q8_k_row_portable(
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q4_k_q8_k_2rows_avx2(
+    row0_weights: &[crate::gguf_quants::BlockQ4_K],
+    row1_weights: &[crate::gguf_quants::BlockQ4_K],
+    act_q8_k: &[crate::int_quant::BlockQ8_K],
+) -> (f32, f32) {
+    use core::arch::x86_64::{
+        _mm_cvtepi32_ps, _mm_fmadd_ps, _mm_hadd_epi16, _mm_madd_epi16, _mm_set_epi32, _mm_set1_ps,
+        _mm_setzero_ps, _mm_storeu_ps, _mm256_add_epi32, _mm256_and_si256, _mm256_castsi128_si256,
+        _mm256_cvtepi32_ps, _mm256_cvtepu8_epi16, _mm256_extracti128_si256, _mm256_fmadd_ps,
+        _mm256_inserti128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_maddubs_epi16,
+        _mm256_set1_epi8, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
+        _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_ps,
+    };
+
+    static K_SHUFFLE_K4: [u8; 256] = [
+        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+        0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
+        2, 3, 2, 3, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,
+        4, 5, 4, 5, 4, 5, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
+        6, 7, 6, 7, 6, 7, 6, 7, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,
+        8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10,
+        11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 12, 13, 12, 13, 12, 13,
+        12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12,
+        13, 12, 13, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+        14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+    ];
+
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
+
+    // SAFETY: caller guarantees avx2 and fma features are enabled and slices have valid aligned data.
+    unsafe {
+        let m4 = _mm256_set1_epi8(0x0F);
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+        let mut acc_m0 = _mm_setzero_ps();
+        let mut acc_m1 = _mm_setzero_ps();
+
+        let num_blocks = row0_weights
+            .len()
+            .min(row1_weights.len())
+            .min(act_q8_k.len());
+
+        for b in 0..num_blocks {
+            let x0 = &row0_weights[b];
+            let x1 = &row1_weights[b];
+            let y = &act_q8_k[b];
+
+            let d0 = y.d * x0.d.to_f32();
+            let dmin0 = -y.d * x0.dmin.to_f32();
+            let d1 = y.d * x1.d.to_f32();
+            let dmin1 = -y.d * x1.dmin.to_f32();
+
+            // Unpack scales for row 0
+            let mut utmp0 = [0u32; 4];
+            std::ptr::copy_nonoverlapping(x0.scales.as_ptr(), utmp0.as_mut_ptr().cast::<u8>(), 12);
+            utmp0[3] = ((utmp0[2] >> 4) & KMASK2) | (((utmp0[1] >> 6) & KMASK3) << 4);
+            let uaux0 = utmp0[1] & KMASK1;
+            utmp0[1] = (utmp0[2] & KMASK2) | (((utmp0[0] >> 6) & KMASK3) << 4);
+            utmp0[2] = uaux0;
+            utmp0[0] &= KMASK1;
+
+            let mins_and_scales0 = _mm256_cvtepu8_epi16(_mm_set_epi32(
+                utmp0[3] as i32,
+                utmp0[2] as i32,
+                utmp0[1] as i32,
+                utmp0[0] as i32,
+            ));
+
+            // Unpack scales for row 1
+            let mut utmp1 = [0u32; 4];
+            std::ptr::copy_nonoverlapping(x1.scales.as_ptr(), utmp1.as_mut_ptr().cast::<u8>(), 12);
+            utmp1[3] = ((utmp1[2] >> 4) & KMASK2) | (((utmp1[1] >> 6) & KMASK3) << 4);
+            let uaux1 = utmp1[1] & KMASK1;
+            utmp1[1] = (utmp1[2] & KMASK2) | (((utmp1[0] >> 6) & KMASK3) << 4);
+            utmp1[2] = uaux1;
+            utmp1[0] &= KMASK1;
+
+            let mins_and_scales1 = _mm256_cvtepu8_epi16(_mm_set_epi32(
+                utmp1[3] as i32,
+                utmp1[2] as i32,
+                utmp1[1] as i32,
+                utmp1[0] as i32,
+            ));
+
+            // Quantized activation bsums computed once for y
+            let q8sums = _mm256_loadu_si256(y.bsums.as_ptr().cast());
+            let q8s = _mm_hadd_epi16(
+                _mm256_extracti128_si256(q8sums, 0),
+                _mm256_extracti128_si256(q8sums, 1),
+            );
+
+            let prod0 = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales0, 1), q8s);
+            acc_m0 = _mm_fmadd_ps(_mm_set1_ps(dmin0), _mm_cvtepi32_ps(prod0), acc_m0);
+
+            let prod1 = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales1, 1), q8s);
+            acc_m1 = _mm_fmadd_ps(_mm_set1_ps(dmin1), _mm_cvtepi32_ps(prod1), acc_m1);
+
+            let sc128_0 = _mm256_extracti128_si256(mins_and_scales0, 0);
+            let scales0 = _mm256_inserti128_si256(_mm256_castsi128_si256(sc128_0), sc128_0, 1);
+
+            let sc128_1 = _mm256_extracti128_si256(mins_and_scales1, 0);
+            let scales1 = _mm256_inserti128_si256(_mm256_castsi128_si256(sc128_1), sc128_1, 1);
+
+            let mut sumi0 = _mm256_setzero_si256();
+            let mut sumi1 = _mm256_setzero_si256();
+            let mut q4_ptr0 = x0.qs.as_ptr();
+            let mut q4_ptr1 = x1.qs.as_ptr();
+            let mut q8_ptr = y.qs.as_ptr();
+
+            for j in 0..4 {
+                let shuf_l = _mm256_loadu_si256(K_SHUFFLE_K4.as_ptr().add((2 * j) * 32).cast());
+                let shuf_h = _mm256_loadu_si256(K_SHUFFLE_K4.as_ptr().add((2 * j + 1) * 32).cast());
+
+                let scale_l0 = _mm256_shuffle_epi8(scales0, shuf_l);
+                let scale_h0 = _mm256_shuffle_epi8(scales0, shuf_h);
+                let scale_l1 = _mm256_shuffle_epi8(scales1, shuf_l);
+                let scale_h1 = _mm256_shuffle_epi8(scales1, shuf_h);
+
+                // Load 64 activation bytes ONCE for both rows
+                let q8l = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8h = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+
+                // Row 0
+                let q4bits0 = _mm256_loadu_si256(q4_ptr0.cast());
+                q4_ptr0 = q4_ptr0.add(32);
+                let q4l0 = _mm256_and_si256(q4bits0, m4);
+                let q4h0 = _mm256_and_si256(_mm256_srli_epi16(q4bits0, 4), m4);
+
+                let mut p16l0 = _mm256_maddubs_epi16(q4l0, q8l);
+                p16l0 = _mm256_madd_epi16(scale_l0, p16l0);
+                let mut p16h0 = _mm256_maddubs_epi16(q4h0, q8h);
+                p16h0 = _mm256_madd_epi16(scale_h0, p16h0);
+                sumi0 = _mm256_add_epi32(sumi0, _mm256_add_epi32(p16l0, p16h0));
+
+                // Row 1
+                let q4bits1 = _mm256_loadu_si256(q4_ptr1.cast());
+                q4_ptr1 = q4_ptr1.add(32);
+                let q4l1 = _mm256_and_si256(q4bits1, m4);
+                let q4h1 = _mm256_and_si256(_mm256_srli_epi16(q4bits1, 4), m4);
+
+                let mut p16l1 = _mm256_maddubs_epi16(q4l1, q8l);
+                p16l1 = _mm256_madd_epi16(scale_l1, p16l1);
+                let mut p16h1 = _mm256_maddubs_epi16(q4h1, q8h);
+                p16h1 = _mm256_madd_epi16(scale_h1, p16h1);
+                sumi1 = _mm256_add_epi32(sumi1, _mm256_add_epi32(p16l1, p16h1));
+            }
+
+            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d0), _mm256_cvtepi32_ps(sumi0), acc0);
+            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d1), _mm256_cvtepi32_ps(sumi1), acc1);
+        }
+
+        let mut buf_m0 = [0.0f32; 4];
+        let mut buf_m1 = [0.0f32; 4];
+        _mm_storeu_ps(buf_m0.as_mut_ptr(), acc_m0);
+        _mm_storeu_ps(buf_m1.as_mut_ptr(), acc_m1);
+        let sum_m0 = buf_m0[0] + buf_m0[1] + buf_m0[2] + buf_m0[3];
+        let sum_m1 = buf_m1[0] + buf_m1[1] + buf_m1[2] + buf_m1[3];
+
+        let mut buf0 = [0.0f32; 8];
+        let mut buf1 = [0.0f32; 8];
+        _mm256_storeu_ps(buf0.as_mut_ptr(), acc0);
+        _mm256_storeu_ps(buf1.as_mut_ptr(), acc1);
+        let sum_acc0 =
+            (buf0[0] + buf0[1] + buf0[2] + buf0[3]) + (buf0[4] + buf0[5] + buf0[6] + buf0[7]);
+        let sum_acc1 =
+            (buf1[0] + buf1[1] + buf1[2] + buf1[3]) + (buf1[4] + buf1[5] + buf1[6] + buf1[7]);
+
+        (sum_acc0 + sum_m0, sum_acc1 + sum_m1)
+    }
+}
+
+pub(crate) fn dot_q4_k_q8_k_row_portable(
     row_weights: &[crate::gguf_quants::BlockQ4_K],
     act_q8_k: &[crate::int_quant::BlockQ8_K],
 ) -> f32 {
@@ -2131,7 +2312,8 @@ fn dot_q4_k_q8_k_row_portable(
             block_sum += (sc1 as i32) * q_sum1 + (sc2 as i32) * q_sum2;
 
             let sum_a1 = (act_blk.bsums[chunk * 4] as i32) + (act_blk.bsums[chunk * 4 + 1] as i32);
-            let sum_a2 = (act_blk.bsums[chunk * 4 + 2] as i32) + (act_blk.bsums[chunk * 4 + 3] as i32);
+            let sum_a2 =
+                (act_blk.bsums[chunk * 4 + 2] as i32) + (act_blk.bsums[chunk * 4 + 3] as i32);
             min_sum += (m1 as i32) * sum_a1 + (m2 as i32) * sum_a2;
 
             is += 2;
@@ -2156,15 +2338,33 @@ pub fn gemv_q4_k_prequantized(
     let has_avx2 = false;
 
     if m <= 8 {
-        for row in 0..m {
+        let mut row = 0;
+        while row + 1 < m {
+            let row_offset0 = row * blocks_per_row;
+            let row_offset1 = (row + 1) * blocks_per_row;
+            let r0 = &matrix[row_offset0..row_offset0 + blocks_per_row];
+            let r1 = &matrix[row_offset1..row_offset1 + blocks_per_row];
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                let (v0, v1) = unsafe { dot_q4_k_q8_k_2rows_avx2(r0, r1, q8_k_act) };
+                output[row] = v0;
+                output[row + 1] = v1;
+                row += 2;
+                continue;
+            }
+            output[row] = dot_q4_k_q8_k_row_portable(r0, q8_k_act);
+            output[row + 1] = dot_q4_k_q8_k_row_portable(r1, q8_k_act);
+            row += 2;
+        }
+        if row < m {
             let row_offset = row * blocks_per_row;
             let row_blocks = &matrix[row_offset..row_offset + blocks_per_row];
             #[cfg(target_arch = "x86_64")]
             if has_avx2 {
                 output[row] = unsafe { dot_q4_k_q8_k_row_avx2(row_blocks, q8_k_act) };
-                continue;
+            } else {
+                output[row] = dot_q4_k_q8_k_row_portable(row_blocks, q8_k_act);
             }
-            output[row] = dot_q4_k_q8_k_row_portable(row_blocks, q8_k_act);
         }
         return;
     }
@@ -2176,17 +2376,39 @@ pub fn gemv_q4_k_prequantized(
         let local_out = unsafe {
             std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
         };
-        for (i, row) in (start..end).enumerate() {
+        let mut row = start;
+        let mut i = 0;
+        while row + 1 < end {
+            let row_offset0 = row * blocks_per_row;
+            let row_offset1 = (row + 1) * blocks_per_row;
+            let r0 = &matrix[row_offset0..row_offset0 + blocks_per_row];
+            let r1 = &matrix[row_offset1..row_offset1 + blocks_per_row];
+
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                let (v0, v1) = unsafe { dot_q4_k_q8_k_2rows_avx2(r0, r1, q8_k_act) };
+                local_out[i] = v0;
+                local_out[i + 1] = v1;
+                row += 2;
+                i += 2;
+                continue;
+            }
+
+            local_out[i] = dot_q4_k_q8_k_row_portable(r0, q8_k_act);
+            local_out[i + 1] = dot_q4_k_q8_k_row_portable(r1, q8_k_act);
+            row += 2;
+            i += 2;
+        }
+        if row < end {
             let row_offset = row * blocks_per_row;
             let row_blocks = &matrix[row_offset..row_offset + blocks_per_row];
 
             #[cfg(target_arch = "x86_64")]
             if has_avx2 {
                 local_out[i] = unsafe { dot_q4_k_q8_k_row_avx2(row_blocks, q8_k_act) };
-                continue;
+            } else {
+                local_out[i] = dot_q4_k_q8_k_row_portable(row_blocks, q8_k_act);
             }
-
-            local_out[i] = dot_q4_k_q8_k_row_portable(row_blocks, q8_k_act);
         }
     });
 }
@@ -2215,6 +2437,32 @@ pub fn gemv_q4_k(
     let mut q8_k_act = Vec::with_capacity(blocks_per_row);
     quantize_row_q8_k(vector, &mut q8_k_act);
     gemv_q4_k_prequantized(matrix, &q8_k_act, m, n, output);
+}
+
+/// Multithreaded Batched Q4_K Matrix Multiplication for Prefill.
+/// Multiplies matrix W [m, n] by batch [b, n] of pre-quantized BlockQ8_K activations.
+/// Weight blocks are loaded ONCE per row from RAM/cache and multiplied across all B batch tokens.
+pub fn gemm_q4_k_prequantized_batch(
+    matrix: &[crate::gguf_quants::BlockQ4_K],
+    batch_q8: &[Vec<crate::int_quant::BlockQ8_K>],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    crate::gemm_avx2::gemm_q4_k_tiled_prefill(matrix, batch_q8, m, n, output);
+}
+
+/// Multithreaded Batched Q6_K Matrix Multiplication for Prefill.
+/// Multiplies matrix W [m, n] by batch [b, n] of pre-quantized BlockQ8_K activations.
+/// Weight blocks are loaded ONCE per row from RAM/cache and multiplied across all B batch tokens.
+pub fn gemm_q6_k_prequantized_batch(
+    matrix: &[crate::int_quant::BlockQ6_K],
+    batch_q8: &[Vec<crate::int_quant::BlockQ8_K>],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    crate::gemm_avx2::gemm_q6_k_tiled_prefill(matrix, batch_q8, m, n, output);
 }
 
 /// Vectorized RMSNorm kernel with AVX-512 / AVX2 FMA dot-product reduction.
@@ -2398,10 +2646,17 @@ pub fn flash_attention_cpu(
     let kv_group_size = num_heads / num_kv_heads.max(1);
     let scale = 1.0 / (head_dim as f32).sqrt();
 
-    out[..num_heads * head_dim]
-        .par_chunks_mut(head_dim)
-        .enumerate()
-        .for_each(|(head_idx, head_out)| {
+    let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+    let out_ptr = out.as_mut_ptr() as usize;
+
+    team.dispatch_rows(num_heads, |start_head, end_head| {
+        for head_idx in start_head..end_head {
+            let head_out = unsafe {
+                std::slice::from_raw_parts_mut(
+                    (out_ptr as *mut f32).add(head_idx * head_dim),
+                    head_dim,
+                )
+            };
             let kv_head = head_idx / kv_group_size.max(1);
             let q_slice = &q[head_idx * head_dim..(head_idx + 1) * head_dim];
 
@@ -2437,7 +2692,8 @@ pub fn flash_attention_cpu(
                     head_out[d] *= inv_sum;
                 }
             }
-        });
+        }
+    });
 }
 
 /// Computes the dot product between a PQ2_0 block's 32 packed bytes (128 quaternary weights) and f32 activations.
@@ -2503,16 +2759,17 @@ pub fn gemv_ptq1_0(
             output[row] = compute_row(row);
         }
     } else {
-        let chunk_size = (m / 32).clamp(8, 32);
-        output[..m]
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * chunk_size;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    *out_val = compute_row(base_row + i);
-                }
-            });
+        let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+        let out_ptr = output.as_mut_ptr() as usize;
+
+        team.dispatch_rows(m, |start, end| {
+            let local_out = unsafe {
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+            };
+            for (i, row) in (start..end).enumerate() {
+                local_out[i] = compute_row(row);
+            }
+        });
     }
 }
 
@@ -2554,16 +2811,17 @@ pub fn gemv_pq2_0(
             output[row] = compute_row(row);
         }
     } else {
-        let chunk_size = (m / 32).clamp(8, 32);
-        output[..m]
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * chunk_size;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    *out_val = compute_row(base_row + i);
-                }
-            });
+        let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+        let out_ptr = output.as_mut_ptr() as usize;
+
+        team.dispatch_rows(m, |start, end| {
+            let local_out = unsafe {
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+            };
+            for (i, row) in (start..end).enumerate() {
+                local_out[i] = compute_row(row);
+            }
+        });
     }
 }
 

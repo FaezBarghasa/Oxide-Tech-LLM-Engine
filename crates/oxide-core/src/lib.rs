@@ -51,7 +51,7 @@ pub use memory::DevicePtr;
 pub use sampler::{
     AcademicSamplerEngine, GbnfGrammarEngine, GbnfRule, MirostatMode, SamplerState, SamplingConfig,
 };
-pub use thread_team::{global_thread_team, ParallelTask, ThreadTeam};
+pub use thread_team::{ParallelTask, ThreadTeam, global_thread_team};
 pub use traits::{
     HardwareBackend, HardwareSupports, ModelConfig, OpticalComputeFabric, QuantScheme,
 };
