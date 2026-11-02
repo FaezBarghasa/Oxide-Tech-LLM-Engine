@@ -176,7 +176,12 @@ impl SpecializedPipeline {
         } else {
             let mut out = Vec::with_capacity(batch_tokens.len());
             for i in 0..batch_tokens.len() {
-                let cmd = StepCommand::new(0, batch_tokens[i], slot_indices[i] as u16, false);
+                let cmd = StepCommand::new(
+                    slot_indices[i] as u64,
+                    batch_tokens[i],
+                    slot_indices[i] as u16,
+                    false,
+                );
                 let completion = self.step(&cmd)?;
                 out.push(completion.sampled_token);
             }
@@ -641,6 +646,53 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Clones prefix KV cache from `src_seq` to `dst_seq` for instant Radix Tree prefix reuse.
+    pub fn clone_kv_prefix(
+        &mut self,
+        src_seq: u64,
+        dst_seq: u64,
+        prefix_tokens: usize,
+    ) -> Result<()> {
+        if src_seq == dst_seq || prefix_tokens == 0 {
+            return Ok(());
+        }
+        match self {
+            Self::Llama3Cuda(engine) => {
+                engine
+                    .backend
+                    .clone_slot_kv(src_seq as usize, dst_seq as usize, prefix_tokens)?;
+            }
+            Self::Llama3Dense {
+                model,
+                kv_cache,
+                seq_positions,
+                ..
+            } => {
+                if let Some(src_layers) = kv_cache.get(&src_seq).cloned() {
+                    let dst_layers = kv_cache
+                        .entry(dst_seq)
+                        .or_insert_with(|| model.create_kv_cache());
+                    let kv_dim = model.config.num_kv_heads * model.config.head_dim;
+                    for (layer_idx, src_l) in src_layers.iter().enumerate() {
+                        if let Some(dst_l) = dst_layers.get_mut(layer_idx) {
+                            dst_l.clear();
+                            let copy_len = (prefix_tokens * kv_dim).min(src_l.k.len());
+                            dst_l.k.extend_from_slice(&src_l.k[..copy_len]);
+                            dst_l.v.extend_from_slice(&src_l.v[..copy_len]);
+                            dst_l.current_len = prefix_tokens;
+                            if let Some(ref src_conv) = src_l.shortconv_state {
+                                dst_l.shortconv_state = Some(src_conv.clone());
+                            }
+                        }
+                    }
+                    seq_positions.insert(dst_seq, prefix_tokens);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Prefills prompt tokens into the sequence KV cache before autoregressive token generation.
     pub fn prefill(&mut self, sequence_id: u64, tokens: &[u32], slot_idx: u16) -> Result<()> {
         if let Self::Llama3Cuda(engine) = self {
@@ -655,6 +707,20 @@ impl SpecializedPipeline {
                     slot_idx as usize,
                 )?;
             }
+            Ok(())
+        } else if let Self::Llama3Dense {
+            model,
+            kv_cache,
+            seq_positions,
+            ..
+        } = self
+        {
+            let cache = kv_cache
+                .entry(sequence_id)
+                .or_insert_with(|| model.create_kv_cache());
+            let start_pos = *seq_positions.entry(sequence_id).or_insert(0);
+            let _ = model.forward_batch(tokens, start_pos, cache)?;
+            seq_positions.insert(sequence_id, start_pos + tokens.len());
             Ok(())
         } else {
             for &tok in tokens {

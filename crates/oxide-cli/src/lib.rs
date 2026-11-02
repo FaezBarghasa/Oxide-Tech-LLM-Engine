@@ -449,6 +449,10 @@ pub struct ChatArgs {
     /// Chat template format ("auto", "chatml", "llama3", "deepseek", "gemma", "mistral", "alpaca", "raw", default: "auto")
     #[arg(long, default_value = "auto")]
     pub chat_format: String,
+
+    /// Enable SGLang-grade Radix Tree Prefix Caching & Continuous Batching Harness
+    #[arg(long = "continuous-batching", alias = "cb", alias = "radix-cache")]
+    pub continuous_batching: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -659,6 +663,10 @@ pub struct Cli {
     /// Chat template format ("auto", "chatml", "llama3", "deepseek", "gemma", "mistral", "alpaca", "raw", default: "auto")
     #[arg(long, default_value = "auto")]
     pub chat_format: String,
+
+    /// Enable SGLang-grade Radix Tree Prefix Caching & Continuous Batching Harness
+    #[arg(long = "continuous-batching", alias = "cb", alias = "radix-cache")]
+    pub continuous_batching: bool,
 }
 
 impl Cli {
@@ -724,29 +732,33 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     match cli.command {
-        Some(Commands::Chat(chat)) => run_chat_session(
-            &chat.model,
-            chat.backend,
-            chat.gpu.as_deref(),
-            chat.weights.as_deref(),
-            chat.prompt.as_deref(),
-            None,
-            chat.max_tokens,
-            chat.threads,
-            chat.temp,
-            chat.top_p,
-            chat.top_k,
-            chat.min_p,
-            chat.repeat_penalty,
-            chat.repeat_last_n,
-            chat.seed,
-            chat.greedy,
-            &chat.speculative,
-            chat.draft_tokens,
-            chat.draft_model.as_deref(),
-            chat.system.as_deref(),
-            &chat.chat_format,
-        ),
+        Some(Commands::Chat(chat)) => {
+            run_chat_session(
+                &chat.model,
+                chat.backend,
+                chat.gpu.as_deref(),
+                chat.weights.as_deref(),
+                chat.prompt.as_deref(),
+                None,
+                chat.max_tokens,
+                chat.threads,
+                chat.temp,
+                chat.top_p,
+                chat.top_k,
+                chat.min_p,
+                chat.repeat_penalty,
+                chat.repeat_last_n,
+                chat.seed,
+                chat.greedy,
+                &chat.speculative,
+                chat.draft_tokens,
+                chat.draft_model.as_deref(),
+                chat.system.as_deref(),
+                &chat.chat_format,
+                chat.continuous_batching,
+            )
+            .await
+        }
         Some(Commands::Img(img)) => {
             tracing::info!(
                 "Starting Oxide-Tech Diffusion Engine | Model: {} | Backend: {:?}",
@@ -826,7 +838,9 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     cli.draft_model.as_deref(),
                     cli.system.as_deref(),
                     &cli.chat_format,
+                    cli.continuous_batching,
                 )
+                .await
             } else {
                 run_server_with_options(
                     &cli.model,
@@ -854,7 +868,7 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     clippy::collapsible_if,
     clippy::too_many_arguments
 )]
-fn run_chat_session(
+async fn run_chat_session(
     initial_model: &str,
     backend: BackendArg,
     gpu: Option<&str>,
@@ -876,6 +890,7 @@ fn run_chat_session(
     draft_model: Option<&str>,
     system: Option<&str>,
     chat_format: &str,
+    continuous_batching: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if threads > 0 {
         let _ = rayon::ThreadPoolBuilder::new()
@@ -944,6 +959,257 @@ fn run_chat_session(
         if (tok as usize) < tokenizer.id_to_token.len() {
             stop_tokens.push(tok);
         }
+    }
+
+    if continuous_batching {
+        println!(
+            "[Engine] Initializing SGLang-grade Continuous Batching Engine with Radix Tree Prefix Caching..."
+        );
+        let pipeline_arc = std::sync::Arc::new(tokio::sync::Mutex::new(pipeline));
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let engine =
+            oxide_engine::ContinuousBatchingEngine::new_with_pipeline(pipeline_arc, 64, cmd_rx)
+                .with_tokenizer(std::sync::Arc::new(tokenizer.clone()));
+        let handle = oxide_engine::EngineHandle::new(cmd_tx);
+        let _engine_task = engine.spawn();
+
+        if let Some(p) = prompt {
+            println!("Prompt: {p}");
+            let formatted = if chat_format.eq_ignore_ascii_case("raw")
+                || p.starts_with("<|im_start|>")
+                || p.starts_with("<start_of_turn>")
+                || p.starts_with("<|begin_of_text|>")
+                || p.starts_with("[INST]")
+            {
+                p.to_string()
+            } else {
+                let mut messages = Vec::new();
+                if let Some(sys) = system {
+                    messages.push(oxide_models::ChatMessage::system(sys));
+                }
+                messages.push(oxide_models::ChatMessage::user(p));
+
+                let format = match chat_format.to_lowercase().as_str() {
+                    "chatml" => oxide_models::ChatTemplateFormat::ChatMl,
+                    "llama3" => oxide_models::ChatTemplateFormat::Llama3,
+                    "gemma" => oxide_models::ChatTemplateFormat::Gemma,
+                    "deepseek" => oxide_models::ChatTemplateFormat::DeepSeek,
+                    "mistral" => oxide_models::ChatTemplateFormat::Mistral,
+                    "alpaca" => oxide_models::ChatTemplateFormat::Alpaca,
+                    "raw" => oxide_models::ChatTemplateFormat::RawText,
+                    _ => {
+                        if tokenizer.token_to_id.contains_key("<|im_start|>") {
+                            oxide_models::ChatTemplateFormat::ChatMl
+                        } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
+                            oxide_models::ChatTemplateFormat::Gemma
+                        } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
+                            oxide_models::ChatTemplateFormat::Llama3
+                        } else {
+                            oxide_models::ChatTemplateFormat::RawText
+                        }
+                    }
+                };
+                let parser = oxide_models::ChatTemplateParser::new(format);
+                parser.render_chat(&messages)
+            };
+            let mut tokens = tokenizer.encode(&formatted);
+            if chat_format != "raw" && tokenizer.add_bos_token {
+                if let Some(bos) = tokenizer.bos_id
+                    && tokens.first().copied() != Some(bos)
+                {
+                    tokens.insert(0, bos);
+                }
+            }
+            let prompt_tokens = if tokens.is_empty() { vec![1] } else { tokens };
+            print!("Assistant: ");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+
+            let t_start = std::time::Instant::now();
+            let mut token_rx = handle
+                .generate_stream(
+                    "cb-cli-req".to_string(),
+                    prompt_tokens.clone(),
+                    max_tokens,
+                    temp,
+                    top_p,
+                )
+                .await
+                .map_err(|e| format!("Continuous batching request failed: {e}"))?;
+
+            let mut gen_count = 0usize;
+            let mut ttft: Option<std::time::Duration> = None;
+            let mut decode_start: Option<std::time::Instant> = None;
+            let mut decode_tokens = 0usize;
+
+            while let Some(event) = token_rx.recv().await {
+                if gen_count == 0 {
+                    ttft = Some(t_start.elapsed());
+                    decode_start = Some(std::time::Instant::now());
+                } else {
+                    decode_tokens += 1;
+                }
+                gen_count += 1;
+                let text = tokenizer.decode_token(event.token_id);
+                print!("{text}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                if event.is_terminal {
+                    break;
+                }
+            }
+            println!();
+            let elapsed = t_start.elapsed();
+            if let Some(first_tok_time) = ttft {
+                let prompt_len = prompt_tokens.len();
+                let gen_u32 = u32::try_from(gen_count).unwrap_or(u32::MAX);
+                let total_tps = if elapsed.as_secs_f64() > 0.0 {
+                    f64::from(gen_u32) / elapsed.as_secs_f64()
+                } else {
+                    0.0
+                };
+                let decode_duration = decode_start.map_or(elapsed, |s| s.elapsed());
+                let decode_tps = if decode_duration.as_secs_f64() > 0.0 && decode_tokens > 0 {
+                    decode_tokens as f64 / decode_duration.as_secs_f64()
+                } else {
+                    0.0
+                };
+                let prefill_tps = if first_tok_time.as_secs_f64() > 0.0 {
+                    prompt_len as f64 / first_tok_time.as_secs_f64()
+                } else {
+                    0.0
+                };
+                println!(
+                    "--------------------------------------------------\n\
+                     [Continuous Batching & Radix Cache Metrics]\n\
+                     Prompt Tokens    : {prompt_len}\n\
+                     Generated Tokens : {gen_count}\n\
+                     TTFT             : {first_tok_time:.2?} ({prefill_tps:.2} tok/s)\n\
+                     Decode Speed     : {decode_tps:.2} tokens/sec ({decode_duration:.2?})\n\
+                     Overall Speed    : {total_tps:.2} tokens/sec ({elapsed:.2?})\n\
+                     Engine Pipeline  : Lock-free Continuous Batching + Radix Prefix Caching\n\
+                     --------------------------------------------------"
+                );
+            }
+            return Ok(());
+        }
+
+        // Multi-turn interactive REPL with Radix Tree prefix caching
+        println!("Interactive REPL mode with Radix Tree Prefix Caching enabled.");
+        println!("Type '/help' for command options or '/exit' to quit.");
+        let stdin = std::io::stdin();
+        let mut conversation_tokens: Vec<u32> = Vec::new();
+        let mut turn_counter = 0usize;
+
+        loop {
+            use std::io::Write;
+            print!("\n[{current_model}] > ");
+            let _ = std::io::stdout().flush();
+            let mut line = String::new();
+            if stdin.read_line(&mut line)? == 0 {
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.eq_ignore_ascii_case("exit")
+                || trimmed.eq_ignore_ascii_case("quit")
+                || trimmed.eq_ignore_ascii_case("/exit")
+                || trimmed.eq_ignore_ascii_case("/quit")
+            {
+                break;
+            }
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.eq_ignore_ascii_case("/help") {
+                println!("Interactive Options:");
+                println!(
+                    "  /info   - Show active model, continuous batching and radix prefix cache status"
+                );
+                println!("  /clear  - Clear conversation history and reset Radix prefix context");
+                println!("  /exit   - Exit chat session");
+                continue;
+            }
+            if trimmed.eq_ignore_ascii_case("/clear") {
+                conversation_tokens.clear();
+                println!("Conversation context cleared.");
+                continue;
+            }
+            if trimmed.eq_ignore_ascii_case("/info") {
+                println!("Active Model: {current_model}");
+                println!("Backend: {backend_str}");
+                println!("Mode: Continuous Batching & Radix Tree Prefix Caching");
+                println!("History Tokens: {}", conversation_tokens.len());
+                continue;
+            }
+
+            let turn_user_tokens = if tokenizer.token_to_id.contains_key("<|im_start|>") {
+                tokenizer.encode(&format!(
+                    "<|im_start|>user\n{trimmed}<|im_end|>\n<|im_start|>assistant\n"
+                ))
+            } else if tokenizer.token_to_id.contains_key("<start_of_turn>") {
+                tokenizer.encode(&format!(
+                    "<start_of_turn>user\n{trimmed}<end_of_turn>\n<start_of_turn>model\n"
+                ))
+            } else if tokenizer.token_to_id.contains_key("<|start_header_id|>") {
+                tokenizer.encode(&format!("<|start_header_id|>user<|end_header_id|>\n\n{trimmed}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"))
+            } else {
+                tokenizer.encode(&format!("User: {trimmed}\nAssistant: "))
+            };
+
+            let mut request_tokens = conversation_tokens.clone();
+            request_tokens.extend_from_slice(&turn_user_tokens);
+            if let Some(bos) = tokenizer.bos_id {
+                if request_tokens.first().copied() != Some(bos) {
+                    request_tokens.insert(0, bos);
+                }
+            }
+
+            print!("\x1b[32mAssistant\x1b[0m: ");
+            let _ = std::io::stdout().flush();
+
+            let t_turn_start = std::time::Instant::now();
+            let req_id = format!("turn-{turn_counter}");
+            turn_counter += 1;
+
+            let mut token_rx = match handle
+                .generate_stream(req_id, request_tokens.clone(), max_tokens, temp, top_p)
+                .await
+            {
+                Ok(rx) => rx,
+                Err(e) => {
+                    println!("\n[Error] Generation failed: {e}");
+                    continue;
+                }
+            };
+
+            let mut turn_gen_tokens = Vec::new();
+            let mut turn_ttft = None;
+
+            while let Some(event) = token_rx.recv().await {
+                if turn_ttft.is_none() {
+                    turn_ttft = Some(t_turn_start.elapsed());
+                }
+                let tok = event.token_id;
+                turn_gen_tokens.push(tok);
+                let text = tokenizer.decode_token(tok);
+                print!("{text}");
+                let _ = std::io::stdout().flush();
+                if event.is_terminal {
+                    break;
+                }
+            }
+            println!();
+            if let Some(ttft) = turn_ttft {
+                println!(
+                    "\x1b[90m[TTFT: {:.2?}, Generated: {} tokens]\x1b[0m",
+                    ttft,
+                    turn_gen_tokens.len()
+                );
+            }
+
+            conversation_tokens = request_tokens;
+            conversation_tokens.extend_from_slice(&turn_gen_tokens);
+        }
+
+        return Ok(());
     }
 
     if let Some(p) = prompt {

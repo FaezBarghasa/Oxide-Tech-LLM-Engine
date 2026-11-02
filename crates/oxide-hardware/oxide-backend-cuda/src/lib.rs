@@ -631,6 +631,80 @@ impl CudaBackend {
         Ok(write_pos)
     }
 
+    /// Clones prefix KV cache from a source slot to a destination slot via device-to-device asynchronous memcpy.
+    /// Enables 0 ms SGLang-grade Radix Tree prefix caching across concurrent continuous batching slots.
+    pub fn clone_slot_kv(
+        &mut self,
+        src_slot: usize,
+        dst_slot: usize,
+        prefix_tokens: usize,
+    ) -> Result<()> {
+        if src_slot == dst_slot || prefix_tokens == 0 {
+            if dst_slot < self.slot_positions.len() {
+                self.slot_positions[dst_slot] = self.slot_positions[dst_slot].max(prefix_tokens);
+            }
+            return Ok(());
+        }
+        let slot_stride = (self.kv_capacity / self.max_slots.max(1)).max(64);
+        let num_heads_kv = self.num_kv_heads;
+        let head_dim = self.head_dim;
+        let tok_bytes = num_heads_kv * head_dim * std::mem::size_of::<u16>();
+        let bytes_per_layer = prefix_tokens * tok_bytes;
+        let src_offset_bytes = src_slot * slot_stride * tok_bytes;
+        let dst_offset_bytes = dst_slot * slot_stride * tok_bytes;
+
+        let stream = self.stream.as_ref().ok_or_else(|| {
+            EngineError::BackendError("Physical CUDA stream not available on host dGPU".to_string())
+        })?;
+        let s = stream.raw();
+
+        for layer_idx in 0..self.kv_k.len().min(self.kv_v.len()) {
+            let d_k = &self.kv_k[layer_idx];
+            let d_v = &self.kv_v[layer_idx];
+            if d_k.size_bytes() >= src_offset_bytes + bytes_per_layer
+                && d_k.size_bytes() >= dst_offset_bytes + bytes_per_layer
+                && d_v.size_bytes() >= src_offset_bytes + bytes_per_layer
+                && d_v.size_bytes() >= dst_offset_bytes + bytes_per_layer
+            {
+                unsafe {
+                    let k_src = (d_k.as_raw_ptr() as *const u8).add(src_offset_bytes)
+                        as *const std::ffi::c_void;
+                    let k_dst = (d_k.as_raw_ptr() as *mut u8).add(dst_offset_bytes)
+                        as *mut std::ffi::c_void;
+                    let v_src = (d_v.as_raw_ptr() as *const u8).add(src_offset_bytes)
+                        as *const std::ffi::c_void;
+                    let v_dst = (d_v.as_raw_ptr() as *mut u8).add(dst_offset_bytes)
+                        as *mut std::ffi::c_void;
+
+                    let _ = driver::cudaMemcpyAsync(
+                        k_dst,
+                        k_src,
+                        bytes_per_layer,
+                        driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                        s,
+                    );
+                    let _ = driver::cudaMemcpyAsync(
+                        v_dst,
+                        v_src,
+                        bytes_per_layer,
+                        driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
+                        s,
+                    );
+                }
+            }
+        }
+
+        if dst_slot >= self.slot_positions.len() {
+            self.slot_positions.resize(dst_slot + 1, 0);
+        }
+        self.slot_positions[dst_slot] = prefix_tokens;
+        if dst_slot == 0 {
+            self.seq_pos = prefix_tokens;
+        }
+
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn configure_sampling(
         &mut self,

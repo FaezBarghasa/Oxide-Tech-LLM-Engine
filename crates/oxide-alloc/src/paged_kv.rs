@@ -107,6 +107,17 @@ impl PagedKvArena {
         Some(block_id)
     }
 
+    /// Retains a physical block by incrementing its reference count (for Radix Tree prefix sharing).
+    pub fn retain_block(&self, block_id: u32) {
+        let idx = block_id as usize;
+        if idx >= self.total_blocks {
+            return;
+        }
+        for layer in &self.blocks {
+            layer[idx].retain();
+        }
+    }
+
     /// Releases a block ID back to the free list when reference count drops to zero.
     pub fn release_block(&self, block_id: u32) {
         let idx = block_id as usize;

@@ -279,7 +279,17 @@ impl ContinuousBatchingEngine {
                 .try_lock()
                 .map_err(|_| "Pipeline busy".to_string())?;
 
-            let (matched_len, _) = self.radix_cache.match_longest_prefix(&prompt_tokens);
+            let (matched_len, cached_slots) = self.radix_cache.match_longest_prefix(&prompt_tokens);
+            if matched_len > 0 {
+                if let Some(&src_slot) = cached_slots.first() {
+                    let _ = pipe.clone_kv_prefix(src_slot as u64, slot_id as u64, matched_len);
+                }
+                tracing::info!(
+                    "[Radix Tree Prefix Cache] HIT! Reusing {matched_len}/{} prefix tokens (0 ms re-eval)",
+                    prompt_tokens.len()
+                );
+            }
+
             let prefill_tokens = if prompt_tokens.len() > 1 {
                 if matched_len < prompt_tokens.len() - 1 {
                     &prompt_tokens[matched_len..prompt_tokens.len() - 1]
@@ -382,6 +392,10 @@ impl ContinuousBatchingEngine {
         // SGLang Radix Tree Prefix Cache Lookup:
         let (matched_len, cached_blocks) = self.radix_cache.match_longest_prefix(&prompt_tokens);
 
+        for &b in &cached_blocks {
+            arena.retain_block(b);
+        }
+
         let mut block_table = SequenceBlockTable::new();
         block_table.block_ids = cached_blocks;
         block_table.num_tokens = matched_len;
@@ -394,6 +408,11 @@ impl ContinuousBatchingEngine {
                 block_table.release_all(arena);
                 return Err(format!("Prefill step failed: {e}"));
             }
+        }
+
+        // Retain blocks for persistent Radix Tree prefix caching
+        for &b in &block_table.block_ids {
+            arena.retain_block(b);
         }
 
         // Insert new physical blocks into Radix cache for subsequent prompt reuse

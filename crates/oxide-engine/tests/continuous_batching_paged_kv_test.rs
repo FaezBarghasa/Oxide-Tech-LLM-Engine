@@ -98,3 +98,55 @@ async fn test_continuous_batching_engine_multi_client_streaming() {
     assert_eq!(tokens1.len(), 5);
     assert_eq!(tokens2.len(), 5);
 }
+
+#[tokio::test]
+async fn test_radix_prefix_cache_multi_turn_reuse() {
+    let config = Llama3Config::tiny_test_config();
+    let model = Arc::new(Llama3Model::new(config));
+
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let engine = ContinuousBatchingEngine::new(model, 4, 64, cmd_rx);
+    let _worker_handle = engine.spawn();
+
+    let client = EngineHandle::new(cmd_tx);
+
+    // Turn 1: System prompt + User question
+    let system_and_user_turn_1 = vec![1, 100, 200, 300, 400];
+    let mut stream1 = client
+        .generate_stream(
+            "turn-1".to_string(),
+            system_and_user_turn_1.clone(),
+            3,
+            0.0,
+            1.0,
+        )
+        .await
+        .expect("Turn 1 accepted");
+
+    let mut turn1_generated = Vec::new();
+    while let Some(event) = stream1.recv().await {
+        turn1_generated.push(event.token_id);
+        if event.is_terminal {
+            break;
+        }
+    }
+    assert_eq!(turn1_generated.len(), 3);
+
+    // Turn 2: Extends Turn 1 prompt + response with new follow-up question
+    let mut turn_2_prompt = system_and_user_turn_1.clone();
+    turn_2_prompt.extend_from_slice(&[500, 600]);
+
+    let mut stream2 = client
+        .generate_stream("turn-2".to_string(), turn_2_prompt, 4, 0.0, 1.0)
+        .await
+        .expect("Turn 2 accepted with prefix hit");
+
+    let mut turn2_generated = Vec::new();
+    while let Some(event) = stream2.recv().await {
+        turn2_generated.push(event.token_id);
+        if event.is_terminal {
+            break;
+        }
+    }
+    assert_eq!(turn2_generated.len(), 4);
+}
