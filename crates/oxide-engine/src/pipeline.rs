@@ -743,6 +743,19 @@ impl SpecializedPipeline {
         let q_lower = model_query_or_path.to_lowercase();
         let path = std::path::Path::new(model_query_or_path);
 
+        let is_explicit_file = model_query_or_path.starts_with('/')
+            || model_query_or_path.starts_with("./")
+            || model_query_or_path.starts_with("../")
+            || path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("gguf") || ext.eq_ignore_ascii_case("safetensors")
+            });
+
+        if is_explicit_file && !path.exists() {
+            return Err(oxide_core::error::EngineError::ModelNotFound(format!(
+                "Model file not found on physical disk: {model_query_or_path}"
+            )));
+        }
+
         // 1. If explicit file path on disk (GGUF or SafeTensors)
         if path.exists() {
             let model = oxide_models::Llama3Model::from_file(path)?;

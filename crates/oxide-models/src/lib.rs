@@ -69,11 +69,11 @@ pub use decision::{
     DecisionScorer, LabelLogits, LabelPrompt, LabelPromptResult, MAX_LABEL_PROMPTS,
     MAX_LABELS_PER_PROMPT, TokenizedLabelPrompt, shared_prefix_len, softmax,
 };
-pub use shortconv::{Lfm3ShortConvLayer, ShortConv1DState};
 pub use dflash::{DFlashConfig, DFlashModel, MedusaConfig, MedusaTreeDrafter};
 pub use dspark::{DSparkConfig, DSparkModel};
 pub use gdn::{GatedDeltaNet, GdnReplayState, GdnStepInputs, GdnUpdateRecord};
 pub use mla::{MlaAttentionLayer, MlaCompressedKvEntry, MlaConfig};
+pub use shortconv::{Lfm3ShortConvLayer, ShortConv1DState};
 pub use speculative::{SpeculativeDecodingEngine, SpeculativeModelPair, SpeculativeStats};
 pub use tokenspeed_mla::{
     MLA_MAX_TILE_HEADS, MlaTileOptimizer, TokenSpeedMlaConfig, TokenSpeedMlaEngine,

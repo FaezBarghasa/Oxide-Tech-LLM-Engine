@@ -30,6 +30,9 @@ pub enum EngineError {
     #[error("Hardware backend error: {0}")]
     BackendError(String),
 
+    #[error("Model not found: {0}")]
+    ModelNotFound(String),
+
     #[error("Channel full or command queue overflow")]
     QueueOverflow,
 
