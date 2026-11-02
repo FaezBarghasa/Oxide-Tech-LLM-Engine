@@ -706,6 +706,16 @@ impl CudaBackend {
                     batch_size as i32,
                     stream,
                 );
+            } else if quant_type == 9 {
+                driver::launch_cuda_mmvq_q5_0(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x_q8_1,
+                    m as i32,
+                    k as i32,
+                    batch_size as i32,
+                    stream,
+                );
             } else {
                 for b in 0..batch_size {
                     let y_ptr = d_y.add(b * m);
@@ -766,6 +776,16 @@ impl CudaBackend {
                 );
             } else if quant_type == 0 || quant_type == 3 {
                 driver::launch_cuda_mmvq_q8_0_fused_add(
+                    d_y,
+                    d_w.as_raw_ptr(),
+                    d_x_q8_1,
+                    m as i32,
+                    k as i32,
+                    batch_size as i32,
+                    stream,
+                );
+            } else if quant_type == 9 {
+                driver::launch_cuda_mmvq_q5_0_fused_add(
                     d_y,
                     d_w.as_raw_ptr(),
                     d_x_q8_1,
@@ -875,14 +895,26 @@ impl CudaBackend {
                     stream,
                 );
             } else if quant_type == 9 {
-                driver::launch_cuda_gemv_q5_0(
-                    d_y,
-                    d_w.as_raw_ptr(),
-                    d_x,
-                    m as i32,
-                    k as i32,
-                    stream,
-                );
+                if !d_x_q8_1.is_null() {
+                    driver::launch_cuda_mmvq_q5_0(
+                        d_y,
+                        d_w.as_raw_ptr(),
+                        d_x_q8_1,
+                        m as i32,
+                        k as i32,
+                        1,
+                        stream,
+                    );
+                } else {
+                    driver::launch_cuda_gemv_q5_0(
+                        d_y,
+                        d_w.as_raw_ptr(),
+                        d_x,
+                        m as i32,
+                        k as i32,
+                        stream,
+                    );
+                }
             } else if quant_type == 10 {
                 driver::launch_cuda_gemv_tq2_0(
                     d_y,
@@ -975,6 +1007,35 @@ impl CudaBackend {
                     k as i32,
                     stream,
                 );
+            } else if quant_type == 9 {
+                if !d_x_q8_1.is_null() {
+                    driver::launch_cuda_mmvq_q5_0_fused_add(
+                        d_y,
+                        d_w.as_raw_ptr(),
+                        d_x_q8_1,
+                        m as i32,
+                        k as i32,
+                        1,
+                        stream,
+                    );
+                } else {
+                    Self::dispatch_gemv(
+                        d_scratch.as_typed_ptr::<f32>(),
+                        d_w,
+                        d_x,
+                        d_x_q8_1,
+                        m,
+                        k,
+                        quant_type,
+                        stream,
+                    );
+                    driver::launch_cuda_vector_add(
+                        d_y,
+                        d_scratch.as_typed_ptr::<f32>(),
+                        m as i32,
+                        stream,
+                    );
+                }
             } else {
                 Self::dispatch_gemv(
                     d_scratch.as_typed_ptr::<f32>(),
@@ -1219,6 +1280,8 @@ impl CudaBackend {
 
         if !token_embd_bytes.is_empty() {
             let q4_k_expected = vocab_size * (hidden_dim / 256) * 144;
+            let q5_0_expected = vocab_size * (hidden_dim / 32) * 22;
+            let q8_0_expected = vocab_size * (hidden_dim / 32) * 34;
             let fp32_expected = vocab_size * hidden_dim * std::mem::size_of::<f32>();
             if token_embd_bytes.len() == q4_k_expected && hidden_dim.is_multiple_of(256) {
                 let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
@@ -1228,6 +1291,22 @@ impl CudaBackend {
                     .map_err(EngineError::BackendError)?;
                 self.d_token_embd = Some(d_emb);
                 self.token_embd_quant_type = 1;
+            } else if token_embd_bytes.len() == q5_0_expected && hidden_dim.is_multiple_of(32) {
+                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
+                    .map_err(EngineError::BackendError)?;
+                d_emb
+                    .copy_from_host_async(token_embd_bytes, s)
+                    .map_err(EngineError::BackendError)?;
+                self.d_token_embd = Some(d_emb);
+                self.token_embd_quant_type = 2;
+            } else if token_embd_bytes.len() == q8_0_expected && hidden_dim.is_multiple_of(32) {
+                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
+                    .map_err(EngineError::BackendError)?;
+                d_emb
+                    .copy_from_host_async(token_embd_bytes, s)
+                    .map_err(EngineError::BackendError)?;
+                self.d_token_embd = Some(d_emb);
+                self.token_embd_quant_type = 3;
             } else if token_embd_bytes.len() == fp32_expected {
                 let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
                     .map_err(EngineError::BackendError)?;
@@ -1237,7 +1316,7 @@ impl CudaBackend {
                 self.d_token_embd = Some(d_emb);
                 self.token_embd_quant_type = 0;
             } else {
-                // Non-Q4_K quantized embedding (e.g. Q5_0, Q8_0) where no GPU dequant kernel is present.
+                // Non-supported quantized embedding where no GPU dequant kernel is present.
                 // Leave d_token_embd as None so that embedding_lookup executes on host with zero-copy mmap.
                 self.d_token_embd = None;
                 self.token_embd_quant_type = 0;
@@ -1605,13 +1684,14 @@ impl CudaBackend {
                 if let Some(d_hid) = &self.d_hidden {
                     unsafe {
                         let dst_ptr = d_hid.as_typed_ptr::<f32>().add(dst_offset);
-                        if self.token_embd_quant_type == 1 {
-                            driver::launch_cuda_dequantize_token_embd_q4_k(
+                        if self.token_embd_quant_type > 0 {
+                            driver::launch_cuda_dequantize_token_embd(
                                 dst_ptr,
                                 d_emb.as_raw_ptr(),
                                 tok_idx as i32,
                                 h as i32,
                                 emb_scale,
+                                self.token_embd_quant_type as i32,
                                 s,
                             );
                         } else {
@@ -2523,13 +2603,14 @@ impl CudaBackend {
                 if let Some(d_hid) = &self.d_hidden {
                     unsafe {
                         let dst_ptr = d_hid.as_typed_ptr::<f32>().add(dst_offset);
-                        if self.token_embd_quant_type == 1 {
-                            driver::launch_cuda_dequantize_token_embd_q4_k(
+                        if self.token_embd_quant_type > 0 {
+                            driver::launch_cuda_dequantize_token_embd(
                                 dst_ptr,
                                 d_emb.as_raw_ptr(),
                                 tok_idx as i32,
                                 h as i32,
                                 emb_scale,
+                                self.token_embd_quant_type as i32,
                                 s,
                             );
                         } else {
@@ -3569,17 +3650,18 @@ impl CudaBackend {
         };
 
         if let (Some(d_emb), Some(d_hid)) = (&self.d_token_embd, &mut self.d_hidden) {
-            if self.token_embd_quant_type == 1 {
+            if self.token_embd_quant_type > 0 {
                 for i in 0..bucket {
                     let d_row = unsafe { d_hid.as_typed_ptr::<f32>().add(i * h) };
                     let in_tok_ptr = unsafe { d_tok_buf.as_typed_ptr::<i32>().add(i) };
                     unsafe {
-                        driver::launch_cuda_dequantize_token_embd_q4_k_ptr(
+                        driver::launch_cuda_dequantize_token_embd_ptr(
                             d_row,
                             d_emb.as_raw_ptr(),
                             in_tok_ptr,
                             h as i32,
                             emb_scale,
+                            self.token_embd_quant_type as i32,
                             s,
                         );
                     }
@@ -4150,7 +4232,6 @@ impl HardwareBackend for CudaBackend {
         // --- PHYSICAL CUDA GRAPH DECODE REPLAY ENGINE ---
         if !cmd.is_prefill_chunk
             && self.cuda_graph_enabled
-            && self.token_embd_quant_type == 1
             && self.d_token_embd.is_some()
             && self.d_per_layer_emb.is_none()
             && !self.layers.is_empty()
@@ -4284,12 +4365,13 @@ impl HardwareBackend for CudaBackend {
 
                     // 1. Dequantize token embedding directly in GPU registers
                     unsafe {
-                        driver::launch_cuda_dequantize_token_embd_q4_k_ptr(
+                        driver::launch_cuda_dequantize_token_embd_ptr(
                             d_hid_ptr,
                             d_emb_ptr,
                             d_in_tok_ptr,
                             h as i32,
                             emb_scale,
+                            self.token_embd_quant_type as i32,
                             s,
                         );
                     }
@@ -4854,14 +4936,15 @@ impl HardwareBackend for CudaBackend {
                     1.0f32
                 };
                 if let Some(d_hid) = &mut self.d_hidden {
-                    if self.token_embd_quant_type == 1 {
+                    if self.token_embd_quant_type > 0 {
                         unsafe {
-                            driver::launch_cuda_dequantize_token_embd_q4_k(
+                            driver::launch_cuda_dequantize_token_embd(
                                 d_hid.as_typed_ptr::<f32>(),
                                 d_emb.as_raw_ptr(),
                                 tok_idx as i32,
                                 h as i32,
                                 emb_scale,
+                                self.token_embd_quant_type as i32,
                                 s,
                             );
                         }

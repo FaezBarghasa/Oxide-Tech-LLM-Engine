@@ -376,6 +376,89 @@ unsafe fn dot_q8_0_avx2(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
     }
 }
 
+/// Compute dot product between a Q5_0 block (22 bytes = 32 weights) and 32 f32 activations.
+#[inline]
+#[must_use]
+pub fn dot_q5_0(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Verified feature flags before invoking target-specific intrinsics.
+            unsafe {
+                return dot_q5_0_avx2(qs, qh, act, scale);
+            }
+        }
+    }
+
+    dot_q5_0_portable(qs, qh, act, scale)
+}
+
+#[inline(always)]
+fn dot_q5_0_portable(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32) -> f32 {
+    let mut acc = 0.0f32;
+    let qh_u32 = u32::from_le_bytes(*qh);
+    for i in 0..16 {
+        let byte = qs[i];
+        let h0 = (qh_u32 >> i) & 1;
+        let h1 = (qh_u32 >> (i + 16)) & 1;
+
+        let q0 = ((byte & 0x0F) | ((h0 as u8) << 4)) as i8 - 16;
+        let q1 = (((byte >> 4) & 0x0F) | ((h1 as u8) << 4)) as i8 - 16;
+
+        acc += (q0 as f32) * act[i] + (q1 as f32) * act[i + 16];
+    }
+    acc * scale
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q5_0_avx2(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32) -> f32 {
+    use core::arch::x86_64::{
+        _mm_loadu_si128, _mm256_cvtepi8_epi32, _mm256_cvtepi32_ps, _mm256_fmadd_ps,
+        _mm256_loadu_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    let qh_u32 = u32::from_le_bytes(*qh);
+    let mut q0_bytes = [0i8; 16];
+    let mut q1_bytes = [0i8; 16];
+    for i in 0..16 {
+        let byte = qs[i];
+        let h0 = (qh_u32 >> i) & 1;
+        let h1 = (qh_u32 >> (i + 16)) & 1;
+        q0_bytes[i] = ((byte & 0x0F) | ((h0 as u8) << 4)) as i8 - 16;
+        q1_bytes[i] = (((byte >> 4) & 0x0F) | ((h1 as u8) << 4)) as i8 - 16;
+    }
+
+    unsafe {
+        let lo_nibbles = _mm_loadu_si128(q0_bytes.as_ptr().cast());
+        let hi_nibbles = _mm_loadu_si128(q1_bytes.as_ptr().cast());
+
+        let f32_lo0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo_nibbles));
+        let act_lo0 = _mm256_loadu_ps(act.as_ptr());
+        let mut sum_vec = _mm256_fmadd_ps(f32_lo0, act_lo0, _mm256_setzero_ps());
+
+        let raw_lo_high8 = core::arch::x86_64::_mm_srli_si128(lo_nibbles, 8);
+        let f32_lo1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(raw_lo_high8));
+        let act_lo1 = _mm256_loadu_ps(act.as_ptr().add(8));
+        sum_vec = _mm256_fmadd_ps(f32_lo1, act_lo1, sum_vec);
+
+        let f32_hi0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi_nibbles));
+        let act_hi0 = _mm256_loadu_ps(act.as_ptr().add(16));
+        sum_vec = _mm256_fmadd_ps(f32_hi0, act_hi0, sum_vec);
+
+        let raw_hi_high8 = core::arch::x86_64::_mm_srli_si128(hi_nibbles, 8);
+        let f32_hi1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(raw_hi_high8));
+        let act_hi1 = _mm256_loadu_ps(act.as_ptr().add(24));
+        sum_vec = _mm256_fmadd_ps(f32_hi1, act_hi1, sum_vec);
+
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), sum_vec);
+        let sum = (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7]);
+
+        sum * scale
+    }
+}
+
 /// Compute dot product between a Q4_0 block (16 bytes = 32 nibbles) and 32 f32 activations.
 #[inline]
 #[must_use]
@@ -857,7 +940,117 @@ unsafe fn dot_q4_k_avx2(
 #[inline]
 #[must_use]
 pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], scales: &[i8; 16], act: &[f32; 256], d: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Verified feature flags before invoking target-specific intrinsics.
+            unsafe {
+                return dot_q6_k_avx2(ql, qh, scales, act, d);
+            }
+        }
+    }
+
     dot_q6_k_portable(ql, qh, scales, act, d)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q6_k_avx2(
+    ql: &[u8; 128],
+    qh: &[u8; 64],
+    scales: &[i8; 16],
+    act: &[f32; 256],
+    d: f32,
+) -> f32 {
+    use core::arch::x86_64::{
+        _mm_and_si128, _mm_loadu_si128, _mm_or_si128, _mm_set1_epi8, _mm_slli_epi16,
+        _mm_srli_epi16, _mm_sub_epi8, _mm256_cvtepi8_epi32, _mm256_cvtepi32_ps, _mm256_fmadd_ps,
+        _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+    };
+
+    unsafe {
+        let mask_0f = _mm_set1_epi8(0x0F);
+        let mask_03 = _mm_set1_epi8(0x03);
+        let thirty_two = _mm_set1_epi8(32);
+        let mut sum_vec = _mm256_setzero_ps();
+
+        for half in 0..2 {
+            let ql_offset = half * 64;
+            let qh_offset = half * 32;
+            let sc_offset = half * 8;
+            let y_offset = half * 128;
+
+            for sub in 0..2 {
+                let l_base = sub * 16;
+                let is = sub;
+
+                let sc0 = d * (scales[sc_offset + is] as f32);
+                let sc2 = d * (scales[sc_offset + is + 2] as f32);
+                let sc4 = d * (scales[sc_offset + is + 4] as f32);
+                let sc6 = d * (scales[sc_offset + is + 6] as f32);
+
+                let sc0_vec = _mm256_set1_ps(sc0);
+                let sc2_vec = _mm256_set1_ps(sc2);
+                let sc4_vec = _mm256_set1_ps(sc4);
+                let sc6_vec = _mm256_set1_ps(sc6);
+
+                let ql0_raw = _mm_loadu_si128(ql.as_ptr().add(ql_offset + l_base).cast());
+                let ql32_raw = _mm_loadu_si128(ql.as_ptr().add(ql_offset + l_base + 32).cast());
+                let qh_raw = _mm_loadu_si128(qh.as_ptr().add(qh_offset + l_base).cast());
+
+                let q1_vec = _mm_sub_epi8(
+                    _mm_or_si128(
+                        _mm_and_si128(ql0_raw, mask_0f),
+                        _mm_slli_epi16(_mm_and_si128(qh_raw, mask_03), 4),
+                    ),
+                    thirty_two,
+                );
+                let q2_vec = _mm_sub_epi8(
+                    _mm_or_si128(
+                        _mm_and_si128(ql32_raw, mask_0f),
+                        _mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(qh_raw, 2), mask_03), 4),
+                    ),
+                    thirty_two,
+                );
+                let q3_vec = _mm_sub_epi8(
+                    _mm_or_si128(
+                        _mm_and_si128(_mm_srli_epi16(ql0_raw, 4), mask_0f),
+                        _mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(qh_raw, 4), mask_03), 4),
+                    ),
+                    thirty_two,
+                );
+                let q4_vec = _mm_sub_epi8(
+                    _mm_or_si128(
+                        _mm_and_si128(_mm_srli_epi16(ql32_raw, 4), mask_0f),
+                        _mm_slli_epi16(_mm_and_si128(_mm_srli_epi16(qh_raw, 6), mask_03), 4),
+                    ),
+                    thirty_two,
+                );
+
+                macro_rules! madd_16 {
+                    ($q_vec:expr, $sc_vec:expr, $act_offset:expr) => {
+                        let f_lo = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32($q_vec));
+                        let f_hi = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+                            core::arch::x86_64::_mm_srli_si128($q_vec, 8),
+                        ));
+                        let act_lo = _mm256_loadu_ps(act.as_ptr().add($act_offset));
+                        let act_hi = _mm256_loadu_ps(act.as_ptr().add($act_offset + 8));
+                        sum_vec = _mm256_fmadd_ps(f_lo, _mm256_mul_ps(act_lo, $sc_vec), sum_vec);
+                        sum_vec = _mm256_fmadd_ps(f_hi, _mm256_mul_ps(act_hi, $sc_vec), sum_vec);
+                    };
+                }
+
+                madd_16!(q1_vec, sc0_vec, y_offset + l_base);
+                madd_16!(q2_vec, sc2_vec, y_offset + l_base + 32);
+                madd_16!(q3_vec, sc4_vec, y_offset + l_base + 64);
+                madd_16!(q4_vec, sc6_vec, y_offset + l_base + 96);
+            }
+        }
+
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), sum_vec);
+        (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7])
+    }
 }
 
 #[inline(always)]
@@ -958,59 +1151,6 @@ unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f3
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2", enable = "fma")]
-#[allow(dead_code)]
-unsafe fn dot_q6_k_avx2(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f32) -> f32 {
-    use core::arch::x86_64::{
-        _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_loadu_si256,
-        _mm256_set1_epi32, _mm256_setzero_ps, _mm256_storeu_ps, _mm256_sub_ps,
-    };
-
-    // SAFETY: Verified AVX2 and FMA support and valid slices.
-    unsafe {
-        let mut sum_vec = _mm256_setzero_ps();
-        let thirty_two = _mm256_set1_epi32(32);
-        let thirty_two_f = _mm256_cvtepi32_ps(thirty_two);
-
-        for chunk in 0..16 {
-            let base_idx = chunk * 8;
-            let act0 = _mm256_loadu_ps(act.as_ptr().add(base_idx));
-            let act1 = _mm256_loadu_ps(act.as_ptr().add(base_idx + 128));
-
-            let mut q0_buf = [0i32; 8];
-            let mut q1_buf = [0i32; 8];
-            for j in 0..8 {
-                let i = base_idx + j;
-                let byte_l = *ql.get_unchecked(i);
-                let qh_idx = i / 2;
-                let shift = (i % 2) * 4;
-                let byte_h = (*qh.get_unchecked(qh_idx) >> shift) & 0x0F;
-
-                let h0 = byte_h & 0x03;
-                let h1 = (byte_h >> 2) & 0x03;
-
-                q0_buf[j] = ((h0 << 4) | (byte_l & 0x0F)) as i32;
-                q1_buf[j] = ((h1 << 4) | ((byte_l >> 4) & 0x0F)) as i32;
-            }
-
-            let raw_q0 = _mm256_loadu_si256(q0_buf.as_ptr().cast());
-            let raw_q1 = _mm256_loadu_si256(q1_buf.as_ptr().cast());
-
-            let f_q0 = _mm256_sub_ps(_mm256_cvtepi32_ps(raw_q0), thirty_two_f);
-            let f_q1 = _mm256_sub_ps(_mm256_cvtepi32_ps(raw_q1), thirty_two_f);
-
-            sum_vec = _mm256_fmadd_ps(f_q0, act0, sum_vec);
-            sum_vec = _mm256_fmadd_ps(f_q1, act1, sum_vec);
-        }
-
-        let mut buf = [0.0f32; 8];
-        _mm256_storeu_ps(buf.as_mut_ptr(), sum_vec);
-        let total = (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7]);
-        total * d
-    }
-}
-
 /// Multithreaded Q6_K Matrix-Vector Multiplication across all CPU cores and threads.
 pub fn gemv_q6_k(
     matrix: &[crate::int_quant::BlockQ6_K],
@@ -1061,6 +1201,60 @@ pub fn gemv_q6_k(
                             .try_into()
                             .expect("slice length 256");
                         acc += dot_q6_k(&blk.ql, &blk.qh, &blk.scales, act_chunk, blk.d.to_f32());
+                    }
+                    *out_val = acc;
+                }
+            });
+    }
+}
+
+/// Multithreaded Q5_0 Matrix-Vector Multiplication across all CPU cores and threads.
+pub fn gemv_q5_0(
+    matrix: &[crate::int_quant::BlockQ5_0],
+    vector: &[f32],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    assert!(n.is_multiple_of(32), "n must be a multiple of 32 for Q5_0");
+    let blocks_per_row = n / 32;
+    assert!(
+        matrix.len() >= m * blocks_per_row,
+        "Insufficient Q5_0 blocks"
+    );
+    assert!(vector.len() >= n, "Insufficient vector length");
+    assert!(output.len() >= m, "Insufficient output length");
+
+    if m <= 8 {
+        for row in 0..m {
+            let row_offset = row * blocks_per_row;
+            let mut acc = 0.0f32;
+            for b in 0..blocks_per_row {
+                let blk = &matrix[row_offset + b];
+                let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                    .try_into()
+                    .expect("slice length 32");
+                acc += dot_q5_0(&blk.qs, &blk.qh, act_chunk, blk.scale.to_f32());
+            }
+            output[row] = acc;
+        }
+    } else {
+        let chunk_size = (m / 32).clamp(8, 32);
+        output[..m]
+            .par_chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| {
+                let base_row = chunk_idx * chunk_size;
+                for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                    let row = base_row + i;
+                    let row_offset = row * blocks_per_row;
+                    let mut acc = 0.0f32;
+                    for b in 0..blocks_per_row {
+                        let blk = &matrix[row_offset + b];
+                        let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                            .try_into()
+                            .expect("slice length 32");
+                        acc += dot_q5_0(&blk.qs, &blk.qh, act_chunk, blk.scale.to_f32());
                     }
                     *out_val = acc;
                 }

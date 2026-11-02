@@ -12,9 +12,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tokenizer = GgufTokenizer::from_gguf(&gguf);
 
     let prompt = "Count from 1 to 10: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10. Now write down the first ten letters of the alphabet in uppercase:";
-    let all_tokens = tokenizer.encode(prompt);
-    let tokens = all_tokens[..8].to_vec();
-    println!("Prompt len 8: tokens: {:?}", tokens);
+    let prompt = "<|im_start|>user\n2+2=<|im_end|>\n<|im_start|>assistant\n";
+    let tokens = tokenizer.encode(prompt);
+    println!("Prompt tokens (len {}): {:?}", tokens.len(), tokens);
 
     // CPU run
     println!("=== CPU RUN ===");
@@ -44,53 +44,45 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("CPU top 5 logits: {:?}", &top[..5]);
     }
 
-    // CUDA step run
-    println!("\n=== CUDA STEP RUN ===");
-    let mut pipe_cuda = SpecializedPipeline::from_model_or_path(
-        &model_path.to_string_lossy(),
-        "cuda",
-        None,
-        1,
-        None,
-    )?;
-    pipe_cuda.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
-    if let SpecializedPipeline::Llama3Cuda(ref eng) = pipe_cuda {
-        let l0 = &eng.backend.layers[0];
-        println!("Layer 0 quant types: q_quant={}, k_quant={}, v_quant={}, o_quant={}, gate_quant={}, up_quant={}, down_quant={}",
-            l0.q_quant, l0.k_quant, l0.v_quant, l0.o_quant, l0.gate_quant, l0.up_quant, l0.down_quant);
-        println!("Has biases: q_bias={}, k_bias={}, v_bias={}",
-            l0.d_q_bias.is_some(), l0.d_k_bias.is_some(), l0.d_v_bias.is_some());
-        println!("CUDA token_embd: is_some={}, quant_type={}",
-            eng.backend.d_token_embd.is_some(), eng.backend.token_embd_quant_type);
-    }
-    for (i, &tok) in tokens.iter().enumerate() {
-        let is_prefill = i + 1 < tokens.len();
-        let cmd = oxide_core::StepCommand::new(1, tok, 0, is_prefill);
-        let res = pipe_cuda.step(&cmd)?;
-        println!("CUDA step {}: tok {} ({:?}) -> sampled {} ({:?})", i, tok, tokenizer.decode_token(tok), res.sampled_token, tokenizer.decode_token(res.sampled_token));
-    }
-
-    // CUDA chunk prefill run
-    println!("\n=== CUDA CHUNK PREFILL RUN ===");
-    let mut pipe_chunk = SpecializedPipeline::from_model_or_path(
-        &model_path.to_string_lossy(),
-        "cuda",
-        None,
-        1,
-        None,
-    )?;
-    pipe_chunk.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
-    if let SpecializedPipeline::Llama3Cuda(ref mut eng) = pipe_chunk {
-        let res = eng.backend.dispatch_prefill_chunk(&tokens, true)?;
-        println!("CUDA chunk prefill on {:?} -> sampled {:?}", tokens, res.map(|t| (t, tokenizer.decode_token(t))));
-        let mut host_logits = vec![0.0f32; eng.backend.vocab_size];
-        if let (Some(d_logits), Some(stream)) = (&eng.backend.d_logits, &eng.backend.stream) {
-            let _ = d_logits.copy_to_host_async(&mut host_logits, stream.raw());
-            let _ = stream.synchronize();
-            let mut top: Vec<(usize, f32)> = host_logits.iter().copied().enumerate().collect();
-            top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            println!("CUDA chunk {:?} top 5 logits: {:?}", tokens, &top[..5]);
+    // Compare CUDA step vs CUDA chunk for prefix lengths 1..=tokens.len()
+    for len in 1..=tokens.len() {
+        let prefix = &tokens[..len];
+        let mut pipe_step = SpecializedPipeline::from_model_or_path(
+            &model_path.to_string_lossy(),
+            "cuda",
+            None,
+            1,
+            None,
+        )?;
+        pipe_step.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
+        let mut step_sampled = 0;
+        for (i, &tok) in prefix.iter().enumerate() {
+            let is_prefill = i + 1 < prefix.len();
+            let cmd = oxide_core::StepCommand::new(1, tok, 0, is_prefill);
+            let res = pipe_step.step(&cmd)?;
+            step_sampled = res.sampled_token;
         }
+
+        let mut pipe_chunk_test = SpecializedPipeline::from_model_or_path(
+            &model_path.to_string_lossy(),
+            "cuda",
+            None,
+            1,
+            None,
+        )?;
+        pipe_chunk_test.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
+        let mut chunk_sampled = 0;
+        if let SpecializedPipeline::Llama3Cuda(ref mut eng) = pipe_chunk_test {
+            let res = eng.backend.dispatch_prefill_chunk(prefix, true)?;
+            chunk_sampled = res.unwrap_or(0);
+        }
+
+        let match_str = if step_sampled == chunk_sampled { "MATCH" } else { "MISMATCH" };
+        println!("Len {}: step={} ({:?}) vs chunk={} ({:?}) -> {}",
+            len,
+            step_sampled, tokenizer.decode_token(step_sampled),
+            chunk_sampled, tokenizer.decode_token(chunk_sampled),
+            match_str);
     }
 
     Ok(())

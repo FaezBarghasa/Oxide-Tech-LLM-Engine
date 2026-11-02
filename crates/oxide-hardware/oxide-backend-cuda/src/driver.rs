@@ -144,6 +144,26 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_q5_0(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_mmvq_q5_0_fused_add(
+        y: *mut f32,
+        raw_blocks: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_gemv_tq2_0(
         y: *mut f32,
         raw_blocks: *const std::ffi::c_void,
@@ -609,6 +629,26 @@ unsafe extern "C" {
         top_p: f32,
         seed: u64,
         d_seq_pos: *const i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_dequantize_token_embd(
+        d_hidden: *mut f32,
+        d_token_embd: *const std::ffi::c_void,
+        tok_idx: i32,
+        hidden_dim: i32,
+        scale: f32,
+        quant_type: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_dequantize_token_embd_ptr(
+        d_hidden: *mut f32,
+        d_token_embd: *const std::ffi::c_void,
+        d_tok_idx: *const i32,
+        hidden_dim: i32,
+        scale: f32,
+        quant_type: i32,
         stream: cudaStream_t,
     ) -> i32;
 

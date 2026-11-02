@@ -1189,32 +1189,10 @@ impl QuantizedTensor {
                 }
             }
             Self::Q4_0 { blocks, m, n } => {
-                let mut chunk = [0.0f32; 32];
-                let bpr = *n / 32;
-                for r in 0..*m {
-                    let mut sum = 0.0f32;
-                    for b in 0..bpr {
-                        blocks[r * bpr + b].dequantize(&mut chunk);
-                        for i in 0..32 {
-                            sum += chunk[i] * vector[b * 32 + i];
-                        }
-                    }
-                    output[r] = sum;
-                }
+                oxide_quant::simd::gemv_q4_0(blocks.as_ref(), vector, *m, *n, output);
             }
             Self::Q5_0 { blocks, m, n } => {
-                let mut chunk = [0.0f32; 32];
-                let bpr = *n / 32;
-                for r in 0..*m {
-                    let mut sum = 0.0f32;
-                    for b in 0..bpr {
-                        blocks[r * bpr + b].dequantize(&mut chunk);
-                        for i in 0..32 {
-                            sum += chunk[i] * vector[b * 32 + i];
-                        }
-                    }
-                    output[r] = sum;
-                }
+                oxide_quant::simd::gemv_q5_0(blocks.as_ref(), vector, *m, *n, output);
             }
             Self::TQ2_0 { blocks, m, n } => {
                 let mut chunk = [0.0f32; 256];

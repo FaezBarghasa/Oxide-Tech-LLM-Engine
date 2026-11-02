@@ -437,6 +437,81 @@ __global__ void gemv_q5_0_cuda_kernel(float *__restrict__ y,
   }
 }
 
+template <int BATCH_N, bool ADD_TO_Y = false>
+__global__ void mmvq_q5_0_cuda_kernel(float *__restrict__ y,
+                                      const void *__restrict__ raw_blocks,
+                                      const void *__restrict__ x_q8_1_raw,
+                                      int m, int k, int actual_batch,
+                                      int col_offset) {
+  int row = blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+  if (row >= m)
+    return;
+
+  int lane_id = threadIdx.x % 32;
+  int num_blocks_per_row = k / 32;
+
+  int num_cols =
+      (actual_batch > col_offset
+           ? ((actual_batch - col_offset) < BATCH_N
+                  ? (actual_batch - col_offset)
+                  : BATCH_N)
+           : 0);
+  if (num_cols <= 0)
+    return;
+
+  const BlockQ5_0_Gpu *row_blocks =
+      (const BlockQ5_0_Gpu *)((const uint8_t *)raw_blocks +
+                              (size_t)row * num_blocks_per_row * 22);
+  const BlockQ8_1_Gpu *x_q8_1 = (const BlockQ8_1_Gpu *)x_q8_1_raw;
+
+  float thread_dot[BATCH_N];
+#pragma unroll
+  for (int col = 0; col < BATCH_N; ++col) {
+    thread_dot[col] = 0.0f;
+  }
+
+  int i = lane_id & 15;
+  for (int b = 0; b < num_blocks_per_row; ++b) {
+    const BlockQ5_0_Gpu *blk = &row_blocks[b];
+    float d = __half2float(*((const half *)&blk->d));
+    uint32_t qh = (uint32_t)blk->qh[0] | ((uint32_t)blk->qh[1] << 8) |
+                  ((uint32_t)blk->qh[2] << 16) | ((uint32_t)blk->qh[3] << 24);
+    uint8_t byte = blk->qs[i];
+    uint8_t h = (qh >> lane_id) & 1;
+    int8_t q = (lane_id < 16)
+        ? (int8_t)(((int)(byte & 0x0F) | ((int)h << 4)) - 16)
+        : (int8_t)(((int)((byte >> 4) & 0x0F) | ((int)h << 4)) - 16);
+
+#pragma unroll
+    for (int col = 0; col < BATCH_N; ++col) {
+      const BlockQ8_1_Gpu *bq8_1 =
+          &x_q8_1[(col_offset + col) * num_blocks_per_row + b];
+      float d8 = __low2float(bq8_1->ds);
+      int8_t u = bq8_1->qs[lane_id];
+      thread_dot[col] += (d * d8) * (float)((int)q * (int)u);
+    }
+  }
+
+#pragma unroll
+  for (int col = 0; col < BATCH_N; ++col) {
+    if (BATCH_N == 1 || col < num_cols) {
+      float val = thread_dot[col];
+#pragma unroll
+      for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+      }
+
+      if (lane_id == 0) {
+        if (ADD_TO_Y) {
+          y[(col_offset + col) * m + row] += val;
+        } else {
+          y[(col_offset + col) * m + row] = val;
+        }
+      }
+    }
+  }
+}
+
 /**
  * Custom CUDA Kernel: Quantized TQ2_0 (Ternary 2-bit, 2.06 bpw) Matrix-Vector
  * GEMV (66-byte Block x FP32 Activations). Warp-Per-Row architecture: 0 shared
@@ -4626,6 +4701,43 @@ int launch_cuda_gemv_q5_0(float *y, const void *raw_blocks, const float *x,
   return cudaGetLastError();
 }
 
+int launch_cuda_mmvq_q5_0(float *y, const void *raw_blocks, const void *x_q8_1,
+                          int m, int k, int batch_size, cudaStream_t stream) {
+  if (m <= 0 || k <= 0 || batch_size <= 0)
+    return 0;
+  int grid, block;
+  get_gemv_launch_dims(m, grid, block);
+  if (batch_size == 1) {
+    mmvq_q5_0_cuda_kernel<1, false>
+        <<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1, 0);
+  } else {
+    for (int col_offset = 0; col_offset < batch_size; col_offset += 8) {
+      mmvq_q5_0_cuda_kernel<8, false><<<grid, block, 0, stream>>>(
+          y, raw_blocks, x_q8_1, m, k, batch_size, col_offset);
+    }
+  }
+  return cudaGetLastError();
+}
+
+int launch_cuda_mmvq_q5_0_fused_add(float *y, const void *raw_blocks,
+                                    const void *x_q8_1, int m, int k,
+                                    int batch_size, cudaStream_t stream) {
+  if (m <= 0 || k <= 0 || batch_size <= 0)
+    return 0;
+  int grid, block;
+  get_gemv_launch_dims(m, grid, block);
+  if (batch_size == 1) {
+    mmvq_q5_0_cuda_kernel<1, true>
+        <<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1, 0);
+  } else {
+    for (int col_offset = 0; col_offset < batch_size; col_offset += 8) {
+      mmvq_q5_0_cuda_kernel<8, true><<<grid, block, 0, stream>>>(
+          y, raw_blocks, x_q8_1, m, k, batch_size, col_offset);
+    }
+  }
+  return cudaGetLastError();
+}
+
 int launch_cuda_gemv_tq2_0(float *y, const void *raw_blocks, const float *x,
                            int m, int k, cudaStream_t stream) {
   if (m <= 0 || k <= 0)
@@ -5953,16 +6065,132 @@ __global__ void dequantize_token_embd_q4_k_cuda_kernel(
   }
 }
 
+__global__ void dequantize_token_embd_q5_0_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    int tok_idx, int hidden_dim, float scale,
+    const int *__restrict__ d_tok_idx = nullptr) {
+  int actual_tok_idx = (d_tok_idx != nullptr) ? *d_tok_idx : tok_idx;
+  int num_blocks_per_row = hidden_dim / 32;
+  int b = blockIdx.x;
+  if (b >= num_blocks_per_row)
+    return;
+
+  const BlockQ5_0_Gpu *row_blocks =
+      (const BlockQ5_0_Gpu *)((const uint8_t *)raw_embd +
+                              (size_t)actual_tok_idx * num_blocks_per_row * 22);
+  const BlockQ5_0_Gpu *blk = &row_blocks[b];
+
+  int lane_id = threadIdx.x % 32;
+  float d = __half2float(*((const half *)&blk->d)) * scale;
+  uint32_t qh = (uint32_t)blk->qh[0] | ((uint32_t)blk->qh[1] << 8) |
+                ((uint32_t)blk->qh[2] << 16) | ((uint32_t)blk->qh[3] << 24);
+
+  if (lane_id < 16) {
+    uint8_t byte = blk->qs[lane_id];
+    uint8_t h0 = (qh >> lane_id) & 1;
+    uint8_t h1 = (qh >> (lane_id + 16)) & 1;
+    float q0 = (float)(((int)(byte & 0x0F) | ((int)h0 << 4)) - 16);
+    float q1 = (float)(((int)((byte >> 4) & 0x0F) | ((int)h1 << 4)) - 16);
+
+    d_hidden[b * 32 + lane_id] = q0 * d;
+    d_hidden[b * 32 + lane_id + 16] = q1 * d;
+  }
+}
+
+__global__ void dequantize_token_embd_q8_0_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    int tok_idx, int hidden_dim, float scale,
+    const int *__restrict__ d_tok_idx = nullptr) {
+  int actual_tok_idx = (d_tok_idx != nullptr) ? *d_tok_idx : tok_idx;
+  int num_blocks_per_row = hidden_dim / 32;
+  int b = blockIdx.x;
+  if (b >= num_blocks_per_row)
+    return;
+
+  const BlockQ8_0_Gpu *row_blocks =
+      (const BlockQ8_0_Gpu *)((const uint8_t *)raw_embd +
+                              (size_t)actual_tok_idx * num_blocks_per_row * 34);
+  const BlockQ8_0_Gpu *blk = &row_blocks[b];
+
+  int lane_id = threadIdx.x % 32;
+  float d = __half2float(*((const half *)&blk->scale)) * scale;
+  d_hidden[b * 32 + lane_id] = (float)blk->qs[lane_id] * d;
+}
+
+__global__ void dequantize_token_embd_fp32_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    int tok_idx, int hidden_dim, float scale,
+    const int *__restrict__ d_tok_idx = nullptr) {
+  int actual_tok_idx = (d_tok_idx != nullptr) ? *d_tok_idx : tok_idx;
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < hidden_dim) {
+    const float *row =
+        ((const float *)raw_embd) + (size_t)actual_tok_idx * hidden_dim;
+    d_hidden[idx] = row[idx] * scale;
+  }
+}
+
+int launch_cuda_dequantize_token_embd(float *d_hidden,
+                                      const void *d_token_embd,
+                                      int tok_idx, int hidden_dim,
+                                      float scale, int quant_type,
+                                      cudaStream_t stream) {
+  if (!d_hidden || !d_token_embd || hidden_dim <= 0)
+    return 0;
+  if (quant_type == 1) { // Q4_K
+    int num_blocks = hidden_dim / 256;
+    dequantize_token_embd_q4_k_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+        d_hidden, d_token_embd, tok_idx, hidden_dim, scale);
+  } else if (quant_type == 2) { // Q5_0
+    int num_blocks = hidden_dim / 32;
+    dequantize_token_embd_q5_0_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+        d_hidden, d_token_embd, tok_idx, hidden_dim, scale);
+  } else if (quant_type == 3) { // Q8_0
+    int num_blocks = hidden_dim / 32;
+    dequantize_token_embd_q8_0_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+        d_hidden, d_token_embd, tok_idx, hidden_dim, scale);
+  } else if (quant_type == 0) { // FP32
+    int num_blocks = (hidden_dim + 255) / 256;
+    dequantize_token_embd_fp32_cuda_kernel<<<num_blocks, 256, 0, stream>>>(
+        d_hidden, d_token_embd, tok_idx, hidden_dim, scale);
+  }
+  return cudaGetLastError();
+}
+
+int launch_cuda_dequantize_token_embd_ptr(float *d_hidden,
+                                          const void *d_token_embd,
+                                          const int *d_tok_idx,
+                                          int hidden_dim, float scale,
+                                          int quant_type,
+                                          cudaStream_t stream) {
+  if (!d_hidden || !d_token_embd || hidden_dim <= 0)
+    return 0;
+  if (quant_type == 1) { // Q4_K
+    int num_blocks = hidden_dim / 256;
+    dequantize_token_embd_q4_k_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+        d_hidden, d_token_embd, 0, hidden_dim, scale, d_tok_idx);
+  } else if (quant_type == 2) { // Q5_0
+    int num_blocks = hidden_dim / 32;
+    dequantize_token_embd_q5_0_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+        d_hidden, d_token_embd, 0, hidden_dim, scale, d_tok_idx);
+  } else if (quant_type == 3) { // Q8_0
+    int num_blocks = hidden_dim / 32;
+    dequantize_token_embd_q8_0_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
+        d_hidden, d_token_embd, 0, hidden_dim, scale, d_tok_idx);
+  } else if (quant_type == 0) { // FP32
+    int num_blocks = (hidden_dim + 255) / 256;
+    dequantize_token_embd_fp32_cuda_kernel<<<num_blocks, 256, 0, stream>>>(
+        d_hidden, d_token_embd, 0, hidden_dim, scale, d_tok_idx);
+  }
+  return cudaGetLastError();
+}
+
 int launch_cuda_dequantize_token_embd_q4_k(float *d_hidden,
                                            const void *d_token_embd,
                                            int tok_idx, int hidden_dim,
                                            float scale, cudaStream_t stream) {
-  if (!d_hidden || !d_token_embd || hidden_dim <= 0)
-    return 0;
-  int num_blocks = hidden_dim / 256;
-  dequantize_token_embd_q4_k_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
-      d_hidden, d_token_embd, tok_idx, hidden_dim, scale);
-  return cudaGetLastError();
+  return launch_cuda_dequantize_token_embd(d_hidden, d_token_embd, tok_idx,
+                                           hidden_dim, scale, 1, stream);
 }
 
 int launch_cuda_dequantize_token_embd_q4_k_ptr(float *d_hidden,
@@ -5970,12 +6198,8 @@ int launch_cuda_dequantize_token_embd_q4_k_ptr(float *d_hidden,
                                                const int *d_tok_idx,
                                                int hidden_dim, float scale,
                                                cudaStream_t stream) {
-  if (!d_hidden || !d_token_embd || hidden_dim <= 0)
-    return 0;
-  int num_blocks = hidden_dim / 256;
-  dequantize_token_embd_q4_k_cuda_kernel<<<num_blocks, 32, 0, stream>>>(
-      d_hidden, d_token_embd, 0, hidden_dim, scale, d_tok_idx);
-  return cudaGetLastError();
+  return launch_cuda_dequantize_token_embd_ptr(
+      d_hidden, d_token_embd, d_tok_idx, hidden_dim, scale, 1, stream);
 }
 
 int launch_cuda_mmvq_qkv_mixed_ptr(float *y_q, float *y_k, float *y_v,
