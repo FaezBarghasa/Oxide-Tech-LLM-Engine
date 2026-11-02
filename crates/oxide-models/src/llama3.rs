@@ -1253,6 +1253,27 @@ impl QuantizedTensor {
         }
     }
 
+    /// High-performance SIMD GEMV utilizing pre-quantized BlockQ8_K activations to avoid redundant quantization.
+    #[inline(always)]
+    pub fn gemv_with_q8_k_act(
+        &self,
+        q8_k_act: &[oxide_quant::int_quant::BlockQ8_K],
+        vector: &[f32],
+        output: &mut [f32],
+    ) {
+        match self {
+            Self::Q4_K { blocks, m, n } => {
+                oxide_quant::simd::gemv_q4_k_prequantized(blocks.as_ref(), q8_k_act, *m, *n, output);
+            }
+            Self::Q6_K { blocks, m, n } => {
+                oxide_quant::simd::gemv_q6_k_prequantized(blocks.as_ref(), q8_k_act, *m, *n, output);
+            }
+            _ => {
+                self.gemv(vector, output);
+            }
+        }
+    }
+
     /// Fused 3-way projection (e.g. Q, K, V) over the same normalized input vector.
     pub fn fused_gemv_3way(
         t1: &Self,
@@ -1262,11 +1283,12 @@ impl QuantizedTensor {
         t3: &Self,
         out3: &mut [f32],
         vector: &[f32],
+        q8_k_act: &mut Vec<oxide_quant::int_quant::BlockQ8_K>,
     ) {
-        rayon::join(
-            || t1.gemv(vector, out1),
-            || rayon::join(|| t2.gemv(vector, out2), || t3.gemv(vector, out3)),
-        );
+        oxide_quant::simd::quantize_row_q8_k(vector, q8_k_act);
+        t1.gemv_with_q8_k_act(q8_k_act, vector, out1);
+        t2.gemv_with_q8_k_act(q8_k_act, vector, out2);
+        t3.gemv_with_q8_k_act(q8_k_act, vector, out3);
     }
 
     /// Fused 2-way projection (e.g. Gate and Up) over the same normalized input vector.
@@ -1276,8 +1298,11 @@ impl QuantizedTensor {
         t2: &Self,
         out2: &mut [f32],
         vector: &[f32],
+        q8_k_act: &mut Vec<oxide_quant::int_quant::BlockQ8_K>,
     ) {
-        rayon::join(|| t1.gemv(vector, out1), || t2.gemv(vector, out2));
+        oxide_quant::simd::quantize_row_q8_k(vector, q8_k_act);
+        t1.gemv_with_q8_k_act(q8_k_act, vector, out1);
+        t2.gemv_with_q8_k_act(q8_k_act, vector, out2);
     }
 
     #[must_use]
@@ -3115,6 +3140,7 @@ impl Llama3Model {
                 &layer.v_proj,
                 &mut scratch.v,
                 &scratch.norm_hidden[..h],
+                &mut scratch.q8_k_act,
             );
 
             // Add Q, K, V biases if present (e.g. Qwen2 / Qwen2.5)
@@ -3610,6 +3636,8 @@ pub struct Llama3ScratchBuffers {
     pub mlp_out: Vec<f32>,
     pub final_norm: Vec<f32>,
     pub logits: Vec<f32>,
+    pub q8_k_act: Vec<oxide_quant::int_quant::BlockQ8_K>,
+    pub q8_k_ffn_act: Vec<oxide_quant::int_quant::BlockQ8_K>,
 }
 
 impl Llama3ScratchBuffers {
@@ -3637,6 +3665,8 @@ impl Llama3ScratchBuffers {
             mlp_out: vec![0.0; h],
             final_norm: vec![0.0; h],
             logits: vec![0.0; v],
+            q8_k_act: Vec::with_capacity(h.div_ceil(256)),
+            q8_k_ffn_act: Vec::with_capacity(inter.max(h).div_ceil(256)),
         }
     }
 }

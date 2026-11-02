@@ -1439,6 +1439,91 @@ fn dot_q6_k_q8_k_row_portable(
     sum
 }
 
+#[inline]
+fn get_team_threads() -> usize {
+    if let Ok(val) = std::env::var("OXIDE_NUM_THREADS") {
+        if let Ok(n) = val.parse::<usize>() {
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    if let Ok(val) = std::env::var("RAYON_NUM_THREADS") {
+        if let Ok(n) = val.parse::<usize>() {
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    8
+}
+
+/// Quantize an f32 vector into pre-allocated BlockQ8_K blocks.
+#[inline]
+pub fn quantize_row_q8_k(vector: &[f32], q8_k_act: &mut Vec<crate::int_quant::BlockQ8_K>) {
+    let blocks_per_row = vector.len() / 256;
+    q8_k_act.clear();
+    if q8_k_act.capacity() < blocks_per_row {
+        q8_k_act.reserve(blocks_per_row - q8_k_act.capacity());
+    }
+    for b in 0..blocks_per_row {
+        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+            .try_into()
+            .expect("slice length 256");
+        q8_k_act.push(crate::int_quant::BlockQ8_K::quantize(act_chunk));
+    }
+}
+
+/// Multithreaded Q6_K Matrix-Vector Multiplication using pre-quantized BlockQ8_K activations.
+pub fn gemv_q6_k_prequantized(
+    matrix: &[crate::int_quant::BlockQ6_K],
+    q8_k_act: &[crate::int_quant::BlockQ8_K],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    let blocks_per_row = n / 256;
+    #[cfg(target_arch = "x86_64")]
+    let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+    #[cfg(not(target_arch = "x86_64"))]
+    let has_avx2 = false;
+
+    if m <= 8 {
+        for row in 0..m {
+            let row_offset = row * blocks_per_row;
+            let row_weights = &matrix[row_offset..row_offset + blocks_per_row];
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                output[row] = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, q8_k_act) };
+                continue;
+            }
+            output[row] = dot_q6_k_q8_k_row_portable(row_weights, q8_k_act);
+        }
+        return;
+    }
+
+    let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+    let out_ptr = output.as_mut_ptr() as usize;
+
+    team.dispatch_rows(m, |start, end| {
+        let local_out = unsafe {
+            std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+        };
+        for (i, row) in (start..end).enumerate() {
+            let row_offset = row * blocks_per_row;
+            let row_weights = &matrix[row_offset..row_offset + blocks_per_row];
+
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                local_out[i] = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, q8_k_act) };
+                continue;
+            }
+
+            local_out[i] = dot_q6_k_q8_k_row_portable(row_weights, q8_k_act);
+        }
+    });
+}
+
 /// Multithreaded Q6_K Matrix-Vector Multiplication across all CPU cores and threads.
 pub fn gemv_q6_k(
     matrix: &[crate::int_quant::BlockQ6_K],
@@ -1459,43 +1544,9 @@ pub fn gemv_q6_k(
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
-    // Single-pass activation quantization to BlockQ8_K (O(N), ~5KB buffer fits in L1 cache)
     let mut q8_k_act = Vec::with_capacity(blocks_per_row);
-    for b in 0..blocks_per_row {
-        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
-            .try_into()
-            .expect("slice length 256");
-        q8_k_act.push(crate::int_quant::BlockQ8_K::quantize(act_chunk));
-    }
-
-    let threads = rayon::current_num_threads();
-    let chunk_size = (m / (threads * 4)).clamp(16, 256);
-
-    output[..m]
-        .par_chunks_mut(chunk_size)
-        .enumerate()
-        .for_each(|(chunk_idx, out_chunk)| {
-            let base_row = chunk_idx * chunk_size;
-            #[cfg(target_arch = "x86_64")]
-            let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
-            #[cfg(not(target_arch = "x86_64"))]
-            let has_avx2 = false;
-
-            for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                let row = base_row + i;
-                let row_offset = row * blocks_per_row;
-                let row_weights = &matrix[row_offset..row_offset + blocks_per_row];
-
-                #[cfg(target_arch = "x86_64")]
-                if has_avx2 {
-                    // SAFETY: Verified AVX2 & FMA feature flags before invoking target-specific intrinsics.
-                    *out_val = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, &q8_k_act) };
-                    continue;
-                }
-
-                *out_val = dot_q6_k_q8_k_row_portable(row_weights, &q8_k_act);
-            }
-        });
+    quantize_row_q8_k(vector, &mut q8_k_act);
+    gemv_q6_k_prequantized(matrix, &q8_k_act, m, n, output);
 }
 
 /// Multithreaded Q5_0 Matrix-Vector Multiplication across all CPU cores and threads.
@@ -1805,9 +1856,6 @@ pub fn gemv_q8_0(
             act_q8.push(crate::int_quant::BlockQ8_0::quantize(act_chunk));
         }
 
-        let num_threads = rayon::current_num_threads();
-        let chunk_size = (m / (num_threads * 4)).clamp(16, 512);
-
         if m <= 8 {
             for row in 0..m {
                 let row_offset = row * blocks_per_row;
@@ -1820,22 +1868,24 @@ pub fn gemv_q8_0(
                 };
             }
         } else {
-            output[..m].par_chunks_mut(chunk_size).enumerate().for_each(
-                |(chunk_idx, out_chunk)| {
-                    let base_row = chunk_idx * chunk_size;
-                    for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                        let row = base_row + i;
-                        let row_offset = row * blocks_per_row;
-                        // SAFETY: Target architecture supports AVX2 and FMA.
-                        *out_val = unsafe {
-                            dot_q8_0_q8_0_row_avx2(
-                                &matrix[row_offset..row_offset + blocks_per_row],
-                                &act_q8,
-                            )
-                        };
-                    }
-                },
-            );
+            let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+            let out_ptr = output.as_mut_ptr() as usize;
+
+            team.dispatch_rows(m, |start, end| {
+                let local_out = unsafe {
+                    std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+                };
+                for (i, row) in (start..end).enumerate() {
+                    let row_offset = row * blocks_per_row;
+                    // SAFETY: Target architecture supports AVX2 and FMA.
+                    local_out[i] = unsafe {
+                        dot_q8_0_q8_0_row_avx2(
+                            &matrix[row_offset..row_offset + blocks_per_row],
+                            &act_q8,
+                        )
+                    };
+                }
+            });
         }
         return;
     }
@@ -1933,6 +1983,214 @@ pub fn gemv_q4_0(
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q4_k_q8_k_row_avx2(
+    row_weights: &[crate::gguf_quants::BlockQ4_K],
+    act_q8_k: &[crate::int_quant::BlockQ8_K],
+) -> f32 {
+    use core::arch::x86_64::{
+        _mm_cvtepi32_ps, _mm_fmadd_ps, _mm_hadd_epi16, _mm_madd_epi16,
+        _mm_set_epi32, _mm_set1_ps, _mm_setzero_ps, _mm_storeu_ps,
+        _mm256_add_epi32, _mm256_and_si256, _mm256_castsi128_si256,
+        _mm256_cvtepi32_ps, _mm256_cvtepu8_epi16, _mm256_extracti128_si256, _mm256_fmadd_ps,
+        _mm256_inserti128_si256, _mm256_loadu_si256, _mm256_madd_epi16,
+        _mm256_maddubs_epi16, _mm256_set1_epi8, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_ps,
+    };
+
+    static K_SHUFFLE_K4: [u8; 256] = [
+        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+        2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
+        4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,
+        6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
+        8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,
+        10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11,
+        12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13,
+        14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+    ];
+
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
+
+    // SAFETY: caller guarantees avx2 and fma features are enabled and slices have valid aligned data.
+    unsafe {
+        let m4 = _mm256_set1_epi8(0x0F);
+        let mut acc = _mm256_setzero_ps();
+        let mut acc_m = _mm_setzero_ps();
+
+        for (x, y) in row_weights.iter().zip(act_q8_k.iter()) {
+            let d = y.d * x.d.to_f32();
+            let dmin = -y.d * x.dmin.to_f32();
+
+            let mut utmp = [0u32; 4];
+            std::ptr::copy_nonoverlapping(x.scales.as_ptr(), utmp.as_mut_ptr().cast::<u8>(), 12);
+
+            utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
+            let uaux = utmp[1] & KMASK1;
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
+            utmp[2] = uaux;
+            utmp[0] &= KMASK1;
+
+            let mins_and_scales = _mm256_cvtepu8_epi16(_mm_set_epi32(
+                utmp[3] as i32,
+                utmp[2] as i32,
+                utmp[1] as i32,
+                utmp[0] as i32,
+            ));
+
+            let q8sums = _mm256_loadu_si256(y.bsums.as_ptr().cast());
+            let q8s = _mm_hadd_epi16(
+                _mm256_extracti128_si256(q8sums, 0),
+                _mm256_extracti128_si256(q8sums, 1),
+            );
+            let prod = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales, 1), q8s);
+            acc_m = _mm_fmadd_ps(_mm_set1_ps(dmin), _mm_cvtepi32_ps(prod), acc_m);
+
+            let sc128 = _mm256_extracti128_si256(mins_and_scales, 0);
+            let scales = _mm256_inserti128_si256(_mm256_castsi128_si256(sc128), sc128, 1);
+
+            let mut sumi = _mm256_setzero_si256();
+            let mut q4_ptr = x.qs.as_ptr();
+            let mut q8_ptr = y.qs.as_ptr();
+
+            for j in 0..4 {
+                let scale_l = _mm256_shuffle_epi8(
+                    scales,
+                    _mm256_loadu_si256(K_SHUFFLE_K4.as_ptr().add((2 * j) * 32).cast()),
+                );
+                let scale_h = _mm256_shuffle_epi8(
+                    scales,
+                    _mm256_loadu_si256(K_SHUFFLE_K4.as_ptr().add((2 * j + 1) * 32).cast()),
+                );
+
+                let q4bits = _mm256_loadu_si256(q4_ptr.cast());
+                q4_ptr = q4_ptr.add(32);
+                let q4l = _mm256_and_si256(q4bits, m4);
+                let q4h = _mm256_and_si256(_mm256_srli_epi16(q4bits, 4), m4);
+
+                let q8l = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let mut p16l = _mm256_maddubs_epi16(q4l, q8l);
+                p16l = _mm256_madd_epi16(scale_l, p16l);
+
+                let q8h = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let mut p16h = _mm256_maddubs_epi16(q4h, q8h);
+                p16h = _mm256_madd_epi16(scale_h, p16h);
+
+                let sumj = _mm256_add_epi32(p16l, p16h);
+                sumi = _mm256_add_epi32(sumi, sumj);
+            }
+
+            acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(sumi), acc);
+        }
+
+        let mut buf_m = [0.0f32; 4];
+        _mm_storeu_ps(buf_m.as_mut_ptr(), acc_m);
+        let sum_m = buf_m[0] + buf_m[1] + buf_m[2] + buf_m[3];
+
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), acc);
+        let sum_acc = (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7]);
+
+        sum_acc + sum_m
+    }
+}
+
+fn dot_q4_k_q8_k_row_portable(
+    row_weights: &[crate::gguf_quants::BlockQ4_K],
+    act_q8_k: &[crate::int_quant::BlockQ8_K],
+) -> f32 {
+    let mut sum = 0.0f32;
+    for (blk, act_blk) in row_weights.iter().zip(act_q8_k.iter()) {
+        let d = act_blk.d * blk.d.to_f32();
+        let dmin = -act_blk.d * blk.dmin.to_f32();
+        let mut is = 0;
+        let mut block_sum = 0i32;
+        let mut min_sum = 0i32;
+
+        for chunk in 0..4 {
+            let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is, &blk.scales);
+            let (sc2, m2) = crate::gguf_quants::get_scale_min_k4(is + 1, &blk.scales);
+            let q_base = chunk * 32;
+            let act_base = chunk * 64;
+
+            let mut q_sum1 = 0i32;
+            let mut q_sum2 = 0i32;
+            for l in 0..32 {
+                let byte = blk.qs[q_base + l];
+                let q1 = (byte & 0x0F) as i32;
+                let q2 = (byte >> 4) as i32;
+                let a1 = act_blk.qs[act_base + l] as i32;
+                let a2 = act_blk.qs[act_base + 32 + l] as i32;
+                q_sum1 += q1 * a1;
+                q_sum2 += q2 * a2;
+            }
+            block_sum += (sc1 as i32) * q_sum1 + (sc2 as i32) * q_sum2;
+
+            let sum_a1 = (act_blk.bsums[chunk * 4] as i32) + (act_blk.bsums[chunk * 4 + 1] as i32);
+            let sum_a2 = (act_blk.bsums[chunk * 4 + 2] as i32) + (act_blk.bsums[chunk * 4 + 3] as i32);
+            min_sum += (m1 as i32) * sum_a1 + (m2 as i32) * sum_a2;
+
+            is += 2;
+        }
+        sum += d * (block_sum as f32) + dmin * (min_sum as f32);
+    }
+    sum
+}
+
+/// Multithreaded Q4_K Matrix-Vector Multiplication using pre-quantized BlockQ8_K activations.
+pub fn gemv_q4_k_prequantized(
+    matrix: &[crate::gguf_quants::BlockQ4_K],
+    q8_k_act: &[crate::int_quant::BlockQ8_K],
+    m: usize,
+    n: usize,
+    output: &mut [f32],
+) {
+    let blocks_per_row = n / 256;
+    #[cfg(target_arch = "x86_64")]
+    let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+    #[cfg(not(target_arch = "x86_64"))]
+    let has_avx2 = false;
+
+    if m <= 8 {
+        for row in 0..m {
+            let row_offset = row * blocks_per_row;
+            let row_blocks = &matrix[row_offset..row_offset + blocks_per_row];
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                output[row] = unsafe { dot_q4_k_q8_k_row_avx2(row_blocks, q8_k_act) };
+                continue;
+            }
+            output[row] = dot_q4_k_q8_k_row_portable(row_blocks, q8_k_act);
+        }
+        return;
+    }
+
+    let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+    let out_ptr = output.as_mut_ptr() as usize;
+
+    team.dispatch_rows(m, |start, end| {
+        let local_out = unsafe {
+            std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
+        };
+        for (i, row) in (start..end).enumerate() {
+            let row_offset = row * blocks_per_row;
+            let row_blocks = &matrix[row_offset..row_offset + blocks_per_row];
+
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                local_out[i] = unsafe { dot_q4_k_q8_k_row_avx2(row_blocks, q8_k_act) };
+                continue;
+            }
+
+            local_out[i] = dot_q4_k_q8_k_row_portable(row_blocks, q8_k_act);
+        }
+    });
+}
+
 /// Multithreaded Q4_K Matrix-Vector Multiplication across all CPU cores and threads.
 #[allow(clippy::too_many_lines)]
 pub fn gemv_q4_k(
@@ -1954,124 +2212,9 @@ pub fn gemv_q4_k(
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
-    let compute_row = |row: usize| -> f32 {
-        let row_offset = row * blocks_per_row;
-        let mut acc = 0.0f32;
-        for b in 0..blocks_per_row {
-            let blk = &matrix[row_offset + b];
-            let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
-                .try_into()
-                .expect("slice length 256");
-            acc += dot_q4_k(
-                &blk.qs,
-                &blk.scales,
-                act_chunk,
-                blk.d.to_f32(),
-                blk.dmin.to_f32(),
-            );
-        }
-        acc
-    };
-
-    if m <= 32 {
-        for row in 0..m {
-            output[row] = compute_row(row);
-        }
-    } else {
-        // Divide work across 8 physical Zen 4 cores with sufficiently coarse-grained chunks (>= 64 rows)
-        let num_threads = rayon::current_num_threads().max(1);
-        let chunk_size = (m / num_threads).max(64);
-        output[..m]
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * chunk_size;
-                let chunk_len = out_chunk.len();
-                let mut i = 0;
-
-                // Process in 4-row tiles to reuse the activation vector in L1/L2 and issue prefetch hints
-                while i + 4 <= chunk_len {
-                    let r0 = base_row + i;
-                    let r1 = r0 + 1;
-                    let r2 = r0 + 2;
-                    let r3 = r0 + 3;
-
-                    let off0 = r0 * blocks_per_row;
-                    let off1 = r1 * blocks_per_row;
-                    let off2 = r2 * blocks_per_row;
-                    let off3 = r3 * blocks_per_row;
-
-                    let mut acc0 = 0.0f32;
-                    let mut acc1 = 0.0f32;
-                    let mut acc2 = 0.0f32;
-                    let mut acc3 = 0.0f32;
-
-                    for b in 0..blocks_per_row {
-                        // Prefetch next blocks into cache
-                        #[cfg(target_arch = "x86_64")]
-                        if b + 1 < blocks_per_row {
-                            // SAFETY: Address calculation within matrix slice bounds verified by b + 1 < blocks_per_row.
-                            unsafe {
-                                use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-                                _mm_prefetch(matrix.as_ptr().add(off0 + b + 1).cast(), _MM_HINT_T0);
-                                _mm_prefetch(matrix.as_ptr().add(off1 + b + 1).cast(), _MM_HINT_T0);
-                                _mm_prefetch(matrix.as_ptr().add(off2 + b + 1).cast(), _MM_HINT_T0);
-                                _mm_prefetch(matrix.as_ptr().add(off3 + b + 1).cast(), _MM_HINT_T0);
-                            }
-                        }
-
-                        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
-                            .try_into()
-                            .expect("slice length 256");
-
-                        let blk0 = &matrix[off0 + b];
-                        let blk1 = &matrix[off1 + b];
-                        let blk2 = &matrix[off2 + b];
-                        let blk3 = &matrix[off3 + b];
-
-                        acc0 += dot_q4_k(
-                            &blk0.qs,
-                            &blk0.scales,
-                            act_chunk,
-                            blk0.d.to_f32(),
-                            blk0.dmin.to_f32(),
-                        );
-                        acc1 += dot_q4_k(
-                            &blk1.qs,
-                            &blk1.scales,
-                            act_chunk,
-                            blk1.d.to_f32(),
-                            blk1.dmin.to_f32(),
-                        );
-                        acc2 += dot_q4_k(
-                            &blk2.qs,
-                            &blk2.scales,
-                            act_chunk,
-                            blk2.d.to_f32(),
-                            blk2.dmin.to_f32(),
-                        );
-                        acc3 += dot_q4_k(
-                            &blk3.qs,
-                            &blk3.scales,
-                            act_chunk,
-                            blk3.d.to_f32(),
-                            blk3.dmin.to_f32(),
-                        );
-                    }
-
-                    out_chunk[i] = acc0;
-                    out_chunk[i + 1] = acc1;
-                    out_chunk[i + 2] = acc2;
-                    out_chunk[i + 3] = acc3;
-                    i += 4;
-                }
-
-                while i < chunk_len {
-                    out_chunk[i] = compute_row(base_row + i);
-                    i += 1;
-                }
-            });
-    }
+    let mut q8_k_act = Vec::with_capacity(blocks_per_row);
+    quantize_row_q8_k(vector, &mut q8_k_act);
+    gemv_q4_k_prequantized(matrix, &q8_k_act, m, n, output);
 }
 
 /// Vectorized RMSNorm kernel with AVX-512 / AVX2 FMA dot-product reduction.

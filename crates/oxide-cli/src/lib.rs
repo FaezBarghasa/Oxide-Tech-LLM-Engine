@@ -718,7 +718,9 @@ pub async fn run_cli() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // SAFETY: Executed at CLI entry before other runtime threads are spawned
         unsafe {
             std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
+            std::env::set_var("OXIDE_NUM_THREADS", threads.to_string());
         }
+        let _ = oxide_core::global_thread_team(threads);
     }
 
     match cli.command {
@@ -882,7 +884,9 @@ fn run_chat_session(
         // SAFETY: Executed at chat initialization
         unsafe {
             std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
+            std::env::set_var("OXIDE_NUM_THREADS", threads.to_string());
         }
+        let _ = oxide_core::global_thread_team(threads);
     }
     let backend_str = backend.as_str();
     let mut current_model = initial_model.to_string();

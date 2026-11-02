@@ -657,6 +657,187 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             let _ = stream_obj.synchronize();
             let dt_real_stream = t_real0.elapsed().as_secs_f64() * 1000.0 / real_iters as f64;
+
+            // TEST: Capture the exact same 36-layer loop into a CUDA Graph!
+            unsafe {
+                let _ = eng.backend.graph_manager.begin_capture(stream);
+                for l in 0..36 {
+                    let lyr = &eng.backend.layers[l];
+                    driver::launch_cuda_fused_rmsnorm_q8_1(
+                        std::ptr::null_mut(),
+                        d_q8_1_ptr,
+                        d_hid_ptr,
+                        lyr.d_attn_norm.as_typed_ptr::<f32>(),
+                        1,
+                        h as i32,
+                        1e-6,
+                        0.0,
+                        stream,
+                    );
+                    driver::launch_cuda_mmvq_qkv_mixed_ptr(
+                        d_q_ptr,
+                        d_k_ptr,
+                        d_v_ptr,
+                        eng.backend.kv_v[l].as_raw_ptr(),
+                        d_sp_ptr,
+                        lyr.d_wq.as_raw_ptr(),
+                        lyr.d_wk.as_raw_ptr(),
+                        lyr.d_wv.as_raw_ptr(),
+                        d_q8_1_ptr,
+                        lyr.q_m as i32,
+                        lyr.kv_m as i32,
+                        lyr.q_k as i32,
+                        lyr.v_quant as i32,
+                        stream,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        std::ptr::null(),
+                    );
+                    driver::launch_cuda_fused_qknorm_rope_batch_ptr(
+                        d_q_ptr,
+                        d_k_ptr,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        eng.backend.kv_k[l].as_raw_ptr(),
+                        d_sp_ptr,
+                        32,
+                        8,
+                        128,
+                        1e-6,
+                        10000.0,
+                        1,
+                        1.0,
+                        4096,
+                        stream,
+                    );
+                    driver::launch_cuda_flash_decode_ptr(
+                        d_out_ptr,
+                        d_q8_1_ptr,
+                        d_q_ptr,
+                        eng.backend.kv_k[l].as_raw_ptr(),
+                        eng.backend.kv_v[l].as_raw_ptr(),
+                        32,
+                        8,
+                        128,
+                        d_sp_ptr,
+                        0,
+                        1.0 / (128.0f32).sqrt(),
+                        1,
+                        stream,
+                    );
+                    driver::launch_cuda_gemv_q4_k_fused_add(
+                        d_hid_ptr,
+                        lyr.d_wo.as_raw_ptr(),
+                        d_q8_1_ptr,
+                        lyr.o_m as i32,
+                        lyr.o_k as i32,
+                        stream,
+                    );
+                    driver::launch_cuda_fused_rmsnorm_q8_1(
+                        std::ptr::null_mut(),
+                        d_q8_1_ptr,
+                        d_hid_ptr,
+                        lyr.d_ffn_norm.as_typed_ptr::<f32>(),
+                        1,
+                        h as i32,
+                        1e-6,
+                        0.0,
+                        stream,
+                    );
+                    // 7. Gate + Up (TWO GEMVs instead of fused gate_up)
+                    driver::launch_cuda_gemv_q4_k(
+                        d_gate_ptr,
+                        lyr.d_w1.as_raw_ptr(),
+                        d_q8_1_ptr,
+                        lyr.inter_m as i32,
+                        h as i32,
+                        stream,
+                    );
+                    driver::launch_cuda_gemv_q4_k(
+                        d_up_ptr,
+                        lyr.d_w3.as_raw_ptr(),
+                        d_q8_1_ptr,
+                        lyr.inter_m as i32,
+                        h as i32,
+                        stream,
+                    );
+                    driver::launch_cuda_fused_swiglu_q8_1_sparse(
+                        d_q8_1_ptr,
+                        std::ptr::null_mut(),
+                        d_gate_ptr,
+                        d_up_ptr.cast_const(),
+                        lyr.inter_m as i32,
+                        0.0,
+                        0,
+                        stream,
+                    );
+                    if lyr.down_quant == 2 {
+                        driver::launch_cuda_gemv_q6_k_fused_add(
+                            d_hid_ptr,
+                            lyr.d_w2.as_raw_ptr(),
+                            d_q8_1_ptr,
+                            h as i32,
+                            lyr.inter_m as i32,
+                            stream,
+                        );
+                    } else {
+                        driver::launch_cuda_gemv_q4_k_fused_add(
+                            d_hid_ptr,
+                            lyr.d_w2.as_raw_ptr(),
+                            d_q8_1_ptr,
+                            h as i32,
+                            lyr.inter_m as i32,
+                            stream,
+                        );
+                    }
+                }
+                driver::launch_cuda_fused_rmsnorm_q8_1(
+                    std::ptr::null_mut(),
+                    d_q8_1_ptr,
+                    d_hid_ptr,
+                    eng.backend
+                        .d_output_norm
+                        .as_ref()
+                        .unwrap()
+                        .as_typed_ptr::<f32>(),
+                    1,
+                    h as i32,
+                    1e-6,
+                    0.0,
+                    stream,
+                );
+                driver::launch_cuda_gemv_q6_k(
+                    d_logits_ptr,
+                    d_lm_ptr,
+                    d_q8_1_ptr,
+                    vocab_size as i32,
+                    h as i32,
+                    stream,
+                );
+                driver::launch_cuda_argmax(
+                    d_logits_ptr,
+                    vocab_size as i32,
+                    d_sampled_ptr,
+                    d_val_ptr,
+                    1,
+                    stream,
+                );
+            }
+            if let Ok(graph_h) = unsafe { eng.backend.graph_manager.end_capture(stream, "test_36_layer_graph", 36, 1) } {
+                let _ = stream_obj.synchronize();
+                let t_g0 = Instant::now();
+                for _ in 0..20 {
+                    unsafe { let _ = eng.backend.graph_manager.launch_graph(graph_h, stream); }
+                }
+                let _ = stream_obj.synchronize();
+                let dt_graph_test = t_g0.elapsed().as_secs_f64() * 1000.0 / 20.0;
+                println!(
+                    "Captured test 36 layers CUDA Graph launch dt: {:>8.2} ms ({:.2} tok/s, nodes={})",
+                    dt_graph_test,
+                    1000.0 / dt_graph_test,
+                    graph_h.node_count
+                );
+            }
             // Measure each layer individually
             let mut layer_times = Vec::new();
             for l in 0..36 {
@@ -745,10 +926,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         0.0,
                         stream,
                     );
-                    driver::launch_cuda_gemv_gate_up_q4_k(
+                    // 7. Gate + Up (TWO GEMVs instead of fused gate_up)
+                    driver::launch_cuda_gemv_q4_k(
                         d_gate_ptr,
-                        std::ptr::null_mut(),
                         lyr.d_w1.as_raw_ptr(),
+                        d_q8_1_ptr,
+                        lyr.inter_m as i32,
+                        h as i32,
+                        stream,
+                    );
+                    driver::launch_cuda_gemv_q4_k(
+                        d_up_ptr,
                         lyr.d_w3.as_raw_ptr(),
                         d_q8_1_ptr,
                         lyr.inter_m as i32,
@@ -759,7 +947,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         d_q8_1_ptr,
                         std::ptr::null_mut(),
                         d_gate_ptr,
-                        std::ptr::null(),
+                        d_up_ptr.cast_const(),
                         lyr.inter_m as i32,
                         0.0,
                         0,

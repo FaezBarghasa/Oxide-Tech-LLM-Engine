@@ -30,6 +30,7 @@ pub mod hardware;
 pub mod macros;
 pub mod memory;
 pub mod sampler;
+pub mod thread_team;
 pub mod traits;
 pub mod typestate;
 pub mod worker;
@@ -50,6 +51,7 @@ pub use memory::DevicePtr;
 pub use sampler::{
     AcademicSamplerEngine, GbnfGrammarEngine, GbnfRule, MirostatMode, SamplerState, SamplingConfig,
 };
+pub use thread_team::{global_thread_team, ParallelTask, ThreadTeam};
 pub use traits::{
     HardwareBackend, HardwareSupports, ModelConfig, OpticalComputeFabric, QuantScheme,
 };
