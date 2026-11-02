@@ -1230,13 +1230,6 @@ __global__ __launch_bounds__(256, 4) void mmvq_q4_k_splitk_kernel(
       float d8_0 = __low2float(__ldg(&bq8_0->ds));
       float d8_1 = __low2float(__ldg(&bq8_1->ds));
 
-      // Warp-wide zero block check: if all subblocks across the entire warp are
-      // 0, skip the 144-byte weight load!
-      bool active = (d8_0 != 0.0f) || (d8_1 != 0.0f);
-      if (!__any_sync(0xFFFFFFFF, active)) {
-        continue;
-      }
-
       int u0 = __ldg(&((const int *)bq8_0->qs)[sub_idx]);
       int u1 = __ldg(&((const int *)bq8_1->qs)[sub_idx]);
       int sum0 = __dp4a(0x01010101, u0, 0);
@@ -1270,22 +1263,32 @@ __global__ __launch_bounds__(256, 4) void mmvq_q4_k_splitk_kernel(
     dot += __shfl_down_sync(0xFFFFFFFF, dot, offset);
   }
 
-  __shared__ float s_dot_q4[8][WARPS_PER_ROW];
-
-  if (lane_id == 0 && valid_row) {
-    s_dot_q4[row_in_block][warp_sub] = dot;
-  }
-  __syncthreads();
-
-  if (warp_sub == 0 && lane_id == 0 && valid_row) {
-    float sum = 0.0f;
-    for (int w = 0; w < WARPS_PER_ROW; ++w) {
-      sum += s_dot_q4[row_in_block][w];
+  if constexpr (WARPS_PER_ROW == 1) {
+    if (lane_id == 0 && valid_row) {
+      if (ADD_TO_Y) {
+        y[row] += dot;
+      } else {
+        y[row] = dot;
+      }
     }
-    if (ADD_TO_Y) {
-      y[row] += sum;
-    } else {
-      y[row] = sum;
+  } else {
+    __shared__ float s_dot_q4[8][WARPS_PER_ROW];
+
+    if (lane_id == 0 && valid_row) {
+      s_dot_q4[row_in_block][warp_sub] = dot;
+    }
+    __syncthreads();
+
+    if (warp_sub == 0 && lane_id == 0 && valid_row) {
+      float sum = 0.0f;
+      for (int w = 0; w < WARPS_PER_ROW; ++w) {
+        sum += s_dot_q4[row_in_block][w];
+      }
+      if (ADD_TO_Y) {
+        y[row] += sum;
+      } else {
+        y[row] = sum;
+      }
     }
   }
 }
@@ -1326,15 +1329,6 @@ __global__ __launch_bounds__(256, 4) void mmvq_q6_k_splitk_kernel(
 
   if (valid_row) {
     for (int b = b_start; b < b_end; ++b) {
-      // Warp-wide zero block check: if all subblocks across the entire warp are
-      // 0, skip the 210-byte weight load!
-      const BlockQ8_1_Gpu *bx = &x_q8_1[b * 8];
-      int sub_chk = lane_id % 8;
-      float d8_chk = __low2float(__ldg(&bx[sub_chk].ds));
-      if (!__any_sync(0xFFFFFFFF, d8_chk != 0.0f)) {
-        continue;
-      }
-
       const BlockQ6_K_Gpu *blk = &row_blocks[b];
       float d = __half2float(*((const half *)&blk->d));
       float sum_b = 0.0f;
@@ -1372,22 +1366,32 @@ __global__ __launch_bounds__(256, 4) void mmvq_q6_k_splitk_kernel(
     dot += __shfl_down_sync(0xFFFFFFFF, dot, offset);
   }
 
-  __shared__ float s_dot_q6[8][WARPS_PER_ROW];
-
-  if (lane_id == 0 && valid_row) {
-    s_dot_q6[row_in_block][warp_sub] = dot;
-  }
-  __syncthreads();
-
-  if (warp_sub == 0 && lane_id == 0 && valid_row) {
-    float sum = 0.0f;
-    for (int w = 0; w < WARPS_PER_ROW; ++w) {
-      sum += s_dot_q6[row_in_block][w];
+  if constexpr (WARPS_PER_ROW == 1) {
+    if (lane_id == 0 && valid_row) {
+      if (ADD_TO_Y) {
+        y[row] += dot;
+      } else {
+        y[row] = dot;
+      }
     }
-    if (ADD_TO_Y) {
-      y[row] += sum;
-    } else {
-      y[row] = sum;
+  } else {
+    __shared__ float s_dot_q6[8][WARPS_PER_ROW];
+
+    if (lane_id == 0 && valid_row) {
+      s_dot_q6[row_in_block][warp_sub] = dot;
+    }
+    __syncthreads();
+
+    if (warp_sub == 0 && lane_id == 0 && valid_row) {
+      float sum = 0.0f;
+      for (int w = 0; w < WARPS_PER_ROW; ++w) {
+        sum += s_dot_q6[row_in_block][w];
+      }
+      if (ADD_TO_Y) {
+        y[row] += sum;
+      } else {
+        y[row] = sum;
+      }
     }
   }
 }
@@ -1952,7 +1956,10 @@ __global__ __launch_bounds__(256, 4) void gemv_qkv_mixed_splitk_cuda_kernel(
     void *__restrict__ v_cache_fp16, int start_pos,
     const void *__restrict__ raw_wq, const void *__restrict__ raw_wk,
     const void *__restrict__ raw_wv, const void *__restrict__ x_q8_1_raw,
-    int q_m, int kv_m, int k, const int *__restrict__ d_start_pos = nullptr) {
+    int q_m, int kv_m, int k, const int *__restrict__ d_start_pos = nullptr,
+    const float *__restrict__ q_bias = nullptr,
+    const float *__restrict__ k_bias = nullptr,
+    const float *__restrict__ v_bias = nullptr) {
   int warp_id = threadIdx.x / 32;
   int lane_id = threadIdx.x % 32;
   int rows_per_block = 8 / WARPS_PER_ROW;
@@ -2094,6 +2101,16 @@ __global__ __launch_bounds__(256, 4) void gemv_qkv_mixed_splitk_cuda_kernel(
     float sum = 0.0f;
     for (int w = 0; w < WARPS_PER_ROW; ++w) {
       sum += s_dot_qkv[row_in_block][w];
+    }
+    if (total_row < q_m) {
+      if (q_bias != nullptr)
+        sum += q_bias[row];
+    } else if (total_row < q_m + kv_m) {
+      if (k_bias != nullptr)
+        sum += k_bias[row];
+    } else {
+      if (v_bias != nullptr)
+        sum += v_bias[row];
     }
     if (y != nullptr) {
       y[row] = sum;
@@ -5036,12 +5053,7 @@ int launch_cuda_gemv_q6_k(float *y, const void *raw_blocks, const void *x_q8_1,
                           int m, int k, cudaStream_t stream) {
   if (m <= 0 || k <= 0)
     return 0;
-  if (k >= 4096 && (k % 1024) == 0) {
-    int grid = (m + 1) / 2;
-    mmvq_q6_k_splitk_kernel<4, 0>
-        <<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
-    return cudaGetLastError();
-  } else if ((k % 256) == 0) {
+  if ((k % 256) == 0) {
     int grid = (m + 3) / 4;
     mmvq_q6_k_splitk_kernel<2, 0>
         <<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
@@ -5059,18 +5071,7 @@ int launch_cuda_gemv_q6_k_fused_add(float *y, const void *raw_blocks,
                                     cudaStream_t stream) {
   if (m <= 0 || k <= 0)
     return 0;
-  if (k >= 8192 && (k % 2048) == 0) {
-    int grid = m;
-    mmvq_q6_k_splitk_kernel<8, 1>
-        <<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
-    return cudaGetLastError();
-  }
-  if (k >= 4096 && (k % 1024) == 0) {
-    int grid = (m + 1) / 2;
-    mmvq_q6_k_splitk_kernel<4, 1>
-        <<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
-    return cudaGetLastError();
-  } else if ((k % 256) == 0) {
+  if ((k % 256) == 0) {
     int grid = (m + 3) / 4;
     mmvq_q6_k_splitk_kernel<2, 1>
         <<<grid, 256, 0, stream>>>(y, raw_blocks, x_q8_1, m, k);
@@ -5138,12 +5139,7 @@ int launch_cuda_gemv_q4_k(float *y, const void *raw_blocks, const void *x_q8_1,
                           int m, int k, cudaStream_t stream) {
   if (m <= 0 || k <= 0)
     return 0;
-  if (k >= 4096 && (k % 1024) == 0) {
-    int grid = (m + 1) / 2;
-    mmvq_q4_k_splitk_kernel<4, 0><<<grid, 256, 0, stream>>>(
-        y, (const uint8_t *)raw_blocks, x_q8_1, m, k);
-    return cudaGetLastError();
-  } else if ((k % 512) == 0) {
+  if ((k % 256) == 0) {
     int grid = (m + 3) / 4;
     mmvq_q4_k_splitk_kernel<2, 0><<<grid, 256, 0, stream>>>(
         y, (const uint8_t *)raw_blocks, x_q8_1, m, k);
@@ -5161,18 +5157,7 @@ int launch_cuda_gemv_q4_k_fused_add(float *y, const void *raw_blocks,
                                     cudaStream_t stream) {
   if (m <= 0 || k <= 0)
     return 0;
-  if (k >= 8192 && (k % 2048) == 0) {
-    int grid = m;
-    mmvq_q4_k_splitk_kernel<8, 1><<<grid, 256, 0, stream>>>(
-        y, (const uint8_t *)raw_blocks, x_q8_1, m, k);
-    return cudaGetLastError();
-  }
-  if (k >= 4096 && (k % 1024) == 0) {
-    int grid = (m + 1) / 2;
-    mmvq_q4_k_splitk_kernel<4, 1><<<grid, 256, 0, stream>>>(
-        y, (const uint8_t *)raw_blocks, x_q8_1, m, k);
-    return cudaGetLastError();
-  } else if ((k % 512) == 0) {
+  if ((k % 256) == 0) {
     int grid = (m + 3) / 4;
     mmvq_q4_k_splitk_kernel<2, 1><<<grid, 256, 0, stream>>>(
         y, (const uint8_t *)raw_blocks, x_q8_1, m, k);
@@ -6270,7 +6255,10 @@ int launch_cuda_mmvq_qkv_mixed_ptr(float *y_q, float *y_k, float *y_v,
                                    const void *raw_wq, const void *raw_wk,
                                    const void *raw_wv, const void *x_q8_1,
                                    int q_m, int kv_m, int k, int v_quant,
-                                   cudaStream_t stream) {
+                                   cudaStream_t stream,
+                                   const float *q_bias,
+                                   const float *k_bias,
+                                   const float *v_bias) {
   if (q_m <= 0 || kv_m <= 0 || k <= 0)
     return 0;
   int total_m = q_m + 2 * kv_m;
@@ -6279,11 +6267,11 @@ int launch_cuda_mmvq_qkv_mixed_ptr(float *y_q, float *y_k, float *y_v,
   if (v_quant == 1) {
     gemv_qkv_mixed_splitk_cuda_kernel<2, 1><<<grid, 256, 0, stream>>>(
         y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
-        kv_m, k, d_start_pos);
+        kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
   } else {
     gemv_qkv_mixed_splitk_cuda_kernel<2, 2><<<grid, 256, 0, stream>>>(
         y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
-        kv_m, k, d_start_pos);
+        kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
   }
   return cudaGetLastError();
 }

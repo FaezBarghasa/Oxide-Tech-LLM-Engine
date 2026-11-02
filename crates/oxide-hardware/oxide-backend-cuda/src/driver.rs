@@ -696,6 +696,9 @@ unsafe extern "C" {
         k: i32,
         v_quant: i32,
         stream: cudaStream_t,
+        q_bias: *const f32,
+        k_bias: *const f32,
+        v_bias: *const f32,
     ) -> i32;
 
     pub fn launch_cuda_write_v_cache_ptr(

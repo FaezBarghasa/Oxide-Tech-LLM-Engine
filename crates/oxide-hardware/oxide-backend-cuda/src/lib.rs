@@ -4448,7 +4448,20 @@ impl HardwareBackend for CudaBackend {
                             std::ptr::null_mut()
                         };
 
-                        // Grouped QKV GEMV writing V-cache directly
+                        let q_bias_ptr = layer
+                            .d_q_bias
+                            .as_ref()
+                            .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+                        let k_bias_ptr = layer
+                            .d_k_bias
+                            .as_ref()
+                            .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+                        let v_bias_ptr = layer
+                            .d_v_bias
+                            .as_ref()
+                            .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+
+                        // Grouped QKV GEMV writing V-cache directly with fused biases
                         unsafe {
                             if layer.q_quant == 1
                                 && layer.k_quant == 1
@@ -4469,6 +4482,9 @@ impl HardwareBackend for CudaBackend {
                                     layer.q_k as i32,
                                     layer.v_quant as i32,
                                     s,
+                                    q_bias_ptr,
+                                    k_bias_ptr,
+                                    v_bias_ptr,
                                 );
                             } else {
                                 Self::dispatch_gemv(
@@ -4501,51 +4517,39 @@ impl HardwareBackend for CudaBackend {
                                     layer.v_quant,
                                     s,
                                 );
-                            }
-
-                            // Add Q, K, V biases for single-token decode if present (e.g. Qwen2 / Qwen2.5)
-                            if let Some(ref d_bias) = layer.d_q_bias {
-                                driver::launch_cuda_vector_add(
-                                    d_q_ptr,
-                                    d_bias.as_typed_ptr::<f32>(),
-                                    layer.q_m as i32,
-                                    s,
-                                );
-                            }
-                            if let Some(ref d_bias) = layer.d_k_bias {
-                                driver::launch_cuda_vector_add(
-                                    d_k_ptr,
-                                    d_bias.as_typed_ptr::<f32>(),
-                                    layer.kv_m as i32,
-                                    s,
-                                );
-                            }
-                            if let Some(ref d_bias) = layer.d_v_bias {
-                                driver::launch_cuda_vector_add(
-                                    d_v_ptr,
-                                    d_bias.as_typed_ptr::<f32>(),
-                                    layer.kv_m as i32,
-                                    s,
-                                );
-                            }
-                        }
-
-                        // Write computed V to FP16 V-cache if not done in grouped GEMV
-                        if !v_cache_ptr.is_null()
-                            && !(layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && (layer.v_quant == 1 || layer.v_quant == 2)
-                                && layer.d_q_bias.is_none()
-                                && layer.d_v_bias.is_none())
-                        {
-                            unsafe {
-                                driver::launch_cuda_write_v_cache_ptr(
-                                    v_cache_ptr,
-                                    d_v_ptr,
-                                    d_sp_ptr,
-                                    layer.kv_m as i32,
-                                    s,
-                                );
+                                if !q_bias_ptr.is_null() {
+                                    driver::launch_cuda_vector_add(
+                                        d_q_ptr,
+                                        q_bias_ptr,
+                                        layer.q_m as i32,
+                                        s,
+                                    );
+                                }
+                                if !k_bias_ptr.is_null() {
+                                    driver::launch_cuda_vector_add(
+                                        d_k_ptr,
+                                        k_bias_ptr,
+                                        layer.kv_m as i32,
+                                        s,
+                                    );
+                                }
+                                if !v_bias_ptr.is_null() {
+                                    driver::launch_cuda_vector_add(
+                                        d_v_ptr,
+                                        v_bias_ptr,
+                                        layer.kv_m as i32,
+                                        s,
+                                    );
+                                }
+                                if !v_cache_ptr.is_null() {
+                                    driver::launch_cuda_write_v_cache_ptr(
+                                        v_cache_ptr,
+                                        d_v_ptr,
+                                        d_sp_ptr,
+                                        layer.kv_m as i32,
+                                        s,
+                                    );
+                                }
                             }
                         }
 
@@ -4675,8 +4679,7 @@ impl HardwareBackend for CudaBackend {
                         // FFN Gate + Up GEMV
                         unsafe {
                             let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma
-                                && ((layer.gate_quant == 1 && layer.up_quant == 1)
-                                    || (layer.gate_quant == 9 && layer.up_quant == 9))
+                                && (layer.gate_quant == 9 && layer.up_quant == 9)
                             {
                                 (std::ptr::null_mut(), std::ptr::null())
                             } else {
@@ -4684,10 +4687,16 @@ impl HardwareBackend for CudaBackend {
                             };
 
                             if layer.gate_quant == 1 && layer.up_quant == 1 {
-                                driver::launch_cuda_gemv_gate_up_q4_k(
+                                driver::launch_cuda_gemv_q4_k(
                                     d_gate_ptr,
-                                    pass_up_ptr,
                                     layer.d_w1.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m as i32,
+                                    h as i32,
+                                    s,
+                                );
+                                driver::launch_cuda_gemv_q4_k(
+                                    d_up_ptr,
                                     layer.d_w3.as_raw_ptr(),
                                     d_q8_1_ptr,
                                     layer.inter_m as i32,
@@ -5626,8 +5635,7 @@ impl HardwareBackend for CudaBackend {
                         {
                             unsafe {
                                 let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma
-                                    && ((layer.gate_quant == 1 && layer.up_quant == 1)
-                                        || (layer.gate_quant == 9 && layer.up_quant == 9))
+                                    && (layer.gate_quant == 9 && layer.up_quant == 9)
                                 {
                                     (std::ptr::null_mut(), std::ptr::null())
                                 } else {
@@ -5641,10 +5649,16 @@ impl HardwareBackend for CudaBackend {
                                     && layer.up_quant == 1
                                     && !d_q8_1_ptr.is_null()
                                 {
-                                    driver::launch_cuda_gemv_gate_up_q4_k(
+                                    driver::launch_cuda_gemv_q4_k(
                                         d_gate.as_typed_ptr::<f32>(),
-                                        pass_up_ptr,
                                         layer.d_w1.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.inter_m as i32,
+                                        h as i32,
+                                        s,
+                                    );
+                                    driver::launch_cuda_gemv_q4_k(
+                                        d_up.as_typed_ptr::<f32>(),
                                         layer.d_w3.as_raw_ptr(),
                                         d_q8_1_ptr,
                                         layer.inter_m as i32,

@@ -124,6 +124,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     layer0.q_k as i32,
                     layer0.v_quant as i32,
                     stream,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                 );
             }
             let _ = stream_obj.synchronize();
@@ -517,6 +520,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         lyr.q_k as i32,
                         lyr.v_quant as i32,
                         stream,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        std::ptr::null(),
                     );
                     // 3. RoPE
                     driver::launch_cuda_fused_qknorm_rope_batch_ptr(
@@ -684,6 +690,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         lyr.q_k as i32,
                         lyr.v_quant as i32,
                         stream,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        std::ptr::null(),
                     );
                     driver::launch_cuda_fused_qknorm_rope_batch_ptr(
                         d_q_ptr,
@@ -839,6 +848,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             layer4.q_k as i32,
                             layer4.v_quant as i32,
                             stream,
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            std::ptr::null(),
                         );
                     }
                     if step >= 3 {
