@@ -388,7 +388,7 @@ impl AdaptiveSpeculator {
             current_k: initial_k.clamp(min_k, max_k),
             min_k,
             max_k,
-            rolling_window: window.max(1),
+            rolling_window: window.max(16),
             history: Vec::new(),
             consecutive_rejections: 0,
             backoff_cooldown: 0,
@@ -407,9 +407,9 @@ impl AdaptiveSpeculator {
 
         if accepted == 0 {
             self.consecutive_rejections += 1;
-            // Back off for 2 cycles if 3 consecutive rejections occur
-            if self.consecutive_rejections >= 3 {
-                self.backoff_cooldown = 2;
+            // Back off for 4 cycles if 2 consecutive rejections occur
+            if self.consecutive_rejections >= 2 {
+                self.backoff_cooldown = 4;
                 self.current_k = self.min_k;
             }
         } else {
@@ -423,18 +423,23 @@ impl AdaptiveSpeculator {
             if rate >= 0.75 && self.consecutive_rejections == 0 {
                 self.current_k = (self.current_k + 1).min(self.max_k);
             }
-            // Contract horizon if acceptance < 40%
-            else if rate < 0.40 {
+            // Contract horizon if acceptance < 50%
+            else if rate < 0.50 {
                 self.current_k = self.current_k.saturating_sub(1).max(self.min_k);
             }
         }
     }
 
-    /// Returns the active draft horizon, accounting for backoff cooldowns.
+    /// Returns the active draft horizon, accounting for backoff cooldowns and acceptance rate guard.
     pub fn current_horizon(&mut self) -> usize {
         if self.backoff_cooldown > 0 {
             self.backoff_cooldown -= 1;
             0 // Skip drafting during backoff
+        } else if self.consecutive_rejections >= 2
+            || (self.history.len() >= 3 && self.rolling_acceptance_rate() < 0.50)
+        {
+            // Adaptive Guard: Fall back to single-step decode when acceptance drops below 50%
+            0
         } else {
             self.current_k
         }

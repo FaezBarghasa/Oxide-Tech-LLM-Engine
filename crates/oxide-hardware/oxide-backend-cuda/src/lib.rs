@@ -4651,7 +4651,10 @@ impl HardwareBackend for CudaBackend {
                         // FFN Gate + Up GEMV
                         unsafe {
                             let (pass_up_ptr, pass_swiglu_up) =
-                                if !self.is_gemma && layer.gate_quant == 1 && layer.up_quant == 1 {
+                                if !self.is_gemma
+                                    && ((layer.gate_quant == 1 && layer.up_quant == 1)
+                                        || (layer.gate_quant == 9 && layer.up_quant == 9))
+                                {
                                     (std::ptr::null_mut(), std::ptr::null())
                                 } else {
                                     (d_up_ptr, d_up_ptr.cast_const())
@@ -4659,6 +4662,17 @@ impl HardwareBackend for CudaBackend {
 
                             if layer.gate_quant == 1 && layer.up_quant == 1 {
                                 driver::launch_cuda_gemv_gate_up_q4_k(
+                                    d_gate_ptr,
+                                    pass_up_ptr,
+                                    layer.d_w1.as_raw_ptr(),
+                                    layer.d_w3.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m as i32,
+                                    h as i32,
+                                    s,
+                                );
+                            } else if layer.gate_quant == 9 && layer.up_quant == 9 && !d_q8_1_ptr.is_null() {
+                                driver::launch_cuda_gemv_gate_up_q5_0(
                                     d_gate_ptr,
                                     pass_up_ptr,
                                     layer.d_w1.as_raw_ptr(),
@@ -5584,8 +5598,8 @@ impl HardwareBackend for CudaBackend {
                         {
                             unsafe {
                                 let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma
-                                    && layer.gate_quant == 1
-                                    && layer.up_quant == 1
+                                    && ((layer.gate_quant == 1 && layer.up_quant == 1)
+                                        || (layer.gate_quant == 9 && layer.up_quant == 9))
                                 {
                                     (std::ptr::null_mut(), std::ptr::null())
                                 } else {
@@ -5600,6 +5614,20 @@ impl HardwareBackend for CudaBackend {
                                     && !d_q8_1_ptr.is_null()
                                 {
                                     driver::launch_cuda_gemv_gate_up_q4_k(
+                                        d_gate.as_typed_ptr::<f32>(),
+                                        pass_up_ptr,
+                                        layer.d_w1.as_raw_ptr(),
+                                        layer.d_w3.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.inter_m as i32,
+                                        h as i32,
+                                        s,
+                                    );
+                                } else if layer.gate_quant == 9
+                                    && layer.up_quant == 9
+                                    && !d_q8_1_ptr.is_null()
+                                {
+                                    driver::launch_cuda_gemv_gate_up_q5_0(
                                         d_gate.as_typed_ptr::<f32>(),
                                         pass_up_ptr,
                                         layer.d_w1.as_raw_ptr(),

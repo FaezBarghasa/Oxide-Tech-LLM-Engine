@@ -11,7 +11,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let gguf = GgufFile::parse(&mmap)?;
     let tokenizer = GgufTokenizer::from_gguf(&gguf);
 
-    let prompt = "Count from 1 to 10: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10. Now write down the first ten letters of the alphabet in uppercase:";
     let prompt = "<|im_start|>user\n2+2=<|im_end|>\n<|im_start|>assistant\n";
     let tokens = tokenizer.encode(prompt);
     println!("Prompt tokens (len {}): {:?}", tokens.len(), tokens);

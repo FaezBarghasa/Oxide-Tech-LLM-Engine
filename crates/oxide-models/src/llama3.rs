@@ -3288,11 +3288,11 @@ impl Llama3Model {
                 }
             } else {
                 // SwiGLU: silu(gate) * up
-                for i in 0..cur_inter {
-                    let g = scratch.gate[i];
-                    let silu_g = g / (1.0 + (-g).exp());
-                    scratch.activated[i] = silu_g * scratch.up[i];
-                }
+                oxide_quant::simd::swiglu_f32(
+                    &scratch.gate[..cur_inter],
+                    &scratch.up[..cur_inter],
+                    &mut scratch.activated[..cur_inter],
+                );
             }
 
             let d_cols = layer.down_proj.cols().min(cur_inter);
@@ -3440,11 +3440,11 @@ impl Llama3Model {
         );
 
         // SwiGLU: down_proj(silu(gate) * up)
-        for i in 0..inter_dim {
-            let g = scratch.gate[i];
-            let silu_g = g / (1.0 + (-g).exp());
-            scratch.activated[i] = silu_g * scratch.up[i];
-        }
+        oxide_quant::simd::swiglu_f32(
+            &scratch.gate[..inter_dim],
+            &scratch.up[..inter_dim],
+            &mut scratch.activated[..inter_dim],
+        );
 
         layer
             .down_proj

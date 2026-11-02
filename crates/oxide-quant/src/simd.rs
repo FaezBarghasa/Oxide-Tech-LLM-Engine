@@ -459,6 +459,119 @@ unsafe fn dot_q5_0_avx2(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q5_0_q8_0_row_avx2(
+    row_weights: &[crate::int_quant::BlockQ5_0],
+    act_q8: &[crate::int_quant::BlockQ8_0],
+) -> f32 {
+    use core::arch::x86_64::{
+        _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_srli_epi16, _mm256_and_si256,
+        _mm256_castsi128_si256, _mm256_cmpeq_epi8, _mm256_cvtepi32_ps, _mm256_fmadd_ps,
+        _mm256_insertf128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_maddubs_epi16,
+        _mm256_or_si256, _mm256_set1_epi16, _mm256_set1_epi32, _mm256_set1_epi64x,
+        _mm256_set1_epi8, _mm256_set1_ps, _mm256_set_epi64x, _mm256_setzero_ps,
+        _mm256_shuffle_epi8, _mm256_sign_epi8, _mm256_storeu_ps, _mm256_sub_epi8,
+    };
+    let nb = row_weights.len();
+    unsafe {
+        let mut acc = _mm256_setzero_ps();
+        let ones_16 = _mm256_set1_epi16(1);
+        let low_mask = _mm_set1_epi8(0x0F);
+        let shuf_mask = _mm256_set_epi64x(
+            0x0303030303030303,
+            0x0202020202020202,
+            0x0101010101010101,
+            0x0000000000000000,
+        );
+        let bit_mask = _mm256_set1_epi64x(0x7fbfdfeff7fbfdfe_u64 as i64);
+        let all_ones = _mm256_set1_epi64x(-1);
+        let bit16 = _mm256_set1_epi8(0x10);
+        let sixteen = _mm256_set1_epi8(16);
+
+        for ib in 0..nb {
+            let w_blk = &row_weights[ib];
+            let a_blk = &act_q8[ib];
+            let d = w_blk.scale.to_f32() * a_blk.scale.to_f32();
+            let d_vec = _mm256_set1_ps(d);
+
+            // 1. Unpack 4-bit nibbles from qs (16 bytes) into 32 bytes (low 4 bits in each byte)
+            let tmpl = _mm_loadu_si128(w_blk.qs.as_ptr().cast());
+            let tmph = _mm_srli_epi16(tmpl, 4);
+            let lo = _mm_and_si128(tmpl, low_mask);
+            let hi = _mm_and_si128(tmph, low_mask);
+            let qx_nibbles = _mm256_insertf128_si256(_mm256_castsi128_si256(lo), hi, 1);
+
+            // 2. Unpack 5th bits from qh (4 bytes = 32 bits) into 32 bytes
+            let qh_u32 = u32::from_le_bytes(w_blk.qh);
+            let bytes_shuf = _mm256_shuffle_epi8(_mm256_set1_epi32(qh_u32 as i32), shuf_mask);
+            let bytes_or = _mm256_or_si256(bytes_shuf, bit_mask);
+            let bxhi = _mm256_cmpeq_epi8(bytes_or, all_ones);
+            let bxhi_masked = _mm256_and_si256(bxhi, bit16);
+
+            // 3. Combine nibble + high bit and subtract 16 to get signed values in [-16, 15]
+            let qx_u8 = _mm256_or_si256(qx_nibbles, bxhi_masked);
+            let qx_signed = _mm256_sub_epi8(qx_u8, sixteen);
+
+            // 4. Dot product with Q8_0 activation bytes
+            let qy = _mm256_loadu_si256(a_blk.qs.as_ptr().cast());
+            let ax = _mm256_sign_epi8(qx_signed, qx_signed);
+            let sy = _mm256_sign_epi8(qy, qx_signed);
+
+            let dot = _mm256_maddubs_epi16(ax, sy);
+            let sum_i32 = _mm256_madd_epi16(ones_16, dot);
+            let sum_f32 = _mm256_cvtepi32_ps(sum_i32);
+
+            acc = _mm256_fmadd_ps(d_vec, sum_f32, acc);
+        }
+
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), acc);
+        (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7])
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q8_0_q8_0_row_avx2(
+    row_weights: &[crate::int_quant::BlockQ8_0],
+    act_q8: &[crate::int_quant::BlockQ8_0],
+) -> f32 {
+    use core::arch::x86_64::{
+        _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_si256, _mm256_madd_epi16,
+        _mm256_maddubs_epi16, _mm256_set1_epi16, _mm256_set1_ps, _mm256_setzero_ps,
+        _mm256_sign_epi8, _mm256_storeu_ps,
+    };
+    let nb = row_weights.len();
+    unsafe {
+        let mut acc = _mm256_setzero_ps();
+        let ones_16 = _mm256_set1_epi16(1);
+
+        for ib in 0..nb {
+            let w_blk = &row_weights[ib];
+            let a_blk = &act_q8[ib];
+            let d = w_blk.scale.to_f32() * a_blk.scale.to_f32();
+            let d_vec = _mm256_set1_ps(d);
+
+            let qx = _mm256_loadu_si256(w_blk.qs.as_ptr().cast());
+            let qy = _mm256_loadu_si256(a_blk.qs.as_ptr().cast());
+
+            let ax = _mm256_sign_epi8(qx, qx);
+            let sy = _mm256_sign_epi8(qy, qx);
+
+            let dot = _mm256_maddubs_epi16(ax, sy);
+            let sum_i32 = _mm256_madd_epi16(ones_16, dot);
+            let sum_f32 = _mm256_cvtepi32_ps(sum_i32);
+
+            acc = _mm256_fmadd_ps(d_vec, sum_f32, acc);
+        }
+
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), acc);
+        (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7])
+    }
+}
+
 /// Compute dot product between a Q4_0 block (16 bytes = 32 nibbles) and 32 f32 activations.
 #[inline]
 #[must_use]
@@ -1151,6 +1264,157 @@ unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d: f3
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q6_k_q8_k_row_avx2(
+    row_weights: &[crate::int_quant::BlockQ6_K],
+    act_q8_k: &[crate::int_quant::BlockQ8_K],
+) -> f32 {
+    use core::arch::x86_64::{
+        _mm_loadu_si128, _mm_shuffle_epi8, _mm256_add_epi32, _mm256_and_si256,
+        _mm256_cvtepi32_ps, _mm256_cvtepi8_epi16, _mm256_fmadd_ps, _mm256_loadu_si256,
+        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256, _mm256_set1_epi8,
+        _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256, _mm256_slli_epi16,
+        _mm256_slli_epi32, _mm256_srli_epi16, _mm256_storeu_ps, _mm256_sub_epi32,
+    };
+
+    let nb = row_weights.len();
+    unsafe {
+        let m3 = _mm256_set1_epi8(3);
+        let m12 = _mm256_set1_epi8(12);
+        let m15 = _mm256_set1_epi8(15);
+        let m48 = _mm256_set1_epi8(48);
+        let m_c0 = _mm256_set1_epi8(-64); // 0xC0
+
+        static K_SHUFFLE: [u8; 128] = [
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+            2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+            4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+            6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
+            8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
+            10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11,
+            12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13,
+            14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15,
+        ];
+
+        let mut acc = _mm256_setzero_ps();
+
+        for i in 0..nb {
+            let x = &row_weights[i];
+            let y = &act_q8_k[i];
+
+            let d = y.d * x.d.to_f32();
+
+            let q8sums = _mm256_loadu_si256(y.bsums.as_ptr().cast());
+            let scales = _mm_loadu_si128(x.scales.as_ptr().cast());
+            let scales_16 = _mm256_cvtepi8_epi16(scales);
+            let q8sclsub = _mm256_slli_epi32(_mm256_madd_epi16(q8sums, scales_16), 5);
+
+            let mut sumi = _mm256_setzero_si256();
+
+            let mut q4_ptr = x.ql.as_ptr();
+            let mut qh_ptr = x.qh.as_ptr();
+            let mut q8_ptr = y.qs.as_ptr();
+
+            for j in 0..2 {
+                let q4bits1 = _mm256_loadu_si256(q4_ptr.cast());
+                q4_ptr = q4_ptr.add(32);
+                let q4bits2 = _mm256_loadu_si256(q4_ptr.cast());
+                q4_ptr = q4_ptr.add(32);
+                let q4bits_h = _mm256_loadu_si256(qh_ptr.cast());
+                qh_ptr = qh_ptr.add(32);
+
+                let q4h_0 = _mm256_slli_epi16(_mm256_and_si256(q4bits_h, m3), 4);
+                let q4h_1 = _mm256_slli_epi16(_mm256_and_si256(q4bits_h, m12), 2);
+                let q4h_2 = _mm256_and_si256(q4bits_h, m48);
+                let q4h_3 = _mm256_srli_epi16(_mm256_and_si256(q4bits_h, m_c0), 2);
+
+                let q4_0 = _mm256_or_si256(_mm256_and_si256(q4bits1, m15), q4h_0);
+                let q4_1 = _mm256_or_si256(_mm256_and_si256(q4bits2, m15), q4h_1);
+                let q4_2 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits1, 4), m15), q4h_2);
+                let q4_3 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q4bits2, 4), m15), q4h_3);
+
+                let q8_0 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8_1 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8_2 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8_3 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+
+                let mut p16_0 = _mm256_maddubs_epi16(q4_0, q8_0);
+                let mut p16_1 = _mm256_maddubs_epi16(q4_1, q8_1);
+                let mut p16_2 = _mm256_maddubs_epi16(q4_2, q8_2);
+                let mut p16_3 = _mm256_maddubs_epi16(q4_3, q8_3);
+
+                let is_base = j * 4;
+                let scale_0 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 0) * 16).cast()));
+                let scale_1 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 1) * 16).cast()));
+                let scale_2 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 2) * 16).cast()));
+                let scale_3 = _mm_shuffle_epi8(scales, _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 3) * 16).cast()));
+
+                p16_0 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_0), p16_0);
+                p16_1 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_1), p16_1);
+                p16_2 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_2), p16_2);
+                p16_3 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(scale_3), p16_3);
+
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_1));
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_2, p16_3));
+            }
+
+            sumi = _mm256_sub_epi32(sumi, q8sclsub);
+            let d_vec = _mm256_set1_ps(d);
+            acc = _mm256_fmadd_ps(d_vec, _mm256_cvtepi32_ps(sumi), acc);
+        }
+
+        let mut buf = [0.0f32; 8];
+        _mm256_storeu_ps(buf.as_mut_ptr(), acc);
+        (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7])
+    }
+}
+
+fn dot_q6_k_q8_k_row_portable(
+    row_weights: &[crate::int_quant::BlockQ6_K],
+    act_q8_k: &[crate::int_quant::BlockQ8_K],
+) -> f32 {
+    let mut sum = 0.0f32;
+    for (blk, act_blk) in row_weights.iter().zip(act_q8_k.iter()) {
+        let d = act_blk.d * blk.d.to_f32();
+        let mut block_sum = 0i32;
+        for half in 0..2 {
+            let ql_offset = half * 64;
+            let qh_offset = half * 32;
+            let sc_offset = half * 8;
+            let y_offset = half * 128;
+
+            for l in 0..32 {
+                let is = l / 16;
+                let qh_byte = blk.qh[qh_offset + l];
+                let ql0 = blk.ql[ql_offset + l];
+                let ql32 = blk.ql[ql_offset + l + 32];
+
+                let q1 = ((ql0 & 0x0F) | ((qh_byte & 3) << 4)) as i32 - 32;
+                let q2 = ((ql32 & 0x0F) | (((qh_byte >> 2) & 3) << 4)) as i32 - 32;
+                let q3 = ((ql0 >> 4) | (((qh_byte >> 4) & 3) << 4)) as i32 - 32;
+                let q4 = ((ql32 >> 4) | (((qh_byte >> 6) & 3) << 4)) as i32 - 32;
+
+                let sc0 = blk.scales[sc_offset + is] as i32;
+                let sc2 = blk.scales[sc_offset + is + 2] as i32;
+                let sc4 = blk.scales[sc_offset + is + 4] as i32;
+                let sc6 = blk.scales[sc_offset + is + 6] as i32;
+
+                block_sum += sc0 * q1 * (act_blk.qs[y_offset + l] as i32)
+                    + sc2 * q2 * (act_blk.qs[y_offset + l + 32] as i32)
+                    + sc4 * q3 * (act_blk.qs[y_offset + l + 64] as i32)
+                    + sc6 * q4 * (act_blk.qs[y_offset + l + 96] as i32);
+            }
+        }
+        sum += d * (block_sum as f32);
+    }
+    sum
+}
+
 /// Multithreaded Q6_K Matrix-Vector Multiplication across all CPU cores and threads.
 pub fn gemv_q6_k(
     matrix: &[crate::int_quant::BlockQ6_K],
@@ -1171,41 +1435,43 @@ pub fn gemv_q6_k(
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
 
-    if m <= 8 {
-        for row in 0..m {
-            let row_offset = row * blocks_per_row;
-            let mut acc = 0.0f32;
-            for b in 0..blocks_per_row {
-                let blk = &matrix[row_offset + b];
-                let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
-                    .try_into()
-                    .expect("slice length 256");
-                acc += dot_q6_k(&blk.ql, &blk.qh, &blk.scales, act_chunk, blk.d.to_f32());
-            }
-            output[row] = acc;
-        }
-    } else {
-        let chunk_size = (m / 16).clamp(32, 128);
-        output[..m]
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, out_chunk)| {
-                let base_row = chunk_idx * chunk_size;
-                for (i, out_val) in out_chunk.iter_mut().enumerate() {
-                    let row = base_row + i;
-                    let row_offset = row * blocks_per_row;
-                    let mut acc = 0.0f32;
-                    for b in 0..blocks_per_row {
-                        let blk = &matrix[row_offset + b];
-                        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
-                            .try_into()
-                            .expect("slice length 256");
-                        acc += dot_q6_k(&blk.ql, &blk.qh, &blk.scales, act_chunk, blk.d.to_f32());
-                    }
-                    *out_val = acc;
-                }
-            });
+    // Single-pass activation quantization to BlockQ8_K (O(N), ~5KB buffer fits in L1 cache)
+    let mut q8_k_act = Vec::with_capacity(blocks_per_row);
+    for b in 0..blocks_per_row {
+        let act_chunk: &[f32; 256] = vector[b * 256..(b + 1) * 256]
+            .try_into()
+            .expect("slice length 256");
+        q8_k_act.push(crate::int_quant::BlockQ8_K::quantize(act_chunk));
     }
+
+    let threads = rayon::current_num_threads();
+    let chunk_size = (m / (threads * 4)).clamp(16, 256);
+
+    output[..m]
+        .par_chunks_mut(chunk_size)
+        .enumerate()
+        .for_each(|(chunk_idx, out_chunk)| {
+            let base_row = chunk_idx * chunk_size;
+            #[cfg(target_arch = "x86_64")]
+            let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+            #[cfg(not(target_arch = "x86_64"))]
+            let has_avx2 = false;
+
+            for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                let row = base_row + i;
+                let row_offset = row * blocks_per_row;
+                let row_weights = &matrix[row_offset..row_offset + blocks_per_row];
+
+                #[cfg(target_arch = "x86_64")]
+                if has_avx2 {
+                    // SAFETY: Verified AVX2 & FMA feature flags before invoking target-specific intrinsics.
+                    *out_val = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, &q8_k_act) };
+                    continue;
+                }
+
+                *out_val = dot_q6_k_q8_k_row_portable(row_weights, &q8_k_act);
+            }
+        });
 }
 
 /// Multithreaded Q5_0 Matrix-Vector Multiplication across all CPU cores and threads.
@@ -1224,6 +1490,50 @@ pub fn gemv_q5_0(
     );
     assert!(vector.len() >= n, "Insufficient vector length");
     assert!(output.len() >= m, "Insufficient output length");
+
+    #[cfg(target_arch = "x86_64")]
+    let use_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+
+    #[cfg(target_arch = "x86_64")]
+    if use_avx2 {
+        let mut act_q8 = Vec::with_capacity(blocks_per_row);
+        for b in 0..blocks_per_row {
+            let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                .try_into()
+                .expect("slice length 32");
+            act_q8.push(crate::int_quant::BlockQ8_0::quantize(act_chunk));
+        }
+
+        let num_threads = rayon::current_num_threads();
+        let chunk_size = (m / (num_threads * 4)).clamp(16, 512);
+
+        if m <= 8 {
+            for row in 0..m {
+                let row_offset = row * blocks_per_row;
+                output[row] = unsafe {
+                    dot_q5_0_q8_0_row_avx2(&matrix[row_offset..row_offset + blocks_per_row], &act_q8)
+                };
+            }
+        } else {
+            output[..m]
+                .par_chunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(chunk_idx, out_chunk)| {
+                    let base_row = chunk_idx * chunk_size;
+                    for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                        let row = base_row + i;
+                        let row_offset = row * blocks_per_row;
+                        *out_val = unsafe {
+                            dot_q5_0_q8_0_row_avx2(
+                                &matrix[row_offset..row_offset + blocks_per_row],
+                                &act_q8,
+                            )
+                        };
+                    }
+                });
+        }
+        return;
+    }
 
     if m <= 8 {
         for row in 0..m {
@@ -1455,9 +1765,51 @@ pub fn gemv_q8_0(
     assert!(output.len() >= m, "Insufficient output length");
 
     #[cfg(target_arch = "x86_64")]
-    let use_avx512 = is_x86_feature_detected!("avx512f");
-    #[cfg(target_arch = "x86_64")]
     let use_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+
+    #[cfg(target_arch = "x86_64")]
+    if use_avx2 {
+        let mut act_q8 = Vec::with_capacity(blocks_per_row);
+        for b in 0..blocks_per_row {
+            let act_chunk: &[f32; 32] = vector[b * 32..(b + 1) * 32]
+                .try_into()
+                .expect("slice length 32");
+            act_q8.push(crate::int_quant::BlockQ8_0::quantize(act_chunk));
+        }
+
+        let num_threads = rayon::current_num_threads();
+        let chunk_size = (m / (num_threads * 4)).clamp(16, 512);
+
+        if m <= 8 {
+            for row in 0..m {
+                let row_offset = row * blocks_per_row;
+                output[row] = unsafe {
+                    dot_q8_0_q8_0_row_avx2(&matrix[row_offset..row_offset + blocks_per_row], &act_q8)
+                };
+            }
+        } else {
+            output[..m]
+                .par_chunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(chunk_idx, out_chunk)| {
+                    let base_row = chunk_idx * chunk_size;
+                    for (i, out_val) in out_chunk.iter_mut().enumerate() {
+                        let row = base_row + i;
+                        let row_offset = row * blocks_per_row;
+                        *out_val = unsafe {
+                            dot_q8_0_q8_0_row_avx2(
+                                &matrix[row_offset..row_offset + blocks_per_row],
+                                &act_q8,
+                            )
+                        };
+                    }
+                });
+        }
+        return;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    let use_avx512 = is_x86_feature_detected!("avx512f");
 
     let compute_row = |row: usize| -> f32 {
         let row_offset = row * blocks_per_row;
@@ -1471,10 +1823,6 @@ pub fn gemv_q8_0(
             if use_avx512 {
                 // SAFETY: Target feature AVX-512 has been checked via is_x86_feature_detected!.
                 acc += unsafe { dot_q8_0_avx512(&blk.qs, act_chunk, blk.scale.to_f32()) };
-                continue;
-            } else if use_avx2 {
-                // SAFETY: Target feature AVX2 has been checked via is_x86_feature_detected!.
-                acc += unsafe { dot_q8_0_avx2(&blk.qs, act_chunk, blk.scale.to_f32()) };
                 continue;
             }
             acc += dot_q8_0_portable(&blk.qs, act_chunk, blk.scale.to_f32());
@@ -1740,6 +2088,104 @@ pub fn rmsnorm_f32_offset(input: &[f32], weight: &[f32], output: &mut [f32], eps
     }
 }
 
+/// Vectorized SwiGLU activation kernel: output[i] = silu(gate[i]) * up[i].
+pub fn swiglu_f32(gate: &[f32], up: &[f32], output: &mut [f32]) {
+    let len = gate.len().min(up.len()).min(output.len());
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Target features AVX2 and FMA are detected.
+            unsafe {
+                swiglu_f32_avx2(&gate[..len], &up[..len], &mut output[..len]);
+                return;
+            }
+        }
+    }
+
+    // Portable fallback
+    for i in 0..len {
+        let g = gate[i];
+        let silu_g = g / (1.0 + (-g).exp());
+        output[i] = silu_g * up[i];
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn swiglu_f32_avx2(gate: &[f32], up: &[f32], output: &mut [f32]) {
+    use core::arch::x86_64::{
+        _mm256_add_ps, _mm256_castsi256_ps, _mm256_cvtps_epi32,
+        _mm256_div_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_max_ps, _mm256_min_ps,
+        _mm256_mul_ps, _mm256_round_ps, _mm256_set1_epi32, _mm256_set1_ps,
+        _mm256_slli_epi32, _mm256_storeu_ps, _mm256_sub_ps, _MM_FROUND_NO_EXC,
+        _MM_FROUND_TO_NEAREST_INT,
+    };
+
+    let len = gate.len();
+    let chunks = len / 8;
+
+    unsafe {
+        let c_log2e = _mm256_set1_ps(core::f32::consts::LOG2_E);
+        let c_ln2 = _mm256_set1_ps(core::f32::consts::LN_2);
+        let c_one = _mm256_set1_ps(1.0);
+        let c_min_z = _mm256_set1_ps(-87.0);
+        let c_max_z = _mm256_set1_ps(87.0);
+        let c_127 = _mm256_set1_epi32(127);
+
+        // Polynomial coefficients for exp(r) on r in [-0.5*ln2, 0.5*ln2]
+        let p1 = _mm256_set1_ps(1.0);
+        let p2 = _mm256_set1_ps(0.5);
+        let p3 = _mm256_set1_ps(0.166_666_67);
+        let p4 = _mm256_set1_ps(0.041_666_668);
+        let p5 = _mm256_set1_ps(0.008_333_334);
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let g = _mm256_loadu_ps(gate.as_ptr().add(offset));
+            let u = _mm256_loadu_ps(up.as_ptr().add(offset));
+
+            // z = -g
+            let z = _mm256_sub_ps(_mm256_set1_ps(0.0), g);
+            let z_clamped = _mm256_max_ps(c_min_z, _mm256_min_ps(c_max_z, z));
+
+            // k = round(z * log2(e))
+            let k_f32 = _mm256_round_ps(
+                _mm256_mul_ps(z_clamped, c_log2e),
+                _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC,
+            );
+            let k_i32 = _mm256_cvtps_epi32(k_f32);
+
+            // r = z - k * ln(2)
+            let r = _mm256_sub_ps(z_clamped, _mm256_mul_ps(k_f32, c_ln2));
+
+            // P(r) = 1 + r * (1 + r * (0.5 + r * (1/6 + r * (1/24 + r * 1/120))))
+            let poly = _mm256_fmadd_ps(p5, r, p4);
+            let poly = _mm256_fmadd_ps(poly, r, p3);
+            let poly = _mm256_fmadd_ps(poly, r, p2);
+            let poly = _mm256_fmadd_ps(poly, r, p1);
+            let poly = _mm256_fmadd_ps(poly, r, c_one);
+
+            // 2^k = (k + 127) << 23
+            let pow2k_bits = _mm256_slli_epi32(core::arch::x86_64::_mm256_add_epi32(k_i32, c_127), 23);
+            let pow2k = _mm256_castsi256_ps(pow2k_bits);
+
+            let exp_z = _mm256_mul_ps(poly, pow2k);
+            let denom = _mm256_add_ps(c_one, exp_z);
+            let silu_g = _mm256_div_ps(g, denom);
+
+            let res = _mm256_mul_ps(silu_g, u);
+            _mm256_storeu_ps(output.as_mut_ptr().add(offset), res);
+        }
+    }
+
+    for i in (chunks * 8)..len {
+        let g = gate[i];
+        let silu_g = g / (1.0 + (-g).exp());
+        output[i] = silu_g * up[i];
+    }
+}
+
 /// Vectorized Rotary Position Embedding (RoPE) kernel.
 pub fn rope_f32(x: &mut [f32], head_dim: usize, position: usize, theta: f32) {
     let half_dim = head_dim / 2;
@@ -1956,6 +2402,51 @@ mod tests {
         let expected: f32 = a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum();
         let computed = dot_f32(&a, &b);
         assert!((expected - computed).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_swiglu_f32_parity() {
+        let n = 64;
+        let mut gate = vec![0.0f32; n];
+        let mut up = vec![0.0f32; n];
+        let mut out = vec![0.0f32; n];
+        for i in 0..n {
+            gate[i] = (i as f32 - 32.0) * 0.25;
+            up[i] = (i as f32 * 0.1).cos();
+        }
+
+        swiglu_f32(&gate, &up, &mut out);
+
+        for i in 0..n {
+            let g = gate[i];
+            let expected_silu = g / (1.0 + (-g).exp());
+            let expected = expected_silu * up[i];
+            assert!(
+                (out[i] - expected).abs() < 1e-4,
+                "SwiGLU mismatch at index {i}: got {}, expected {}",
+                out[i],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_gemv_q5_0_multithreaded() {
+        let m = 32;
+        let n = 64;
+        let mut row_data = [0.0f32; 32];
+        for (i, v) in row_data.iter_mut().enumerate() {
+            *v = (i as f32 * 0.2).sin();
+        }
+        let blk = crate::int_quant::BlockQ5_0::quantize(&row_data);
+        let matrix = vec![blk; m * (n / 32)];
+        let vector = vec![0.5f32; n];
+        let mut output = vec![0.0f32; m];
+
+        gemv_q5_0(&matrix, &vector, m, n, &mut output);
+        for &val in &output {
+            assert!(val.is_finite());
+        }
     }
 
     #[test]
@@ -2176,6 +2667,23 @@ mod tests {
         assert_eq!(output.len(), m);
         for &val in &output {
             assert!(val.is_finite());
+        }
+
+        // Test AVX2 vs Portable row parity
+        let mut q8_k_act = Vec::new();
+        let chunk: &[f32; 256] = vector[..256].try_into().unwrap();
+        q8_k_act.push(crate::int_quant::BlockQ8_K::quantize(chunk));
+        let row_weights = &blocks[..1];
+        let port = dot_q6_k_q8_k_row_portable(row_weights, &q8_k_act);
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            let avx2_res = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, &q8_k_act) };
+            assert!(
+                (port - avx2_res).abs() < 1e-4,
+                "AVX2 vs Portable mismatch: {} vs {}",
+                port,
+                avx2_res
+            );
         }
     }
 
