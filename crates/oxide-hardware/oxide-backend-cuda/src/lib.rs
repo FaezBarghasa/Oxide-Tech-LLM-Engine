@@ -4569,6 +4569,7 @@ impl HardwareBackend for CudaBackend {
                                     d_k_ptr,
                                     d_v_ptr,
                                     v_cache_ptr,
+                                    0,
                                     d_sp_ptr,
                                     layer.d_wq.as_raw_ptr(),
                                     layer.d_wk.as_raw_ptr(),
@@ -5283,9 +5284,14 @@ impl HardwareBackend for CudaBackend {
                     if has_attn {
                         // Attention RMSNorm + Q8_1 quantization fused
                         if layer.d_attn_norm.size_bytes() > 0 {
+                            let norm_out_ptr = if layer.q_quant == 1 || layer.q_quant == 9 {
+                                std::ptr::null_mut()
+                            } else {
+                                d_norm.as_typed_ptr::<f32>()
+                            };
                             unsafe {
                                 driver::launch_cuda_fused_rmsnorm_q8_1(
-                                    d_norm.as_typed_ptr::<f32>(),
+                                    norm_out_ptr,
                                     d_q8_1_ptr,
                                     d_hid.as_typed_ptr::<f32>(),
                                     layer.d_attn_norm.as_typed_ptr::<f32>(),
@@ -5381,6 +5387,48 @@ impl HardwareBackend for CudaBackend {
                                     );
                                 }
                                 check_cuda("qkv_grouped_proj", layer_idx)?;
+                                (true, true, !v_cache_ptr.is_null())
+                            } else if layer.q_quant == 9
+                                && layer.k_quant == 9
+                                && (layer.v_quant == 9 || layer.v_quant == 3)
+                                && layer.q_k == layer.kv_k
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                let q_bias_ptr = layer
+                                    .d_q_bias
+                                    .as_ref()
+                                    .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+                                let k_bias_ptr = layer
+                                    .d_k_bias
+                                    .as_ref()
+                                    .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+                                let v_bias_ptr = layer
+                                    .d_v_bias
+                                    .as_ref()
+                                    .map_or(std::ptr::null(), |b| b.as_typed_ptr::<f32>());
+                                unsafe {
+                                    driver::launch_cuda_mmvq_qkv_q5_0_ptr(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        d_k.as_typed_ptr::<f32>(),
+                                        d_v.as_typed_ptr::<f32>(),
+                                        v_cache_ptr,
+                                        pos as i32,
+                                        std::ptr::null(),
+                                        layer.d_wq.as_raw_ptr(),
+                                        layer.d_wk.as_raw_ptr(),
+                                        layer.d_wv.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.q_m as i32,
+                                        layer.kv_m as i32,
+                                        layer.q_k as i32,
+                                        layer.v_quant as i32,
+                                        s,
+                                        q_bias_ptr,
+                                        k_bias_ptr,
+                                        v_bias_ptr,
+                                    );
+                                }
+                                check_cuda("qkv_q5_0_grouped_proj", layer_idx)?;
                                 (true, true, !v_cache_ptr.is_null())
                             } else {
                                 (false, false, false)
@@ -5718,9 +5766,14 @@ impl HardwareBackend for CudaBackend {
                     if has_ffn {
                         // FFN RMSNorm + Q8_1 quantization fused
                         if layer.d_ffn_norm.size_bytes() > 0 {
+                            let norm_ffn_out_ptr = if layer.gate_quant == 1 || layer.gate_quant == 9 {
+                                std::ptr::null_mut()
+                            } else {
+                                d_norm.as_typed_ptr::<f32>()
+                            };
                             unsafe {
                                 driver::launch_cuda_fused_rmsnorm_q8_1(
-                                    d_norm.as_typed_ptr::<f32>(),
+                                    norm_ffn_out_ptr,
                                     d_q8_1_ptr,
                                     d_hid.as_typed_ptr::<f32>(),
                                     layer.d_ffn_norm.as_typed_ptr::<f32>(),
@@ -5740,7 +5793,8 @@ impl HardwareBackend for CudaBackend {
                         {
                             unsafe {
                                 let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma
-                                    && (layer.gate_quant == 9 && layer.up_quant == 9)
+                                    && ((layer.gate_quant == 1 && layer.up_quant == 1)
+                                        || (layer.gate_quant == 9 && layer.up_quant == 9))
                                 {
                                     (std::ptr::null_mut(), std::ptr::null())
                                 } else {
@@ -5754,16 +5808,10 @@ impl HardwareBackend for CudaBackend {
                                     && layer.up_quant == 1
                                     && !d_q8_1_ptr.is_null()
                                 {
-                                    driver::launch_cuda_gemv_q4_k(
+                                    driver::launch_cuda_gemv_gate_up_q4_k(
                                         d_gate.as_typed_ptr::<f32>(),
+                                        pass_up_ptr,
                                         layer.d_w1.as_raw_ptr(),
-                                        d_q8_1_ptr,
-                                        layer.inter_m as i32,
-                                        h as i32,
-                                        s,
-                                    );
-                                    driver::launch_cuda_gemv_q4_k(
-                                        d_up.as_typed_ptr::<f32>(),
                                         layer.d_w3.as_raw_ptr(),
                                         d_q8_1_ptr,
                                         layer.inter_m as i32,

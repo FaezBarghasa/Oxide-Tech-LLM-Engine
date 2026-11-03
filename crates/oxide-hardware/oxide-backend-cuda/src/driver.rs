@@ -706,6 +706,7 @@ unsafe extern "C" {
         y_k: *mut f32,
         y_v: *mut f32,
         v_cache_fp16: *mut std::ffi::c_void,
+        start_pos: i32,
         d_start_pos: *const i32,
         raw_wq: *const std::ffi::c_void,
         raw_wk: *const std::ffi::c_void,

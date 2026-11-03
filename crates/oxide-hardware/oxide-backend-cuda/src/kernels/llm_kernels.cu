@@ -6408,7 +6408,8 @@ int launch_cuda_mmvq_qkv_mixed_ptr(float *y_q, float *y_k, float *y_v,
 }
 
 int launch_cuda_mmvq_qkv_q5_0_ptr(float *y_q, float *y_k, float *y_v,
-                                  void *v_cache_fp16, const int *d_start_pos,
+                                  void *v_cache_fp16, int start_pos,
+                                  const int *d_start_pos,
                                   const void *raw_wq, const void *raw_wk,
                                   const void *raw_wv, const void *x_q8_1,
                                   int q_m, int kv_m, int k, int v_quant,
@@ -6423,11 +6424,11 @@ int launch_cuda_mmvq_qkv_q5_0_ptr(float *y_q, float *y_k, float *y_v,
 
   if (v_quant == 3) {
     gemv_qkv_q5_0_splitk_cuda_kernel<2, 3><<<grid, 256, 0, stream>>>(
-        y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
+        y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
         kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
   } else {
     gemv_qkv_q5_0_splitk_cuda_kernel<2, 9><<<grid, 256, 0, stream>>>(
-        y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
+        y_q, y_k, y_v, v_cache_fp16, start_pos, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
         kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
   }
   return cudaGetLastError();
