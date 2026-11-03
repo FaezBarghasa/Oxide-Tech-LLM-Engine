@@ -3,5 +3,7 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/references/gpu-unlock-ada" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/references/sglang" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/references/vllm" vcs="Git" />
   </component>
 </project>

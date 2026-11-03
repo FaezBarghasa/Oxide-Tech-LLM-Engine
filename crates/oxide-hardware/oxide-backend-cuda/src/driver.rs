@@ -701,6 +701,26 @@ unsafe extern "C" {
         v_bias: *const f32,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_qkv_q5_0_ptr(
+        y_q: *mut f32,
+        y_k: *mut f32,
+        y_v: *mut f32,
+        v_cache_fp16: *mut std::ffi::c_void,
+        d_start_pos: *const i32,
+        raw_wq: *const std::ffi::c_void,
+        raw_wk: *const std::ffi::c_void,
+        raw_wv: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        q_m: i32,
+        kv_m: i32,
+        k: i32,
+        v_quant: i32,
+        stream: cudaStream_t,
+        q_bias: *const f32,
+        k_bias: *const f32,
+        v_bias: *const f32,
+    ) -> i32;
+
     pub fn launch_cuda_write_v_cache_ptr(
         v_cache_fp16: *mut std::ffi::c_void,
         y_v: *const f32,

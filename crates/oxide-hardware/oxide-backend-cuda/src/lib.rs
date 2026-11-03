@@ -4472,7 +4472,7 @@ impl HardwareBackend for CudaBackend {
                     for (layer_idx, layer) in self.layers.iter().enumerate() {
                         // Attention RMSNorm + Q8_1
                         if layer.d_attn_norm.size_bytes() > 0 {
-                            let norm_out_ptr = if layer.q_quant == 1 {
+                            let norm_out_ptr = if layer.q_quant == 1 || layer.q_quant == 9 {
                                 std::ptr::null_mut()
                             } else {
                                 d_norm_ptr
@@ -4542,6 +4542,29 @@ impl HardwareBackend for CudaBackend {
                                 && (layer.v_quant == 1 || layer.v_quant == 2)
                             {
                                 driver::launch_cuda_mmvq_qkv_mixed_ptr(
+                                    d_q_ptr,
+                                    d_k_ptr,
+                                    d_v_ptr,
+                                    v_cache_ptr,
+                                    d_sp_ptr,
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    s,
+                                    q_bias_ptr,
+                                    k_bias_ptr,
+                                    v_bias_ptr,
+                                );
+                            } else if layer.q_quant == 9
+                                && layer.k_quant == 9
+                                && (layer.v_quant == 9 || layer.v_quant == 3)
+                            {
+                                driver::launch_cuda_mmvq_qkv_q5_0_ptr(
                                     d_q_ptr,
                                     d_k_ptr,
                                     d_v_ptr,
@@ -4710,6 +4733,16 @@ impl HardwareBackend for CudaBackend {
                                     o_k as i32,
                                     s,
                                 );
+                            } else if layer.o_quant == 9 && !d_q8_1_ptr.is_null() {
+                                driver::launch_cuda_mmvq_q5_0_fused_add(
+                                    d_hid_ptr,
+                                    layer.d_wo.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    o_m as i32,
+                                    o_k as i32,
+                                    1,
+                                    s,
+                                );
                             } else {
                                 driver::launch_cuda_quantize_q8_1(
                                     d_out_ptr, d_q8_1_ptr, o_k as i32, s,
@@ -4730,7 +4763,7 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN RMSNorm + Q8_1
                         if layer.d_ffn_norm.size_bytes() > 0 {
-                            let norm_ffn_out_ptr = if layer.gate_quant == 1 {
+                            let norm_ffn_out_ptr = if layer.gate_quant == 1 || layer.gate_quant == 9 {
                                 std::ptr::null_mut()
                             } else {
                                 d_norm_ptr
@@ -4753,24 +4786,22 @@ impl HardwareBackend for CudaBackend {
                         // FFN Gate + Up GEMV
                         unsafe {
                             let (pass_up_ptr, pass_swiglu_up) = if !self.is_gemma
-                                && (layer.gate_quant == 9 && layer.up_quant == 9)
+                                && ((layer.gate_quant == 1 && layer.up_quant == 1)
+                                    || (layer.gate_quant == 9 && layer.up_quant == 9))
                             {
                                 (std::ptr::null_mut(), std::ptr::null())
                             } else {
                                 (d_up_ptr, d_up_ptr.cast_const())
                             };
 
-                            if layer.gate_quant == 1 && layer.up_quant == 1 {
-                                driver::launch_cuda_gemv_q4_k(
+                            if layer.gate_quant == 1
+                                && layer.up_quant == 1
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                driver::launch_cuda_gemv_gate_up_q4_k(
                                     d_gate_ptr,
+                                    pass_up_ptr,
                                     layer.d_w1.as_raw_ptr(),
-                                    d_q8_1_ptr,
-                                    layer.inter_m as i32,
-                                    h as i32,
-                                    s,
-                                );
-                                driver::launch_cuda_gemv_q4_k(
-                                    d_up_ptr,
                                     layer.d_w3.as_raw_ptr(),
                                     d_q8_1_ptr,
                                     layer.inter_m as i32,

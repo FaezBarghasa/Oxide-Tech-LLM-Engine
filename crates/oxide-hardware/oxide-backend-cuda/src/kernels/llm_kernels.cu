@@ -1576,9 +1576,9 @@ __global__ __launch_bounds__(256, 4) void mmvq_gate_up_q4_k_2warp_kernel(
 
   int warp_sub = warp_id % WARPS_PER_ROW; // 0 or 1
   int num_blocks_per_row = k / 256;
-  int blocks_per_warp = num_blocks_per_row / WARPS_PER_ROW;
-  int b_start = warp_sub * blocks_per_warp;
-  int b_end = b_start + blocks_per_warp;
+  int blocks_per_warp = (num_blocks_per_row + WARPS_PER_ROW - 1) / WARPS_PER_ROW;
+  int b_start = min(warp_sub * blocks_per_warp, num_blocks_per_row);
+  int b_end = min(b_start + blocks_per_warp, num_blocks_per_row);
 
   const BlockQ4_K_Gpu *row_w1 =
       valid_row
@@ -2081,6 +2081,137 @@ __global__ __launch_bounds__(256, 4) void gemv_qkv_mixed_splitk_cuda_kernel(
           sum_b += (float)(dot_val * sc) * d8;
         }
         thread_dot += d * sum_b;
+      }
+    }
+  }
+
+#pragma unroll
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    thread_dot += __shfl_down_sync(0xFFFFFFFF, thread_dot, offset);
+  }
+
+  __shared__ float s_dot_qkv[4][WARPS_PER_ROW];
+
+  if (lane_id == 0 && valid_row) {
+    s_dot_qkv[row_in_block][warp_sub] = thread_dot;
+  }
+  __syncthreads();
+
+  if (warp_sub == 0 && lane_id == 0 && valid_row) {
+    float sum = 0.0f;
+    for (int w = 0; w < WARPS_PER_ROW; ++w) {
+      sum += s_dot_qkv[row_in_block][w];
+    }
+    if (total_row < q_m) {
+      if (q_bias != nullptr)
+        sum += q_bias[row];
+    } else if (total_row < q_m + kv_m) {
+      if (k_bias != nullptr)
+        sum += k_bias[row];
+    } else {
+      if (v_bias != nullptr)
+        sum += v_bias[row];
+    }
+    if (y != nullptr) {
+      y[row] = sum;
+    }
+    if (is_v && v_cache_fp16 != nullptr) {
+      int actual_pos = (d_start_pos != nullptr) ? *d_start_pos : start_pos;
+      ((__half *)v_cache_fp16)[(size_t)actual_pos * kv_m + row] =
+          __float2half(sum);
+    }
+  }
+}
+
+/**
+ * Split-K Multi-Warp Grouped QKV Kernel for Q5_0 Weights + Direct FP16 V-Cache Write.
+ * Supports Q (Q5_0), K (Q5_0), and V (Q5_0 when V_QUANT == 9, or Q8_0 when V_QUANT == 3).
+ * Fuses Q, K, V GEMV, biases, and V-cache write into a single kernel dispatch.
+ */
+template <int WARPS_PER_ROW = 2, int V_QUANT = 9>
+__global__ __launch_bounds__(256, 4) void gemv_qkv_q5_0_splitk_cuda_kernel(
+    float *__restrict__ y_q, float *__restrict__ y_k, float *__restrict__ y_v,
+    void *__restrict__ v_cache_fp16, int start_pos,
+    const void *__restrict__ raw_wq, const void *__restrict__ raw_wk,
+    const void *__restrict__ raw_wv, const void *__restrict__ x_q8_1_raw,
+    int q_m, int kv_m, int k, const int *__restrict__ d_start_pos = nullptr,
+    const float *__restrict__ q_bias = nullptr,
+    const float *__restrict__ k_bias = nullptr,
+    const float *__restrict__ v_bias = nullptr) {
+  int warp_id = threadIdx.x / 32;
+  int lane_id = threadIdx.x % 32;
+  int rows_per_block = 8 / WARPS_PER_ROW;
+  int row_in_block = warp_id / WARPS_PER_ROW;
+  int total_row = blockIdx.x * rows_per_block + row_in_block;
+  int total_m = q_m + 2 * kv_m;
+  bool valid_row = (total_row < total_m);
+
+  int warp_sub = warp_id % WARPS_PER_ROW;
+  int num_blocks_per_row = k / 32;
+  int blocks_per_warp = (num_blocks_per_row + WARPS_PER_ROW - 1) / WARPS_PER_ROW;
+  int b_start = min(warp_sub * blocks_per_warp, num_blocks_per_row);
+  int b_end = min(b_start + blocks_per_warp, num_blocks_per_row);
+
+  int row = 0;
+  const void *raw_blocks = nullptr;
+  float *y = nullptr;
+  bool is_v = false;
+
+  if (valid_row) {
+    if (total_row < q_m) {
+      row = total_row;
+      raw_blocks = raw_wq;
+      y = y_q;
+    } else if (total_row < q_m + kv_m) {
+      row = total_row - q_m;
+      raw_blocks = raw_wk;
+      y = y_k;
+    } else {
+      row = total_row - q_m - kv_m;
+      raw_blocks = raw_wv;
+      y = y_v;
+      is_v = true;
+    }
+  }
+
+  const BlockQ8_1_Gpu *x_q8_1 = (const BlockQ8_1_Gpu *)x_q8_1_raw;
+  float thread_dot = 0.0f;
+
+  if (valid_row) {
+    if (!is_v || V_QUANT == 9) {
+      const BlockQ5_0_Gpu *row_blocks =
+          (const BlockQ5_0_Gpu *)((const uint8_t *)raw_blocks +
+                                  (size_t)row * num_blocks_per_row * 22);
+      int i = lane_id & 15;
+      for (int b = b_start; b < b_end; b++) {
+        const BlockQ8_1_Gpu *bq8_1 = &x_q8_1[b];
+        float d8 = __low2float(bq8_1->ds);
+        int8_t u = bq8_1->qs[lane_id];
+
+        const BlockQ5_0_Gpu *blk = &row_blocks[b];
+        float d = __half2float(*((const half *)&blk->d));
+        uint32_t qh = (uint32_t)blk->qh[0] | ((uint32_t)blk->qh[1] << 8) |
+                      ((uint32_t)blk->qh[2] << 16) | ((uint32_t)blk->qh[3] << 24);
+        uint8_t byte_val = blk->qs[i];
+        uint8_t h_bit = (qh >> lane_id) & 1;
+        int8_t q = (lane_id < 16)
+            ? (int8_t)(((int)(byte_val & 0x0F) | ((int)h_bit << 4)) - 16)
+            : (int8_t)(((int)((byte_val >> 4) & 0x0F) | ((int)h_bit << 4)) - 16);
+        thread_dot += (d * d8) * (float)((int)q * (int)u);
+      }
+    } else if (V_QUANT == 3) {
+      const BlockQ8_0_Gpu *row_blocks =
+          (const BlockQ8_0_Gpu *)((const uint8_t *)raw_blocks +
+                                  (size_t)row * num_blocks_per_row * 34);
+      for (int b = b_start; b < b_end; b++) {
+        const BlockQ8_1_Gpu *bq8_1 = &x_q8_1[b];
+        float d8 = __low2float(bq8_1->ds);
+        int8_t u = bq8_1->qs[lane_id];
+
+        const BlockQ8_0_Gpu *blk = &row_blocks[b];
+        float d = __half2float(*((const half *)&blk->scale));
+        int8_t q = blk->qs[lane_id];
+        thread_dot += (d * d8) * (float)((int)q * (int)u);
       }
     }
   }
@@ -6270,6 +6401,32 @@ int launch_cuda_mmvq_qkv_mixed_ptr(float *y_q, float *y_k, float *y_v,
         kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
   } else {
     gemv_qkv_mixed_splitk_cuda_kernel<2, 2><<<grid, 256, 0, stream>>>(
+        y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
+        kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
+  }
+  return cudaGetLastError();
+}
+
+int launch_cuda_mmvq_qkv_q5_0_ptr(float *y_q, float *y_k, float *y_v,
+                                  void *v_cache_fp16, const int *d_start_pos,
+                                  const void *raw_wq, const void *raw_wk,
+                                  const void *raw_wv, const void *x_q8_1,
+                                  int q_m, int kv_m, int k, int v_quant,
+                                  cudaStream_t stream,
+                                  const float *q_bias,
+                                  const float *k_bias,
+                                  const float *v_bias) {
+  if (q_m <= 0 || kv_m <= 0 || k <= 0)
+    return 0;
+  int total_m = q_m + 2 * kv_m;
+  int grid = (total_m + 3) / 4;
+
+  if (v_quant == 3) {
+    gemv_qkv_q5_0_splitk_cuda_kernel<2, 3><<<grid, 256, 0, stream>>>(
+        y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
+        kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
+  } else {
+    gemv_qkv_q5_0_splitk_cuda_kernel<2, 9><<<grid, 256, 0, stream>>>(
         y_q, y_k, y_v, v_cache_fp16, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m,
         kv_m, k, d_start_pos, q_bias, k_bias, v_bias);
   }
