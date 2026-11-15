@@ -4623,8 +4623,12 @@ impl HardwareBackend for CudaBackend {
 
         if !self.layers.is_empty() && self.hidden_dim > 0 {
             let h = self.hidden_dim;
-            let pos = self.seq_pos;
-            self.seq_pos += 1;
+            let slot_stride = (self.kv_capacity / self.max_slots.max(1)).max(64);
+            let pos = if slot < self.slot_positions.len() {
+                self.slot_positions[slot]
+            } else {
+                self.seq_pos
+            };
 
             // 1. Initial embedding lookup on GPU (or dequantized from host)
             if let Some(d_emb) = &self.d_token_embd {
@@ -4874,20 +4878,28 @@ impl HardwareBackend for CudaBackend {
                             self.num_kv_heads
                         };
 
-                        let kv_cap = self.kv_capacity.max(64);
+                        let kv_cap = slot_stride;
                         if pos >= kv_cap {
                             return Err(EngineError::BackendError(format!(
-                                "Sequence length {pos} exceeds allocated KV cache capacity {kv_cap}"
+                                "Sequence length {pos} exceeds allocated slot KV cache capacity {kv_cap}"
                             )));
                         }
                         let kv_dim = cur_num_kv_heads * cur_head_dim;
+                        let tok_bytes = kv_dim * std::mem::size_of::<u16>();
+                        let slot_base_bytes = slot * slot_stride * tok_bytes;
                         let v_cache_ptr = if layer_idx < self.kv_v.len() {
-                            self.kv_v[layer_idx].as_raw_ptr()
+                            unsafe {
+                                (self.kv_v[layer_idx].as_raw_ptr() as *mut u8)
+                                    .add(slot_base_bytes) as *mut std::ffi::c_void
+                            }
                         } else {
                             std::ptr::null_mut()
                         };
                         let k_cache_ptr = if layer_idx < self.kv_k.len() {
-                            self.kv_k[layer_idx].as_raw_ptr()
+                            unsafe {
+                                (self.kv_k[layer_idx].as_raw_ptr() as *mut u8)
+                                    .add(slot_base_bytes) as *mut std::ffi::c_void
+                            }
                         } else {
                             std::ptr::null_mut()
                         };
@@ -4895,7 +4907,7 @@ impl HardwareBackend for CudaBackend {
                             std::ptr::null_mut()
                         } else {
                             unsafe {
-                                (v_cache_ptr as *mut u8).add(pos * kv_dim * 2)
+                                (v_cache_ptr as *mut u8).add(pos * tok_bytes)
                                     as *mut std::ffi::c_void
                             }
                         };
@@ -5172,8 +5184,8 @@ impl HardwareBackend for CudaBackend {
                                         d_out.as_typed_ptr::<f32>(),
                                         d_q8_1_ptr,
                                         d_q.as_typed_ptr::<f32>(),
-                                        self.kv_k[layer_idx].as_raw_ptr(),
-                                        self.kv_v[layer_idx].as_raw_ptr(),
+                                        k_cache_ptr,
+                                        v_cache_ptr,
                                         cur_num_heads as i32,
                                         cur_num_kv_heads as i32,
                                         cur_head_dim as i32,
@@ -5672,9 +5684,10 @@ impl HardwareBackend for CudaBackend {
                 if slot < self.host_token_buffer.len() {
                     self.host_token_buffer[slot] = selected_token;
                 }
-                self.seq_pos += 1;
+                let next_pos = pos + 1;
+                self.seq_pos = next_pos;
                 if slot < self.slot_positions.len() {
-                    self.slot_positions[slot] = self.seq_pos;
+                    self.slot_positions[slot] = next_pos;
                 }
             }
         } else {

@@ -45,37 +45,16 @@ impl HailoLlmKernels {
 
     /// Dispatches a specialized forward step decode on Hailo NPU virtual stream.
     pub fn dispatch_hailo_step_decode(
-        input_token: u32,
-        slot_idx: usize,
-        buffer: &mut crate::hailort::HailoVStreamBuffer,
+        _input_token: u32,
+        _slot_idx: usize,
+        _buffer: &mut crate::hailort::HailoVStreamBuffer,
     ) -> Result<u32> {
-        const HIDDEN_DIM: usize = 128;
-        let mut activations = [0.0f32; HIDDEN_DIM];
-        let token_base = (input_token % 32000) as f32;
-        for (i, act) in activations.iter_mut().enumerate() {
-            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / HIDDEN_DIM as f32));
-            *act = if i % 2 == 0 {
-                (token_base * freq).sin() * 0.1
-            } else {
-                (token_base * freq).cos() * 0.1
-            };
-        }
-
-        let proj_weights_int8 = [55i8; HIDDEN_DIM];
-        let mut proj_out = [0.0f32; 1];
-        Self::dispatch_hailo_dataflow_gemv_int8(
-            &mut proj_out,
-            &proj_weights_int8,
-            &activations,
-            0.01,
-            1,
-            HIDDEN_DIM,
-        );
-
-        let next_token = (input_token.wrapping_add(1) + (proj_out[0].abs() as u32)).max(1);
-        let _ = buffer.write_token(slot_idx, next_token);
-
-        Ok(next_token)
+        // Zero mock/synthetic kernels per AGENTS.md invariant.
+        // Real HailoRT VStream execution pipeline is loaded in Phase 4.
+        Err(oxide_core::error::EngineError::BackendError(
+            "Hailo step decode requires loaded HEF model network and active VStream buffer"
+                .to_string(),
+        ))
     }
 }
 
@@ -86,8 +65,7 @@ mod tests {
     #[test]
     fn test_hailo_step_decode() {
         let mut buf = crate::hailort::HailoVStreamBuffer::new(4);
-        let tok = HailoLlmKernels::dispatch_hailo_step_decode(80, 0, &mut buf).unwrap();
-        assert!(tok >= 1);
-        assert_eq!(buf.read_token(0), tok);
+        let res = HailoLlmKernels::dispatch_hailo_step_decode(80, 0, &mut buf);
+        assert!(res.is_err());
     }
 }

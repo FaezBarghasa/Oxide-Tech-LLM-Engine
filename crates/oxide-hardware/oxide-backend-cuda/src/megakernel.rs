@@ -1068,7 +1068,8 @@ impl CooperativeMegakernel {
         let start_time = std::time::Instant::now();
         let h = self.config.hidden_dim;
         let mut hidden = vec![0.0f32; h];
-        hidden[0] = (input_token_id as f32).sin();
+        let tok_idx = (input_token_id as usize) % h.max(1);
+        hidden[tok_idx] = 1.0f32;
 
         for (layer_idx, layer) in layers.iter().enumerate() {
             let mut sum_sq = 0.0f32;

@@ -46,7 +46,9 @@ pub struct RocmBackend {
     profile: GpuDeviceProfile,
     execution_plan: RocmExecutionPlan,
     hip_stream: Option<HipStream>,
+    #[allow(dead_code)]
     d_activations: Option<HipDeviceBuffer>,
+    #[allow(dead_code)]
     d_norm_out: Option<HipDeviceBuffer>,
     #[allow(dead_code)]
     d_weights: Option<HipDeviceBuffer>,
@@ -135,58 +137,17 @@ impl RocmBackend {
 impl HardwareBackend for RocmBackend {
     type Event = HipEventHandle;
 
-    fn dispatch_step_kernel(&mut self, cmd: &StepCommand) -> Result<Self::Event> {
+    fn dispatch_step_kernel(&mut self, _cmd: &StepCommand) -> Result<Self::Event> {
         if !driver::is_hip_available() {
             return Err(oxide_core::error::EngineError::DeviceNotFound);
         }
 
-        self.current_event_id += 1;
-        let event = HipEventHandle {
-            event_id: self.current_event_id,
-        };
-
-        let slot = cmd.slot_idx as usize;
-        if slot < self.host_token_buffer.len() {
-            let mut activations = [0.0f32; 128];
-            for (i, act) in activations.iter_mut().enumerate() {
-                *act = ((cmd.input_token as f32 * 0.05) + (i as f32 * 0.1)).cos();
-            }
-            let mut norm_out = [0.0f32; 128];
-
-            if let (Some(stream), Some(d_act), Some(d_norm)) = (
-                &self.hip_stream,
-                &mut self.d_activations,
-                &mut self.d_norm_out,
-            ) {
-                let raw_st = stream.raw();
-                let _ = d_act.copy_from_host_async(&activations, raw_st);
-                // Perform norm computation
-                let weights = [1.0f32; 128];
-                let _ = RocmLlmKernels::dispatch_rmsnorm(
-                    &mut norm_out,
-                    &activations,
-                    &weights,
-                    128,
-                    1e-5,
-                );
-                let _ = d_norm.copy_from_host_async(&norm_out, raw_st);
-                let _ = stream.synchronize();
-            } else {
-                let weights = [1.0f32; 128];
-                let _ = RocmLlmKernels::dispatch_rmsnorm(
-                    &mut norm_out,
-                    &activations,
-                    &weights,
-                    128,
-                    1e-5,
-                );
-            }
-
-            let next_tok = (cmd.input_token.wrapping_add(1) + (norm_out[0].abs() as u32)).max(1);
-            self.host_token_buffer[slot] = next_tok;
-        }
-
-        Ok(event)
+        // Zero mock/synthetic kernels per AGENTS.md invariant.
+        // Full hardware HIP execution pipeline is loaded in Phase 3.
+        Err(oxide_core::error::EngineError::BackendError(
+            "HIP hardware execution pipeline requires loaded model weights and compiled ROCm kernels"
+                .to_string(),
+        ))
     }
 
     fn query_event_completed(&self, _event: Self::Event) -> bool {

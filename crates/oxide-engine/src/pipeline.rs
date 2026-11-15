@@ -30,7 +30,7 @@ use oxide_backend_qualcomm::QualcommBackend;
 use oxide_backend_rknn::RknnBackend;
 use oxide_backend_rocm::RocmBackend;
 use oxide_backend_tpu::TpuBackend;
-use oxide_core::error::Result;
+use oxide_core::error::{EngineError, Result};
 use oxide_core::worker::{StepCommand, StepCompletion};
 use oxide_models::audio::AudioServingEngine;
 use oxide_models::bonsai2::TernaryBonsai2Config;
@@ -1225,22 +1225,37 @@ impl SpecializedPipeline {
                 return Ok(Self::Llama3Cuda(OxideEngine::new(backend, model.config)));
             }
             "rocm" => {
+                if !oxide_backend_rocm::is_hip_available() {
+                    return Err(EngineError::DeviceNotFound);
+                }
                 let backend = RocmBackend::new(0, max_slots);
                 return Ok(Self::Llama3Rocm(OxideEngine::new(backend, model.config)));
             }
             "tpu" => {
+                if !oxide_backend_tpu::is_tpu_available() {
+                    return Err(EngineError::DeviceNotFound);
+                }
                 let backend = TpuBackend::new(0, max_slots);
                 return Ok(Self::Llama3Tpu(OxideEngine::new(backend, model.config)));
             }
             "intel" => {
+                if !oxide_backend_intel::is_level_zero_available() {
+                    return Err(EngineError::DeviceNotFound);
+                }
                 let backend = IntelBackend::new(0, max_slots);
                 return Ok(Self::Llama3Intel(OxideEngine::new(backend, model.config)));
             }
             "metal" => {
+                if !oxide_backend_metal::is_metal_available() {
+                    return Err(EngineError::DeviceNotFound);
+                }
                 let backend = MetalBackend::new(0, max_slots);
                 return Ok(Self::Llama3Metal(OxideEngine::new(backend, model.config)));
             }
             "qualcomm" | "snapdragon" => {
+                if !oxide_backend_qualcomm::is_qnn_available() {
+                    return Err(EngineError::DeviceNotFound);
+                }
                 let backend = QualcommBackend::new(0, max_slots);
                 return Ok(Self::Llama3Qualcomm(OxideEngine::new(
                     backend,
@@ -1248,10 +1263,16 @@ impl SpecializedPipeline {
                 )));
             }
             "rknn" | "rockchip" => {
+                if !oxide_backend_rknn::is_rknn_available() {
+                    return Err(EngineError::DeviceNotFound);
+                }
                 let backend = RknnBackend::new(0, max_slots);
                 return Ok(Self::Llama3Rknn(OxideEngine::new(backend, model.config)));
             }
             "hailo" => {
+                if !oxide_backend_hailo::is_hailo_available() {
+                    return Err(EngineError::DeviceNotFound);
+                }
                 let backend = HailoBackend::new(0, max_slots);
                 return Ok(Self::Llama3Hailo(OxideEngine::new(backend, model.config)));
             }

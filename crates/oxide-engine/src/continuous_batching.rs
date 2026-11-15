@@ -537,6 +537,13 @@ impl ContinuousBatchingEngine {
                                 &seq.prompt_tokens[uncomputed_start..uncomputed_start + chunk_len];
                             if let Err(e) = pipe.prefill(slot_id as u64, chunk, slot_id as u16) {
                                 tracing::error!("Prefill chunk failed for slot {slot_id}: {e}");
+                                let _ = seq.sender.send(TokenEvent {
+                                    token_id: 0,
+                                    is_terminal: true,
+                                    finish_reason: Some(format!("prefill_error: {e}")),
+                                });
+                                finished_slots.push(slot_id);
+                                continue;
                             }
                             let next_start = uncomputed_start + chunk_len;
                             prefill_budget = prefill_budget.saturating_sub(chunk_len);
@@ -569,6 +576,9 @@ impl ContinuousBatchingEngine {
             let mut batch_positions = Vec::new();
 
             for &slot_id in &slot_keys {
+                if finished_slots.contains(&slot_id) {
+                    continue;
+                }
                 if let Some(seq) = self.active_sequences.get(&slot_id) {
                     if matches!(seq.phase, SequencePhase::Decode) {
                         decode_slots.push(slot_id);

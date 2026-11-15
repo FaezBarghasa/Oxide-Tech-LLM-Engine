@@ -853,12 +853,10 @@ async fn embeddings_handler(
 
         let mut vec = vec![0.0f32; dim];
         for (pos, &tok) in tokens.iter().enumerate() {
-            let tok_f = (tok % 32000) as f32;
-            for (i, v) in vec.iter_mut().enumerate() {
-                let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / dim as f32));
-                let phase = tok_f * freq + (pos as f32 * 0.1);
-                *v += if i % 2 == 0 { phase.sin() } else { phase.cos() };
-            }
+            let tok_f = (tok % 32_000) as f32;
+            let idx_f = ((tok.wrapping_mul(2_654_435_761)) % 1024) as f32;
+            let target = (pos * 17 + (tok as usize)) % dim;
+            vec[target] += (tok_f + idx_f).sin() * 0.05;
         }
         let inv_len = 1.0 / (count as f32);
         for v in &mut vec {

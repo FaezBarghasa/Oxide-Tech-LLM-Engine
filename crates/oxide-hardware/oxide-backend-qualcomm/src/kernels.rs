@@ -25,18 +25,16 @@ impl QualcommLlmKernels {
 
     /// Mesa Teflon driver NPU tensor evaluation (open-source Linux driver for Qualcomm NPU/HTP).
     pub fn teflon_npu_eval(
-        input_tokens: &[u32],
+        _input_tokens: &[u32],
         _weights_mapped_fd: i32,
-        output_logits: &mut [f32],
+        _output_logits: &mut [f32],
     ) -> Result<()> {
-        let tok = input_tokens.first().copied().unwrap_or(0);
-        let len = output_logits.len().max(1);
-        let token_base = (tok % 32000) as f32;
-        for (i, logit) in output_logits.iter_mut().enumerate() {
-            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / len as f32));
-            *logit = ((token_base * freq) + (i as f32 * 0.01)).sin() * 0.1;
-        }
-        Ok(())
+        // Zero mock/synthetic kernels per AGENTS.md invariant.
+        // Real Teflon/QNN HTP execution pipeline is wired in Phase 4.
+        Err(oxide_core::error::EngineError::BackendError(
+            "Qualcomm Teflon NPU evaluation requires loaded model weights and open /dev/adsprpc-smd device"
+                .to_string(),
+        ))
     }
 
     /// SPIR-V / Vulkan Compute shader dispatch for Adreno GPU matrix multiplication.

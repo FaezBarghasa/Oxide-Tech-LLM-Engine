@@ -66,40 +66,16 @@ impl TpuLlmKernels {
     /// Dispatches a specialized forward step decode on Google TPU.
     /// Executes systolic MXU matrix operations and writes the sampled token.
     pub fn dispatch_tpu_step_decode(
-        input_token: u32,
-        slot_idx: usize,
-        host_token_buffer: &mut [u32],
+        _input_token: u32,
+        _slot_idx: usize,
+        _host_token_buffer: &mut [u32],
     ) -> Result<u32> {
-        const HIDDEN_DIM: usize = 128;
-        let mut activations_bf16 = [0u16; HIDDEN_DIM];
-        let weights_bf16 = [half::bf16::from_f32(0.05).to_bits(); HIDDEN_DIM];
-
-        let token_base = (input_token % 32000) as f32;
-        for (i, act) in activations_bf16.iter_mut().enumerate() {
-            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / HIDDEN_DIM as f32));
-            let val = if i % 2 == 0 {
-                (token_base * freq).sin() * 0.1
-            } else {
-                (token_base * freq).cos() * 0.1
-            };
-            *act = half::bf16::from_f32(val).to_bits();
-        }
-
-        let mut mxu_out = [0.0f32; 1];
-        Self::dispatch_tpu_mxu_gemv_bf16(
-            &mut mxu_out,
-            &weights_bf16,
-            &activations_bf16,
-            1,
-            HIDDEN_DIM,
-        );
-
-        let next_token = (input_token.wrapping_add(1) + (mxu_out[0].abs() as u32)).max(1);
-        if slot_idx < host_token_buffer.len() {
-            host_token_buffer[slot_idx] = next_token;
-        }
-
-        Ok(next_token)
+        // Zero mock/synthetic kernels per AGENTS.md invariant.
+        // Full hardware PJRT/EdgeTPU execution pipeline is loaded in Phase 4.
+        Err(oxide_core::error::EngineError::BackendError(
+            "Google TPU step decode requires loaded model weights and compiled PJRT/EdgeTPU graphs"
+                .to_string(),
+        ))
     }
 }
 
@@ -119,8 +95,7 @@ mod tests {
     #[test]
     fn test_tpu_step_decode() {
         let mut buf = vec![0u32; 4];
-        let tok = TpuLlmKernels::dispatch_tpu_step_decode(100, 0, &mut buf).unwrap();
-        assert!(tok >= 1);
-        assert_eq!(buf[0], tok);
+        let res = TpuLlmKernels::dispatch_tpu_step_decode(100, 0, &mut buf);
+        assert!(res.is_err());
     }
 }

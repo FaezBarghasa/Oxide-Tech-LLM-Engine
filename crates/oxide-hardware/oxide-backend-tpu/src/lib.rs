@@ -28,6 +28,10 @@ pub mod kernels;
 
 pub use arch::TpuExecutionPlan;
 pub use driver::{is_cloud_tpu_available, is_edgetpu_available};
+
+pub fn is_tpu_available() -> bool {
+    is_cloud_tpu_available() || is_edgetpu_available()
+}
 pub use ici::TpuIciCommunicator;
 pub use kernels::TpuLlmKernels;
 

@@ -71,40 +71,16 @@ impl IntelLlmKernels {
 
     /// Dispatches a specialized forward step decode on Intel hardware.
     pub fn dispatch_intel_step_decode(
-        input_token: u32,
-        slot_idx: usize,
-        host_token_buffer: &mut [u32],
+        _input_token: u32,
+        _slot_idx: usize,
+        _host_token_buffer: &mut [u32],
     ) -> Result<u32> {
-        const HIDDEN_DIM: usize = 128;
-        let mut activations_fp16 = [0u16; HIDDEN_DIM];
-        let weights_fp16 = [half::f16::from_f32(0.04).to_bits(); HIDDEN_DIM];
-
-        let token_base = (input_token % 32000) as f32;
-        for (i, act) in activations_fp16.iter_mut().enumerate() {
-            let freq = 1.0 / (10000.0f32.powf((2 * (i / 2)) as f32 / HIDDEN_DIM as f32));
-            let val = if i % 2 == 0 {
-                (token_base * freq).sin() * 0.1
-            } else {
-                (token_base * freq).cos() * 0.1
-            };
-            *act = half::f16::from_f32(val).to_bits();
-        }
-
-        let mut xmx_out = [0.0f32; 1];
-        Self::dispatch_intel_xmx_gemv_fp16(
-            &mut xmx_out,
-            &weights_fp16,
-            &activations_fp16,
-            1,
-            HIDDEN_DIM,
-        );
-
-        let next_token = (input_token.wrapping_add(1) + (xmx_out[0].abs() as u32)).max(1);
-        if slot_idx < host_token_buffer.len() {
-            host_token_buffer[slot_idx] = next_token;
-        }
-
-        Ok(next_token)
+        // Zero mock/synthetic kernels per AGENTS.md invariant.
+        // Full hardware Level-Zero/XMX execution pipeline is loaded in Phase 4.
+        Err(oxide_core::error::EngineError::BackendError(
+            "Intel step decode requires loaded model weights and compiled Level-Zero/XMX kernels"
+                .to_string(),
+        ))
     }
 }
 
@@ -124,8 +100,7 @@ mod tests {
     #[test]
     fn test_intel_step_decode() {
         let mut buf = vec![0u32; 4];
-        let tok = IntelLlmKernels::dispatch_intel_step_decode(200, 0, &mut buf).unwrap();
-        assert!(tok >= 1);
-        assert_eq!(buf[0], tok);
+        let res = IntelLlmKernels::dispatch_intel_step_decode(200, 0, &mut buf);
+        assert!(res.is_err());
     }
 }

@@ -38,35 +38,16 @@ impl MetalLlmKernels {
 
     /// Dispatches a specialized forward step decode on Apple Silicon unified memory.
     pub fn dispatch_metal_step_decode(
-        input_token: u32,
-        slot_idx: usize,
-        unified_buffer: &mut crate::mlx::MetalUnifiedBuffer,
+        _input_token: u32,
+        _slot_idx: usize,
+        _unified_buffer: &mut crate::mlx::MetalUnifiedBuffer,
     ) -> Result<u32> {
-        const HIDDEN_DIM: usize = 128;
-        let mut activations = [0.0f32; HIDDEN_DIM];
-        let token_base = (input_token % 32000) as f32;
-        for (i, act) in activations.iter_mut().enumerate() {
-            *act = ((token_base + i as f32) * 0.005).cos();
-        }
-
-        let weights_q4 = [oxide_quant::int_quant::BlockQ4_0 {
-            scale: oxide_quant::int_quant::f16::from_f32(0.02),
-            qs: [0x55; 16],
-        }; 4]; // 4 blocks = 128 weights
-
-        let mut proj_out = [0.0f32; 1];
-        Self::dispatch_metal_simdgroup_gemv_q4_0(
-            &mut proj_out,
-            &weights_q4,
-            &activations,
-            1,
-            HIDDEN_DIM,
-        );
-
-        let next_token = (input_token.wrapping_add(1) + (proj_out[0].abs() as u32)).max(1);
-        let _ = unified_buffer.write_token(slot_idx, next_token);
-
-        Ok(next_token)
+        // Zero mock/synthetic kernels per AGENTS.md invariant.
+        // Full hardware Metal shader execution pipeline is loaded in Phase 4.
+        Err(oxide_core::error::EngineError::BackendError(
+            "Metal step decode requires loaded model weights and compiled Metal shaders"
+                .to_string(),
+        ))
     }
 }
 
@@ -77,9 +58,8 @@ mod tests {
     #[test]
     fn test_metal_step_decode() {
         let mut buf = crate::mlx::MetalUnifiedBuffer::new_shared(4);
-        let tok = MetalLlmKernels::dispatch_metal_step_decode(50, 0, &mut buf).unwrap();
-        assert!(tok >= 1);
-        assert_eq!(buf.read_token(0), tok);
+        let res = MetalLlmKernels::dispatch_metal_step_decode(50, 0, &mut buf);
+        assert!(res.is_err());
     }
 
     #[test]
