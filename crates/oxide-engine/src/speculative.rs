@@ -369,7 +369,7 @@ impl NativeMtpModule {
     }
 }
 
-/// Dynamically regulates the speculation horizon based on rolling acceptance rates.
+/// Dynamically regulates the speculation horizon based on rolling acceptance rates and EMA circuit breaker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdaptiveSpeculator {
     pub current_k: usize,
@@ -379,6 +379,10 @@ pub struct AdaptiveSpeculator {
     pub history: Vec<(usize, usize)>, // (accepted, drafted)
     pub consecutive_rejections: usize,
     pub backoff_cooldown: usize,
+    pub alpha_ema: f32,
+    pub low_acceptance_streak: usize,
+    pub circuit_breaker_tripped: bool,
+    pub max_entropy_threshold: f32,
 }
 
 impl AdaptiveSpeculator {
@@ -392,6 +396,10 @@ impl AdaptiveSpeculator {
             history: Vec::new(),
             consecutive_rejections: 0,
             backoff_cooldown: 0,
+            alpha_ema: 1.0,
+            low_acceptance_streak: 0,
+            circuit_breaker_tripped: false,
+            max_entropy_threshold: 2.5,
         }
     }
 
@@ -400,12 +408,36 @@ impl AdaptiveSpeculator {
         if drafted == 0 {
             return;
         }
+
+        // Exponential Moving Average acceptance monitor: alpha_ema = 0.8 * prev + 0.2 * step
+        let step_rate = accepted as f32 / drafted as f32;
+        self.alpha_ema = 0.8 * self.alpha_ema + 0.2 * step_rate;
+
         self.history.push((accepted, drafted));
         if self.history.len() > self.rolling_window {
             self.history.remove(0);
         }
 
-        if accepted == 0 {
+        // Speculative Fast-Exit Circuit Breaker:
+        // If alpha_ema < 0.30 for 3 consecutive steps, trip breaker and throttle K -> 0
+        if self.alpha_ema < 0.30 {
+            self.low_acceptance_streak += 1;
+            if self.low_acceptance_streak >= 3 {
+                self.circuit_breaker_tripped = true;
+                self.backoff_cooldown = 16;
+                self.current_k = 0;
+            }
+        } else {
+            self.low_acceptance_streak = 0;
+            if self.circuit_breaker_tripped && accepted > 0 {
+                self.circuit_breaker_tripped = false;
+                self.current_k = self.min_k;
+            }
+        }
+
+        if self.circuit_breaker_tripped {
+            self.current_k = 0;
+        } else if accepted == 0 {
             self.consecutive_rejections += 1;
             // Back off for 4 cycles if 2 consecutive rejections occur
             if self.consecutive_rejections >= 2 {
@@ -418,7 +450,7 @@ impl AdaptiveSpeculator {
 
         let rate = self.rolling_acceptance_rate();
 
-        if self.history.len() >= 3 {
+        if !self.circuit_breaker_tripped && self.history.len() >= 3 {
             // Expand horizon if acceptance >= 75%
             if rate >= 0.75 && self.consecutive_rejections == 0 {
                 self.current_k = (self.current_k + 1).min(self.max_k);
@@ -434,7 +466,10 @@ impl AdaptiveSpeculator {
     pub fn current_horizon(&mut self) -> usize {
         if self.backoff_cooldown > 0 {
             self.backoff_cooldown -= 1;
-            0 // Skip drafting during backoff
+            // When cooldown elapses on a tripped circuit breaker, re-probe with 1 token
+            usize::from(self.backoff_cooldown == 0 && self.circuit_breaker_tripped)
+        } else if self.circuit_breaker_tripped {
+            0
         } else if self.consecutive_rejections >= 2
             || (self.history.len() >= 3 && self.rolling_acceptance_rate() < 0.50)
         {
@@ -443,6 +478,12 @@ impl AdaptiveSpeculator {
         } else {
             self.current_k
         }
+    }
+
+    /// Checks token entropy to prevent speculative lookahead when prediction distribution is high-entropy.
+    #[must_use]
+    pub fn can_speculate_entropy(&self, entropy: f32) -> bool {
+        !self.circuit_breaker_tripped && entropy <= self.max_entropy_threshold
     }
 
     /// Read-only inspection of the current speculation horizon K.
@@ -786,6 +827,33 @@ mod tests {
         spec.record_step(0, 5);
         spec.record_step(1, 5);
         assert!(spec.current_k < 5);
+    }
+
+    #[test]
+    fn test_fast_exit_circuit_breaker_ema_throttle() {
+        let mut spec = AdaptiveSpeculator::new(4, 1, 5, 16);
+        assert_eq!(spec.active_k(), 4);
+        assert!(!spec.circuit_breaker_tripped);
+
+        // Simulate 0 acceptance steps on novel prompt tokens (e.g. 0/4, 0/4, 0/4)
+        spec.record_step(0, 4); // alpha_ema = 0.8
+        spec.record_step(0, 4); // alpha_ema = 0.64
+        spec.record_step(0, 4); // alpha_ema = 0.512
+        spec.record_step(0, 4); // alpha_ema = 0.4096
+        spec.record_step(0, 4); // alpha_ema = 0.32768
+        spec.record_step(0, 4); // alpha_ema = 0.262144 (< 0.30, streak 1)
+        spec.record_step(0, 4); // streak 2
+        spec.record_step(0, 4); // streak 3 -> trips circuit breaker!
+
+        assert!(
+            spec.circuit_breaker_tripped,
+            "Circuit breaker must be tripped"
+        );
+        assert_eq!(spec.current_horizon(), 0, "Horizon must throttle to 0");
+        assert_eq!(spec.current_k, 0);
+
+        // Fast-exit prevents speculation during novel token stream
+        assert!(!spec.can_speculate_entropy(1.0));
     }
 
     #[test]

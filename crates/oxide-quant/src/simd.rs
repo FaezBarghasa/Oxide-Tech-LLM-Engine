@@ -1399,6 +1399,226 @@ pub(crate) unsafe fn dot_q6_k_q8_k_row_avx2(
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q6_k_q8_k_2rows_avx2(
+    row0_weights: &[crate::int_quant::BlockQ6_K],
+    row1_weights: &[crate::int_quant::BlockQ6_K],
+    act_q8_k: &[crate::int_quant::BlockQ8_K],
+) -> (f32, f32) {
+    use core::arch::x86_64::{
+        _mm_loadu_si128, _mm_shuffle_epi8, _mm256_add_epi32, _mm256_and_si256,
+        _mm256_cvtepi8_epi16, _mm256_cvtepi32_ps, _mm256_fmadd_ps, _mm256_loadu_si256,
+        _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256, _mm256_set1_epi8, _mm256_set1_ps,
+        _mm256_setzero_ps, _mm256_setzero_si256, _mm256_slli_epi16, _mm256_slli_epi32,
+        _mm256_srli_epi16, _mm256_storeu_ps, _mm256_sub_epi32,
+    };
+
+    static K_SHUFFLE: [u8; 128] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3,
+        3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7,
+        7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10,
+        11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13,
+        13, 14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15,
+    ];
+
+    // SAFETY: caller guarantees avx2 and fma features are enabled and slices have valid aligned data.
+    unsafe {
+        let nb = row0_weights
+            .len()
+            .min(row1_weights.len())
+            .min(act_q8_k.len());
+        let m15 = _mm256_set1_epi8(15);
+        let m3 = _mm256_set1_epi8(3);
+        let m12 = _mm256_set1_epi8(12);
+        let m48 = _mm256_set1_epi8(48);
+        let m_c0 = _mm256_set1_epi8(-64); // 0xC0
+
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+
+        for i in 0..nb {
+            let x0 = &row0_weights[i];
+            let x1 = &row1_weights[i];
+            let y = &act_q8_k[i];
+
+            let d0 = y.d * x0.d.to_f32();
+            let d1 = y.d * x1.d.to_f32();
+
+            let q8sums = _mm256_loadu_si256(y.bsums.as_ptr().cast());
+
+            let scales0 = _mm_loadu_si128(x0.scales.as_ptr().cast());
+            let scales_16_0 = _mm256_cvtepi8_epi16(scales0);
+            let q8sclsub0 = _mm256_slli_epi32(_mm256_madd_epi16(q8sums, scales_16_0), 5);
+
+            let scales1 = _mm_loadu_si128(x1.scales.as_ptr().cast());
+            let scales_16_1 = _mm256_cvtepi8_epi16(scales1);
+            let q8sclsub1 = _mm256_slli_epi32(_mm256_madd_epi16(q8sums, scales_16_1), 5);
+
+            let mut sumi0 = _mm256_setzero_si256();
+            let mut sumi1 = _mm256_setzero_si256();
+
+            let mut q4_ptr0 = x0.ql.as_ptr();
+            let mut qh_ptr0 = x0.qh.as_ptr();
+            let mut q4_ptr1 = x1.ql.as_ptr();
+            let mut qh_ptr1 = x1.qh.as_ptr();
+            let mut q8_ptr = y.qs.as_ptr();
+
+            for j in 0..2 {
+                // Row 0
+                let q4bits1_0 = _mm256_loadu_si256(q4_ptr0.cast());
+                q4_ptr0 = q4_ptr0.add(32);
+                let q4bits2_0 = _mm256_loadu_si256(q4_ptr0.cast());
+                q4_ptr0 = q4_ptr0.add(32);
+                let q4bits_h_0 = _mm256_loadu_si256(qh_ptr0.cast());
+                qh_ptr0 = qh_ptr0.add(32);
+
+                let q4h_0_0 = _mm256_slli_epi16(_mm256_and_si256(q4bits_h_0, m3), 4);
+                let q4h_1_0 = _mm256_slli_epi16(_mm256_and_si256(q4bits_h_0, m12), 2);
+                let q4h_2_0 = _mm256_and_si256(q4bits_h_0, m48);
+                let q4h_3_0 = _mm256_srli_epi16(_mm256_and_si256(q4bits_h_0, m_c0), 2);
+
+                let q4_0_0 = _mm256_or_si256(_mm256_and_si256(q4bits1_0, m15), q4h_0_0);
+                let q4_1_0 = _mm256_or_si256(_mm256_and_si256(q4bits2_0, m15), q4h_1_0);
+                let q4_2_0 = _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16(q4bits1_0, 4), m15),
+                    q4h_2_0,
+                );
+                let q4_3_0 = _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16(q4bits2_0, 4), m15),
+                    q4h_3_0,
+                );
+
+                // Row 1
+                let q4bits1_1 = _mm256_loadu_si256(q4_ptr1.cast());
+                q4_ptr1 = q4_ptr1.add(32);
+                let q4bits2_1 = _mm256_loadu_si256(q4_ptr1.cast());
+                q4_ptr1 = q4_ptr1.add(32);
+                let q4bits_h_1 = _mm256_loadu_si256(qh_ptr1.cast());
+                qh_ptr1 = qh_ptr1.add(32);
+
+                let q4h_0_1 = _mm256_slli_epi16(_mm256_and_si256(q4bits_h_1, m3), 4);
+                let q4h_1_1 = _mm256_slli_epi16(_mm256_and_si256(q4bits_h_1, m12), 2);
+                let q4h_2_1 = _mm256_and_si256(q4bits_h_1, m48);
+                let q4h_3_1 = _mm256_srli_epi16(_mm256_and_si256(q4bits_h_1, m_c0), 2);
+
+                let q4_0_1 = _mm256_or_si256(_mm256_and_si256(q4bits1_1, m15), q4h_0_1);
+                let q4_1_1 = _mm256_or_si256(_mm256_and_si256(q4bits2_1, m15), q4h_1_1);
+                let q4_2_1 = _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16(q4bits1_1, 4), m15),
+                    q4h_2_1,
+                );
+                let q4_3_1 = _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16(q4bits2_1, 4), m15),
+                    q4h_3_1,
+                );
+
+                // Load 128 activation bytes ONCE for both rows
+                let q8_0 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8_1 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8_2 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8_3 = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+
+                // Multiply Row 0
+                let is_base = j * 4;
+                let sc0_0 = _mm_shuffle_epi8(
+                    scales0,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add(is_base * 16).cast()),
+                );
+                let sc1_0 = _mm_shuffle_epi8(
+                    scales0,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 1) * 16).cast()),
+                );
+                let sc2_0 = _mm_shuffle_epi8(
+                    scales0,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 2) * 16).cast()),
+                );
+                let sc3_0 = _mm_shuffle_epi8(
+                    scales0,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 3) * 16).cast()),
+                );
+
+                let p16_0_0 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc0_0),
+                    _mm256_maddubs_epi16(q4_0_0, q8_0),
+                );
+                let p16_1_0 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc1_0),
+                    _mm256_maddubs_epi16(q4_1_0, q8_1),
+                );
+                let p16_2_0 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc2_0),
+                    _mm256_maddubs_epi16(q4_2_0, q8_2),
+                );
+                let p16_3_0 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc3_0),
+                    _mm256_maddubs_epi16(q4_3_0, q8_3),
+                );
+
+                sumi0 = _mm256_add_epi32(sumi0, _mm256_add_epi32(p16_0_0, p16_1_0));
+                sumi0 = _mm256_add_epi32(sumi0, _mm256_add_epi32(p16_2_0, p16_3_0));
+
+                // Multiply Row 1
+                let sc0_1 = _mm_shuffle_epi8(
+                    scales1,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add(is_base * 16).cast()),
+                );
+                let sc1_1 = _mm_shuffle_epi8(
+                    scales1,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 1) * 16).cast()),
+                );
+                let sc2_1 = _mm_shuffle_epi8(
+                    scales1,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 2) * 16).cast()),
+                );
+                let sc3_1 = _mm_shuffle_epi8(
+                    scales1,
+                    _mm_loadu_si128(K_SHUFFLE.as_ptr().add((is_base + 3) * 16).cast()),
+                );
+
+                let p16_0_1 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc0_1),
+                    _mm256_maddubs_epi16(q4_0_1, q8_0),
+                );
+                let p16_1_1 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc1_1),
+                    _mm256_maddubs_epi16(q4_1_1, q8_1),
+                );
+                let p16_2_1 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc2_1),
+                    _mm256_maddubs_epi16(q4_2_1, q8_2),
+                );
+                let p16_3_1 = _mm256_madd_epi16(
+                    _mm256_cvtepi8_epi16(sc3_1),
+                    _mm256_maddubs_epi16(q4_3_1, q8_3),
+                );
+
+                sumi1 = _mm256_add_epi32(sumi1, _mm256_add_epi32(p16_0_1, p16_1_1));
+                sumi1 = _mm256_add_epi32(sumi1, _mm256_add_epi32(p16_2_1, p16_3_1));
+            }
+
+            sumi0 = _mm256_sub_epi32(sumi0, q8sclsub0);
+            sumi1 = _mm256_sub_epi32(sumi1, q8sclsub1);
+
+            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d0), _mm256_cvtepi32_ps(sumi0), acc0);
+            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d1), _mm256_cvtepi32_ps(sumi1), acc1);
+        }
+
+        let mut buf0 = [0.0f32; 8];
+        let mut buf1 = [0.0f32; 8];
+        _mm256_storeu_ps(buf0.as_mut_ptr(), acc0);
+        _mm256_storeu_ps(buf1.as_mut_ptr(), acc1);
+        (
+            (buf0[0] + buf0[1] + buf0[2] + buf0[3]) + (buf0[4] + buf0[5] + buf0[6] + buf0[7]),
+            (buf1[0] + buf1[1] + buf1[2] + buf1[3]) + (buf1[4] + buf1[5] + buf1[6] + buf1[7]),
+        )
+    }
+}
+
 pub(crate) fn dot_q6_k_q8_k_row_portable(
     row_weights: &[crate::int_quant::BlockQ6_K],
     act_q8_k: &[crate::int_quant::BlockQ8_K],
@@ -1490,15 +1710,33 @@ pub fn gemv_q6_k_prequantized(
     let has_avx2 = false;
 
     if m <= 8 {
-        for row in 0..m {
+        let mut row = 0;
+        while row + 1 < m {
+            let row_offset0 = row * blocks_per_row;
+            let row_offset1 = (row + 1) * blocks_per_row;
+            let r0 = &matrix[row_offset0..row_offset0 + blocks_per_row];
+            let r1 = &matrix[row_offset1..row_offset1 + blocks_per_row];
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                let (v0, v1) = unsafe { dot_q6_k_q8_k_2rows_avx2(r0, r1, q8_k_act) };
+                output[row] = v0;
+                output[row + 1] = v1;
+                row += 2;
+                continue;
+            }
+            output[row] = dot_q6_k_q8_k_row_portable(r0, q8_k_act);
+            output[row + 1] = dot_q6_k_q8_k_row_portable(r1, q8_k_act);
+            row += 2;
+        }
+        if row < m {
             let row_offset = row * blocks_per_row;
             let row_weights = &matrix[row_offset..row_offset + blocks_per_row];
             #[cfg(target_arch = "x86_64")]
             if has_avx2 {
                 output[row] = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, q8_k_act) };
-                continue;
+            } else {
+                output[row] = dot_q6_k_q8_k_row_portable(row_weights, q8_k_act);
             }
-            output[row] = dot_q6_k_q8_k_row_portable(row_weights, q8_k_act);
         }
         return;
     }
@@ -1510,17 +1748,39 @@ pub fn gemv_q6_k_prequantized(
         let local_out = unsafe {
             std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(start), end - start)
         };
-        for (i, row) in (start..end).enumerate() {
+        let mut row = start;
+        let mut i = 0;
+        while row + 1 < end {
+            let row_offset0 = row * blocks_per_row;
+            let row_offset1 = (row + 1) * blocks_per_row;
+            let r0 = &matrix[row_offset0..row_offset0 + blocks_per_row];
+            let r1 = &matrix[row_offset1..row_offset1 + blocks_per_row];
+
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                let (v0, v1) = unsafe { dot_q6_k_q8_k_2rows_avx2(r0, r1, q8_k_act) };
+                local_out[i] = v0;
+                local_out[i + 1] = v1;
+                row += 2;
+                i += 2;
+                continue;
+            }
+
+            local_out[i] = dot_q6_k_q8_k_row_portable(r0, q8_k_act);
+            local_out[i + 1] = dot_q6_k_q8_k_row_portable(r1, q8_k_act);
+            row += 2;
+            i += 2;
+        }
+        if row < end {
             let row_offset = row * blocks_per_row;
             let row_weights = &matrix[row_offset..row_offset + blocks_per_row];
 
             #[cfg(target_arch = "x86_64")]
             if has_avx2 {
                 local_out[i] = unsafe { dot_q6_k_q8_k_row_avx2(row_weights, q8_k_act) };
-                continue;
+            } else {
+                local_out[i] = dot_q6_k_q8_k_row_portable(row_weights, q8_k_act);
             }
-
-            local_out[i] = dot_q6_k_q8_k_row_portable(row_weights, q8_k_act);
         }
     });
 }
@@ -2280,6 +2540,280 @@ unsafe fn dot_q4_k_q8_k_2rows_avx2(
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn dot_q4_k_q8_k_4rows_avx2(
+    row0_weights: &[crate::gguf_quants::BlockQ4_K],
+    row1_weights: &[crate::gguf_quants::BlockQ4_K],
+    row2_weights: &[crate::gguf_quants::BlockQ4_K],
+    row3_weights: &[crate::gguf_quants::BlockQ4_K],
+    act_q8_k: &[crate::int_quant::BlockQ8_K],
+) -> (f32, f32, f32, f32) {
+    use core::arch::x86_64::{
+        _mm_cvtepi32_ps, _mm_fmadd_ps, _mm_hadd_epi16, _mm_madd_epi16, _mm_set_epi32, _mm_set1_ps,
+        _mm_setzero_ps, _mm_storeu_ps, _mm256_add_epi32, _mm256_and_si256, _mm256_castsi128_si256,
+        _mm256_cvtepi32_ps, _mm256_cvtepu8_epi16, _mm256_extracti128_si256, _mm256_fmadd_ps,
+        _mm256_inserti128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_maddubs_epi16,
+        _mm256_set1_epi8, _mm256_set1_ps, _mm256_setzero_ps, _mm256_setzero_si256,
+        _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_ps,
+    };
+
+    static K_SHUFFLE_K4: [u8; 256] = [
+        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+        0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
+        2, 3, 2, 3, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,
+        4, 5, 4, 5, 4, 5, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
+        6, 7, 6, 7, 6, 7, 6, 7, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,
+        8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10,
+        11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 12, 13, 12, 13, 12, 13,
+        12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12,
+        13, 12, 13, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+        14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+    ];
+
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
+
+    // SAFETY: caller guarantees avx2 and fma features are enabled and slices have valid aligned data.
+    unsafe {
+        let m4 = _mm256_set1_epi8(0x0F);
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+        let mut acc2 = _mm256_setzero_ps();
+        let mut acc3 = _mm256_setzero_ps();
+        let mut acc_m0 = _mm_setzero_ps();
+        let mut acc_m1 = _mm_setzero_ps();
+        let mut acc_m2 = _mm_setzero_ps();
+        let mut acc_m3 = _mm_setzero_ps();
+
+        let num_blocks = row0_weights
+            .len()
+            .min(row1_weights.len())
+            .min(row2_weights.len())
+            .min(row3_weights.len())
+            .min(act_q8_k.len());
+
+        for b in 0..num_blocks {
+            let x0 = &row0_weights[b];
+            let x1 = &row1_weights[b];
+            let x2 = &row2_weights[b];
+            let x3 = &row3_weights[b];
+            let y = &act_q8_k[b];
+
+            let d0 = y.d * x0.d.to_f32();
+            let dmin0 = -y.d * x0.dmin.to_f32();
+            let d1 = y.d * x1.d.to_f32();
+            let dmin1 = -y.d * x1.dmin.to_f32();
+            let d2 = y.d * x2.d.to_f32();
+            let dmin2 = -y.d * x2.dmin.to_f32();
+            let d3 = y.d * x3.d.to_f32();
+            let dmin3 = -y.d * x3.dmin.to_f32();
+
+            // Unpack scales for 4 rows
+            let mut utmp0 = [0u32; 4];
+            std::ptr::copy_nonoverlapping(x0.scales.as_ptr(), utmp0.as_mut_ptr().cast::<u8>(), 12);
+            utmp0[3] = ((utmp0[2] >> 4) & KMASK2) | (((utmp0[1] >> 6) & KMASK3) << 4);
+            let uaux0 = utmp0[1] & KMASK1;
+            utmp0[1] = (utmp0[2] & KMASK2) | (((utmp0[0] >> 6) & KMASK3) << 4);
+            utmp0[2] = uaux0;
+            utmp0[0] &= KMASK1;
+
+            let mins_and_scales0 = _mm256_cvtepu8_epi16(_mm_set_epi32(
+                utmp0[3] as i32,
+                utmp0[2] as i32,
+                utmp0[1] as i32,
+                utmp0[0] as i32,
+            ));
+
+            let mut utmp1 = [0u32; 4];
+            std::ptr::copy_nonoverlapping(x1.scales.as_ptr(), utmp1.as_mut_ptr().cast::<u8>(), 12);
+            utmp1[3] = ((utmp1[2] >> 4) & KMASK2) | (((utmp1[1] >> 6) & KMASK3) << 4);
+            let uaux1 = utmp1[1] & KMASK1;
+            utmp1[1] = (utmp1[2] & KMASK2) | (((utmp1[0] >> 6) & KMASK3) << 4);
+            utmp1[2] = uaux1;
+            utmp1[0] &= KMASK1;
+
+            let mins_and_scales1 = _mm256_cvtepu8_epi16(_mm_set_epi32(
+                utmp1[3] as i32,
+                utmp1[2] as i32,
+                utmp1[1] as i32,
+                utmp1[0] as i32,
+            ));
+
+            let mut utmp2 = [0u32; 4];
+            std::ptr::copy_nonoverlapping(x2.scales.as_ptr(), utmp2.as_mut_ptr().cast::<u8>(), 12);
+            utmp2[3] = ((utmp2[2] >> 4) & KMASK2) | (((utmp2[1] >> 6) & KMASK3) << 4);
+            let uaux2 = utmp2[1] & KMASK1;
+            utmp2[1] = (utmp2[2] & KMASK2) | (((utmp2[0] >> 6) & KMASK3) << 4);
+            utmp2[2] = uaux2;
+            utmp2[0] &= KMASK1;
+
+            let mins_and_scales2 = _mm256_cvtepu8_epi16(_mm_set_epi32(
+                utmp2[3] as i32,
+                utmp2[2] as i32,
+                utmp2[1] as i32,
+                utmp2[0] as i32,
+            ));
+
+            let mut utmp3 = [0u32; 4];
+            std::ptr::copy_nonoverlapping(x3.scales.as_ptr(), utmp3.as_mut_ptr().cast::<u8>(), 12);
+            utmp3[3] = ((utmp3[2] >> 4) & KMASK2) | (((utmp3[1] >> 6) & KMASK3) << 4);
+            let uaux3 = utmp3[1] & KMASK1;
+            utmp3[1] = (utmp3[2] & KMASK2) | (((utmp3[0] >> 6) & KMASK3) << 4);
+            utmp3[2] = uaux3;
+            utmp3[0] &= KMASK1;
+
+            let mins_and_scales3 = _mm256_cvtepu8_epi16(_mm_set_epi32(
+                utmp3[3] as i32,
+                utmp3[2] as i32,
+                utmp3[1] as i32,
+                utmp3[0] as i32,
+            ));
+
+            // Activation bsums loaded ONCE for all 4 rows
+            let q8sums = _mm256_loadu_si256(y.bsums.as_ptr().cast());
+            let q8s = _mm_hadd_epi16(
+                _mm256_extracti128_si256(q8sums, 0),
+                _mm256_extracti128_si256(q8sums, 1),
+            );
+
+            let prod0 = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales0, 1), q8s);
+            acc_m0 = _mm_fmadd_ps(_mm_set1_ps(dmin0), _mm_cvtepi32_ps(prod0), acc_m0);
+
+            let prod1 = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales1, 1), q8s);
+            acc_m1 = _mm_fmadd_ps(_mm_set1_ps(dmin1), _mm_cvtepi32_ps(prod1), acc_m1);
+
+            let prod2 = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales2, 1), q8s);
+            acc_m2 = _mm_fmadd_ps(_mm_set1_ps(dmin2), _mm_cvtepi32_ps(prod2), acc_m2);
+
+            let prod3 = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales3, 1), q8s);
+            acc_m3 = _mm_fmadd_ps(_mm_set1_ps(dmin3), _mm_cvtepi32_ps(prod3), acc_m3);
+
+            let sc128_0 = _mm256_extracti128_si256(mins_and_scales0, 0);
+            let scales0 = _mm256_inserti128_si256(_mm256_castsi128_si256(sc128_0), sc128_0, 1);
+
+            let sc128_1 = _mm256_extracti128_si256(mins_and_scales1, 0);
+            let scales1 = _mm256_inserti128_si256(_mm256_castsi128_si256(sc128_1), sc128_1, 1);
+
+            let sc128_2 = _mm256_extracti128_si256(mins_and_scales2, 0);
+            let scales2 = _mm256_inserti128_si256(_mm256_castsi128_si256(sc128_2), sc128_2, 1);
+
+            let sc128_3 = _mm256_extracti128_si256(mins_and_scales3, 0);
+            let scales3 = _mm256_inserti128_si256(_mm256_castsi128_si256(sc128_3), sc128_3, 1);
+
+            let mut sumi0 = _mm256_setzero_si256();
+            let mut sumi1 = _mm256_setzero_si256();
+            let mut sumi2 = _mm256_setzero_si256();
+            let mut sumi3 = _mm256_setzero_si256();
+
+            let mut q4_ptr0 = x0.qs.as_ptr();
+            let mut q4_ptr1 = x1.qs.as_ptr();
+            let mut q4_ptr2 = x2.qs.as_ptr();
+            let mut q4_ptr3 = x3.qs.as_ptr();
+            let mut q8_ptr = y.qs.as_ptr();
+
+            for j in 0..4 {
+                let shuf_l = _mm256_loadu_si256(K_SHUFFLE_K4.as_ptr().add((2 * j) * 32).cast());
+                let shuf_h = _mm256_loadu_si256(K_SHUFFLE_K4.as_ptr().add((2 * j + 1) * 32).cast());
+
+                let scale_l0 = _mm256_shuffle_epi8(scales0, shuf_l);
+                let scale_h0 = _mm256_shuffle_epi8(scales0, shuf_h);
+                let scale_l1 = _mm256_shuffle_epi8(scales1, shuf_l);
+                let scale_h1 = _mm256_shuffle_epi8(scales1, shuf_h);
+                let scale_l2 = _mm256_shuffle_epi8(scales2, shuf_l);
+                let scale_h2 = _mm256_shuffle_epi8(scales2, shuf_h);
+                let scale_l3 = _mm256_shuffle_epi8(scales3, shuf_l);
+                let scale_h3 = _mm256_shuffle_epi8(scales3, shuf_h);
+
+                // Load 64 activation bytes ONCE for all 4 rows
+                let q8l = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+                let q8h = _mm256_loadu_si256(q8_ptr.cast());
+                q8_ptr = q8_ptr.add(32);
+
+                // Row 0
+                let q4bits0 = _mm256_loadu_si256(q4_ptr0.cast());
+                q4_ptr0 = q4_ptr0.add(32);
+                let q4l0 = _mm256_and_si256(q4bits0, m4);
+                let q4h0 = _mm256_and_si256(_mm256_srli_epi16(q4bits0, 4), m4);
+                let p16l0 = _mm256_madd_epi16(scale_l0, _mm256_maddubs_epi16(q4l0, q8l));
+                let p16h0 = _mm256_madd_epi16(scale_h0, _mm256_maddubs_epi16(q4h0, q8h));
+                sumi0 = _mm256_add_epi32(sumi0, _mm256_add_epi32(p16l0, p16h0));
+
+                // Row 1
+                let q4bits1 = _mm256_loadu_si256(q4_ptr1.cast());
+                q4_ptr1 = q4_ptr1.add(32);
+                let q4l1 = _mm256_and_si256(q4bits1, m4);
+                let q4h1 = _mm256_and_si256(_mm256_srli_epi16(q4bits1, 4), m4);
+                let p16l1 = _mm256_madd_epi16(scale_l1, _mm256_maddubs_epi16(q4l1, q8l));
+                let p16h1 = _mm256_madd_epi16(scale_h1, _mm256_maddubs_epi16(q4h1, q8h));
+                sumi1 = _mm256_add_epi32(sumi1, _mm256_add_epi32(p16l1, p16h1));
+
+                // Row 2
+                let q4bits2 = _mm256_loadu_si256(q4_ptr2.cast());
+                q4_ptr2 = q4_ptr2.add(32);
+                let q4l2 = _mm256_and_si256(q4bits2, m4);
+                let q4h2 = _mm256_and_si256(_mm256_srli_epi16(q4bits2, 4), m4);
+                let p16l2 = _mm256_madd_epi16(scale_l2, _mm256_maddubs_epi16(q4l2, q8l));
+                let p16h2 = _mm256_madd_epi16(scale_h2, _mm256_maddubs_epi16(q4h2, q8h));
+                sumi2 = _mm256_add_epi32(sumi2, _mm256_add_epi32(p16l2, p16h2));
+
+                // Row 3
+                let q4bits3 = _mm256_loadu_si256(q4_ptr3.cast());
+                q4_ptr3 = q4_ptr3.add(32);
+                let q4l3 = _mm256_and_si256(q4bits3, m4);
+                let q4h3 = _mm256_and_si256(_mm256_srli_epi16(q4bits3, 4), m4);
+                let p16l3 = _mm256_madd_epi16(scale_l3, _mm256_maddubs_epi16(q4l3, q8l));
+                let p16h3 = _mm256_madd_epi16(scale_h3, _mm256_maddubs_epi16(q4h3, q8h));
+                sumi3 = _mm256_add_epi32(sumi3, _mm256_add_epi32(p16l3, p16h3));
+            }
+
+            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d0), _mm256_cvtepi32_ps(sumi0), acc0);
+            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d1), _mm256_cvtepi32_ps(sumi1), acc1);
+            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(d2), _mm256_cvtepi32_ps(sumi2), acc2);
+            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(d3), _mm256_cvtepi32_ps(sumi3), acc3);
+        }
+
+        let mut buf_m0 = [0.0f32; 4];
+        let mut buf_m1 = [0.0f32; 4];
+        let mut buf_m2 = [0.0f32; 4];
+        let mut buf_m3 = [0.0f32; 4];
+        _mm_storeu_ps(buf_m0.as_mut_ptr(), acc_m0);
+        _mm_storeu_ps(buf_m1.as_mut_ptr(), acc_m1);
+        _mm_storeu_ps(buf_m2.as_mut_ptr(), acc_m2);
+        _mm_storeu_ps(buf_m3.as_mut_ptr(), acc_m3);
+        let sum_m0 = buf_m0[0] + buf_m0[1] + buf_m0[2] + buf_m0[3];
+        let sum_m1 = buf_m1[0] + buf_m1[1] + buf_m1[2] + buf_m1[3];
+        let sum_m2 = buf_m2[0] + buf_m2[1] + buf_m2[2] + buf_m2[3];
+        let sum_m3 = buf_m3[0] + buf_m3[1] + buf_m3[2] + buf_m3[3];
+
+        let mut buf0 = [0.0f32; 8];
+        let mut buf1 = [0.0f32; 8];
+        let mut buf2 = [0.0f32; 8];
+        let mut buf3 = [0.0f32; 8];
+        _mm256_storeu_ps(buf0.as_mut_ptr(), acc0);
+        _mm256_storeu_ps(buf1.as_mut_ptr(), acc1);
+        _mm256_storeu_ps(buf2.as_mut_ptr(), acc2);
+        _mm256_storeu_ps(buf3.as_mut_ptr(), acc3);
+        let sum_acc0 =
+            (buf0[0] + buf0[1] + buf0[2] + buf0[3]) + (buf0[4] + buf0[5] + buf0[6] + buf0[7]);
+        let sum_acc1 =
+            (buf1[0] + buf1[1] + buf1[2] + buf1[3]) + (buf1[4] + buf1[5] + buf1[6] + buf1[7]);
+        let sum_acc2 =
+            (buf2[0] + buf2[1] + buf2[2] + buf2[3]) + (buf2[4] + buf2[5] + buf2[6] + buf2[7]);
+        let sum_acc3 =
+            (buf3[0] + buf3[1] + buf3[2] + buf3[3]) + (buf3[4] + buf3[5] + buf3[6] + buf3[7]);
+
+        (
+            sum_acc0 + sum_m0,
+            sum_acc1 + sum_m1,
+            sum_acc2 + sum_m2,
+            sum_acc3 + sum_m3,
+        )
+    }
+}
+
 pub(crate) fn dot_q4_k_q8_k_row_portable(
     row_weights: &[crate::gguf_quants::BlockQ4_K],
     act_q8_k: &[crate::int_quant::BlockQ8_K],
@@ -2339,6 +2873,22 @@ pub fn gemv_q4_k_prequantized(
 
     if m <= 8 {
         let mut row = 0;
+        #[cfg(target_arch = "x86_64")]
+        if has_avx2 {
+            while row + 3 < m {
+                let r0 = &matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let r1 = &matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                let r2 = &matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                let r3 = &matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                let (v0, v1, v2, v3) =
+                    unsafe { dot_q4_k_q8_k_4rows_avx2(r0, r1, r2, r3, q8_k_act) };
+                output[row] = v0;
+                output[row + 1] = v1;
+                output[row + 2] = v2;
+                output[row + 3] = v3;
+                row += 4;
+            }
+        }
         while row + 1 < m {
             let row_offset0 = row * blocks_per_row;
             let row_offset1 = (row + 1) * blocks_per_row;
@@ -2378,6 +2928,23 @@ pub fn gemv_q4_k_prequantized(
         };
         let mut row = start;
         let mut i = 0;
+        #[cfg(target_arch = "x86_64")]
+        if has_avx2 {
+            while row + 3 < end {
+                let r0 = &matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let r1 = &matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                let r2 = &matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                let r3 = &matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                let (v0, v1, v2, v3) =
+                    unsafe { dot_q4_k_q8_k_4rows_avx2(r0, r1, r2, r3, q8_k_act) };
+                local_out[i] = v0;
+                local_out[i + 1] = v1;
+                local_out[i + 2] = v2;
+                local_out[i + 3] = v3;
+                row += 4;
+                i += 4;
+            }
+        }
         while row + 1 < end {
             let row_offset0 = row * blocks_per_row;
             let row_offset1 = (row + 1) * blocks_per_row;
@@ -2409,6 +2976,246 @@ pub fn gemv_q4_k_prequantized(
             } else {
                 local_out[i] = dot_q4_k_q8_k_row_portable(row_blocks, q8_k_act);
             }
+        }
+    });
+}
+
+/// Fused Q, K, V Matrix-Vector Multiplication in a single ThreadTeam dispatch pass.
+#[allow(clippy::too_many_arguments)]
+pub fn gemv_qkv_q4_k_prequantized(
+    q_matrix: &[crate::gguf_quants::BlockQ4_K],
+    m_q: usize,
+    k_matrix: &[crate::gguf_quants::BlockQ4_K],
+    m_k: usize,
+    v_matrix: &[crate::gguf_quants::BlockQ4_K],
+    m_v: usize,
+    n: usize,
+    q8_k_act: &[crate::int_quant::BlockQ8_K],
+    out_q: &mut [f32],
+    out_k: &mut [f32],
+    out_v: &mut [f32],
+) {
+    let blocks_per_row = n / 256;
+    let m_total = m_q + m_k + m_v;
+
+    let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+    let q_ptr = out_q.as_mut_ptr() as usize;
+    let k_ptr = out_k.as_mut_ptr() as usize;
+    let v_ptr = out_v.as_mut_ptr() as usize;
+
+    team.dispatch_rows(m_total, |start, end| {
+        let mut row = start;
+        #[cfg(target_arch = "x86_64")]
+        let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+        #[cfg(not(target_arch = "x86_64"))]
+        let has_avx2 = false;
+
+        #[cfg(target_arch = "x86_64")]
+        if has_avx2 {
+            while row + 3 < end {
+                if row + 3 < m_q {
+                    let r0 = &q_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                    let r1 = &q_matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                    let r2 = &q_matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                    let r3 = &q_matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                    let (v0, v1, v2, v3) =
+                        unsafe { dot_q4_k_q8_k_4rows_avx2(r0, r1, r2, r3, q8_k_act) };
+                    unsafe {
+                        let dst = (q_ptr as *mut f32).add(row);
+                        *dst = v0;
+                        *dst.add(1) = v1;
+                        *dst.add(2) = v2;
+                        *dst.add(3) = v3;
+                    }
+                    row += 4;
+                    continue;
+                } else if row >= m_q && row + 3 < m_q + m_k {
+                    let k_row = row - m_q;
+                    let r0 = &k_matrix[k_row * blocks_per_row..(k_row + 1) * blocks_per_row];
+                    let r1 = &k_matrix[(k_row + 1) * blocks_per_row..(k_row + 2) * blocks_per_row];
+                    let r2 = &k_matrix[(k_row + 2) * blocks_per_row..(k_row + 3) * blocks_per_row];
+                    let r3 = &k_matrix[(k_row + 3) * blocks_per_row..(k_row + 4) * blocks_per_row];
+                    let (v0, v1, v2, v3) =
+                        unsafe { dot_q4_k_q8_k_4rows_avx2(r0, r1, r2, r3, q8_k_act) };
+                    unsafe {
+                        let dst = (k_ptr as *mut f32).add(k_row);
+                        *dst = v0;
+                        *dst.add(1) = v1;
+                        *dst.add(2) = v2;
+                        *dst.add(3) = v3;
+                    }
+                    row += 4;
+                    continue;
+                } else if row >= m_q + m_k && row + 3 < m_total {
+                    let v_row = row - (m_q + m_k);
+                    let r0 = &v_matrix[v_row * blocks_per_row..(v_row + 1) * blocks_per_row];
+                    let r1 = &v_matrix[(v_row + 1) * blocks_per_row..(v_row + 2) * blocks_per_row];
+                    let r2 = &v_matrix[(v_row + 2) * blocks_per_row..(v_row + 3) * blocks_per_row];
+                    let r3 = &v_matrix[(v_row + 3) * blocks_per_row..(v_row + 4) * blocks_per_row];
+                    let (v0, v1, v2, v3) =
+                        unsafe { dot_q4_k_q8_k_4rows_avx2(r0, r1, r2, r3, q8_k_act) };
+                    unsafe {
+                        let dst = (v_ptr as *mut f32).add(v_row);
+                        *dst = v0;
+                        *dst.add(1) = v1;
+                        *dst.add(2) = v2;
+                        *dst.add(3) = v3;
+                    }
+                    row += 4;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        while row < end {
+            if row < m_q {
+                let r = &q_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let val = if has_avx2 {
+                    unsafe { dot_q4_k_q8_k_row_avx2(r, q8_k_act) }
+                } else {
+                    dot_q4_k_q8_k_row_portable(r, q8_k_act)
+                };
+                unsafe {
+                    *((q_ptr as *mut f32).add(row)) = val;
+                }
+            } else if row < m_q + m_k {
+                let k_row = row - m_q;
+                let r = &k_matrix[k_row * blocks_per_row..(k_row + 1) * blocks_per_row];
+                let val = if has_avx2 {
+                    unsafe { dot_q4_k_q8_k_row_avx2(r, q8_k_act) }
+                } else {
+                    dot_q4_k_q8_k_row_portable(r, q8_k_act)
+                };
+                unsafe {
+                    *((k_ptr as *mut f32).add(k_row)) = val;
+                }
+            } else {
+                let v_row = row - (m_q + m_k);
+                let r = &v_matrix[v_row * blocks_per_row..(v_row + 1) * blocks_per_row];
+                let val = if has_avx2 {
+                    unsafe { dot_q4_k_q8_k_row_avx2(r, q8_k_act) }
+                } else {
+                    dot_q4_k_q8_k_row_portable(r, q8_k_act)
+                };
+                unsafe {
+                    *((v_ptr as *mut f32).add(v_row)) = val;
+                }
+            }
+            row += 1;
+        }
+    });
+}
+
+/// Fused Gate + Up + SwiGLU Matrix-Vector Multiplication in a single ThreadTeam dispatch pass.
+#[allow(clippy::too_many_arguments, clippy::if_not_else)]
+pub fn gemv_gate_up_swiglu_q4_k_prequantized(
+    gate_matrix: &[crate::gguf_quants::BlockQ4_K],
+    up_matrix: &[crate::gguf_quants::BlockQ4_K],
+    m: usize,
+    n: usize,
+    q8_k_act: &[crate::int_quant::BlockQ8_K],
+    gate_out: &mut [f32],
+    up_out: &mut [f32],
+    activated_out: &mut [f32],
+    is_gemma: bool,
+) {
+    let blocks_per_row = n / 256;
+    let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+    let g_ptr = gate_out.as_mut_ptr() as usize;
+    let u_ptr = up_out.as_mut_ptr() as usize;
+    let act_ptr = activated_out.as_mut_ptr() as usize;
+
+    team.dispatch_rows(m, |start, end| {
+        let mut row = start;
+        #[cfg(target_arch = "x86_64")]
+        let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+        #[cfg(not(target_arch = "x86_64"))]
+        let has_avx2 = false;
+
+        #[cfg(target_arch = "x86_64")]
+        if has_avx2 {
+            while row + 3 < end {
+                let gr0 = &gate_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let gr1 = &gate_matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                let gr2 = &gate_matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                let gr3 = &gate_matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                let (g0, g1, g2, g3) =
+                    unsafe { dot_q4_k_q8_k_4rows_avx2(gr0, gr1, gr2, gr3, q8_k_act) };
+
+                let ur0 = &up_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let ur1 = &up_matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                let ur2 = &up_matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                let ur3 = &up_matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                let (u0, u1, u2, u3) =
+                    unsafe { dot_q4_k_q8_k_4rows_avx2(ur0, ur1, ur2, ur3, q8_k_act) };
+
+                unsafe {
+                    let g_dst = (g_ptr as *mut f32).add(row);
+                    let u_dst = (u_ptr as *mut f32).add(row);
+                    let a_dst = (act_ptr as *mut f32).add(row);
+
+                    *g_dst = g0;
+                    *g_dst.add(1) = g1;
+                    *g_dst.add(2) = g2;
+                    *g_dst.add(3) = g3;
+                    *u_dst = u0;
+                    *u_dst.add(1) = u1;
+                    *u_dst.add(2) = u2;
+                    *u_dst.add(3) = u3;
+
+                    if !is_gemma {
+                        let silu0 = g0 / (1.0 + (-g0).exp());
+                        let silu1 = g1 / (1.0 + (-g1).exp());
+                        let silu2 = g2 / (1.0 + (-g2).exp());
+                        let silu3 = g3 / (1.0 + (-g3).exp());
+                        *a_dst = silu0 * u0;
+                        *a_dst.add(1) = silu1 * u1;
+                        *a_dst.add(2) = silu2 * u2;
+                        *a_dst.add(3) = silu3 * u3;
+                    } else {
+                        const SQRT_2_OVER_PI: f32 = 0.797_884_6;
+                        for (idx, (g, u)) in
+                            [(g0, u0), (g1, u1), (g2, u2), (g3, u3)].iter().enumerate()
+                        {
+                            let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
+                            let gelu = 0.5 * g * (1.0 + inner.tanh());
+                            *a_dst.add(idx) = gelu * u;
+                        }
+                    }
+                }
+
+                row += 4;
+            }
+        }
+
+        while row < end {
+            let gr = &gate_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+            let ur = &up_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+            let g = if has_avx2 {
+                unsafe { dot_q4_k_q8_k_row_avx2(gr, q8_k_act) }
+            } else {
+                dot_q4_k_q8_k_row_portable(gr, q8_k_act)
+            };
+            let u = if has_avx2 {
+                unsafe { dot_q4_k_q8_k_row_avx2(ur, q8_k_act) }
+            } else {
+                dot_q4_k_q8_k_row_portable(ur, q8_k_act)
+            };
+            unsafe {
+                *((g_ptr as *mut f32).add(row)) = g;
+                *((u_ptr as *mut f32).add(row)) = u;
+                if !is_gemma {
+                    let silu = g / (1.0 + (-g).exp());
+                    *((act_ptr as *mut f32).add(row)) = silu * u;
+                } else {
+                    const SQRT_2_OVER_PI: f32 = 0.797_884_6;
+                    let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
+                    let gelu = 0.5 * g * (1.0 + inner.tanh());
+                    *((act_ptr as *mut f32).add(row)) = gelu * u;
+                }
+            }
+            row += 1;
         }
     });
 }

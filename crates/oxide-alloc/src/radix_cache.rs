@@ -167,7 +167,10 @@ impl RadixPrefixCache {
         }
     }
 
-    fn evict_one_oldest_leaf(node: &mut RadixNode) -> Option<usize> {
+    fn evict_one_oldest_leaf_blocks(
+        node: &mut RadixNode,
+        evicted_blocks: &mut Vec<u32>,
+    ) -> Option<usize> {
         if node.children.is_empty() {
             return None;
         }
@@ -184,6 +187,7 @@ impl RadixPrefixCache {
 
         if let Some(k) = oldest_leaf_key {
             let removed = node.children.remove(&k)?;
+            evicted_blocks.extend_from_slice(&removed.block_ids);
             return Some(removed.tokens.len());
         }
 
@@ -198,21 +202,28 @@ impl RadixPrefixCache {
 
         if let Some(k) = candidate_key {
             let child = node.children.get_mut(&k)?;
-            return Self::evict_one_oldest_leaf(child);
+            return Self::evict_one_oldest_leaf_blocks(child, evicted_blocks);
         }
 
         None
     }
 
-    /// Prune cache down to `max_token_budget` by evicting oldest leaf nodes across the tree.
-    pub fn evict_to_budget(&mut self, max_token_budget: usize) {
+    /// Prune cache down to `max_token_budget` by evicting oldest leaf nodes across the tree, returning evicted block IDs.
+    pub fn evict_to_budget_collecting_blocks(&mut self, max_token_budget: usize) -> Vec<u32> {
+        let mut evicted = Vec::new();
         while self.total_tokens > max_token_budget && !self.root.children.is_empty() {
-            if let Some(freed) = Self::evict_one_oldest_leaf(&mut self.root) {
+            if let Some(freed) = Self::evict_one_oldest_leaf_blocks(&mut self.root, &mut evicted) {
                 self.total_tokens = self.total_tokens.saturating_sub(freed);
             } else {
                 break;
             }
         }
+        evicted
+    }
+
+    /// Prune cache down to `max_token_budget` by evicting oldest leaf nodes across the tree.
+    pub fn evict_to_budget(&mut self, max_token_budget: usize) {
+        let _ = self.evict_to_budget_collecting_blocks(max_token_budget);
     }
 
     fn evict_lowest_utility_leaf(node: &mut RadixNode, current_time: u64) -> Option<usize> {

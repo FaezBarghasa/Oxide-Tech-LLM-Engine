@@ -1234,7 +1234,7 @@ impl CudaBackend {
         );
 
         let max_batch = 512usize;
-        let max_logits_batch = 64usize;
+        let max_logits_batch = 128usize;
         let mut d_hidden =
             CudaDeviceBuffer::allocate(max_batch * hidden_dim * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?;
@@ -1306,15 +1306,15 @@ impl CudaBackend {
                 .map_err(EngineError::BackendError)?,
         );
         self.d_batch_positions = Some(
-            CudaDeviceBuffer::allocate(64 * std::mem::size_of::<i32>())
+            CudaDeviceBuffer::allocate(128 * std::mem::size_of::<i32>())
                 .map_err(EngineError::BackendError)?,
         );
         self.d_batch_slots = Some(
-            CudaDeviceBuffer::allocate(64 * std::mem::size_of::<i32>())
+            CudaDeviceBuffer::allocate(128 * std::mem::size_of::<i32>())
                 .map_err(EngineError::BackendError)?,
         );
         self.d_batch_tokens = Some(
-            CudaDeviceBuffer::allocate(64 * std::mem::size_of::<i32>())
+            CudaDeviceBuffer::allocate(128 * std::mem::size_of::<i32>())
                 .map_err(EngineError::BackendError)?,
         );
         self.d_scratch_gate256 = Some(
@@ -1863,143 +1863,45 @@ impl CudaBackend {
                     };
 
                     let mut v_written_to_cache = false;
-                    let qkv_grouped =
-                        if let (Some(d_q), Some(d_k), Some(d_v), Some(d_w_f16), Some(d_x_f16)) = (
-                            &mut self.d_scratch_q,
-                            &mut self.d_scratch_k,
-                            &mut self.d_scratch_v,
-                            &mut self.d_scratch_dequant_w,
-                            &mut self.d_scratch_act_f16,
-                        ) {
-                            let req_w_bytes = layer.q_m.max(layer.kv_m) * layer.q_k * 2;
-                            let req_x_bytes = batch_size * layer.q_k * 2;
-                            let enable_batched_wmma = false;
-                            if enable_batched_wmma
-                                && batch_size >= 8
-                                && layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && (layer.v_quant == 1 || layer.v_quant == 2)
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                unsafe {
-                                    let num_x = (batch_size * layer.q_k) as i32;
-                                    driver::launch_cuda_convert_f32_to_f16(
-                                        d_x_f16.as_raw_ptr(),
-                                        d_norm.as_typed_ptr::<f32>(),
-                                        num_x,
-                                        s,
-                                    );
-                                    // Q projection (Q4_K)
-                                    let num_q_w = (layer.q_m * layer.q_k) as i32;
-                                    driver::launch_cuda_dequantize_q4_k_f16(
-                                        d_w_f16.as_raw_ptr(),
-                                        layer.d_wq.as_raw_ptr(),
-                                        num_q_w,
-                                        s,
-                                    );
-                                    driver::launch_cuda_cublas_gemm_fp16_f32(
-                                        d_q.as_typed_ptr::<f32>(),
-                                        d_w_f16.as_raw_ptr(),
-                                        d_x_f16.as_raw_ptr(),
-                                        layer.q_m as i32,
-                                        layer.q_k as i32,
-                                        batch_size as i32,
-                                        0,
-                                        s,
-                                    );
-                                    // K projection (Q4_K)
-                                    let num_k_w = (layer.kv_m * layer.kv_k) as i32;
-                                    driver::launch_cuda_dequantize_q4_k_f16(
-                                        d_w_f16.as_raw_ptr(),
-                                        layer.d_wk.as_raw_ptr(),
-                                        num_k_w,
-                                        s,
-                                    );
-                                    driver::launch_cuda_cublas_gemm_fp16_f32(
-                                        d_k.as_typed_ptr::<f32>(),
-                                        d_w_f16.as_raw_ptr(),
-                                        d_x_f16.as_raw_ptr(),
-                                        layer.kv_m as i32,
-                                        layer.kv_k as i32,
-                                        batch_size as i32,
-                                        0,
-                                        s,
-                                    );
-                                    // V projection (Q4_K or Q6_K)
-                                    let num_v_w = (layer.kv_m * layer.kv_k) as i32;
-                                    if layer.v_quant == 1 {
-                                        driver::launch_cuda_dequantize_q4_k_f16(
-                                            d_w_f16.as_raw_ptr(),
-                                            layer.d_wv.as_raw_ptr(),
-                                            num_v_w,
-                                            s,
-                                        );
-                                    } else {
-                                        driver::launch_cuda_dequantize_q6_k_f16(
-                                            d_w_f16.as_raw_ptr(),
-                                            layer.d_wv.as_raw_ptr(),
-                                            num_v_w,
-                                            s,
-                                        );
-                                    }
-                                    driver::launch_cuda_cublas_gemm_fp16_f32(
-                                        d_v.as_typed_ptr::<f32>(),
-                                        d_w_f16.as_raw_ptr(),
-                                        d_x_f16.as_raw_ptr(),
-                                        layer.kv_m as i32,
-                                        layer.kv_k as i32,
-                                        batch_size as i32,
-                                        0,
-                                        s,
-                                    );
-                                    if !v_cache_ptr.is_null() {
-                                        let v_dst = (v_cache_ptr as *mut u8).add(pos * kv_dim * 2)
-                                            as *mut std::ffi::c_void;
-                                        driver::launch_cuda_convert_f32_to_f16(
-                                            v_dst,
-                                            d_v.as_typed_ptr::<f32>(),
-                                            (batch_size * kv_dim) as i32,
-                                            s,
-                                        );
-                                        v_written_to_cache = true;
-                                    }
-                                }
-                                true
-                            } else if layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && (layer.v_quant == 1 || layer.v_quant == 2)
-                                && layer.q_k == layer.kv_k
-                                && !d_q8_1_ptr.is_null()
-                            {
-                                let y_v_ptr = d_v.as_typed_ptr::<f32>();
-                                unsafe {
-                                    driver::launch_cuda_mmvq_qkv_mixed(
-                                        d_q.as_typed_ptr::<f32>(),
-                                        d_k.as_typed_ptr::<f32>(),
-                                        y_v_ptr,
-                                        v_cache_ptr,
-                                        pos as i32,
-                                        layer.d_wq.as_raw_ptr(),
-                                        layer.d_wk.as_raw_ptr(),
-                                        layer.d_wv.as_raw_ptr(),
-                                        d_q8_1_ptr,
-                                        layer.q_m as i32,
-                                        layer.kv_m as i32,
-                                        layer.q_k as i32,
-                                        layer.v_quant as i32,
-                                        batch_size as i32,
-                                        s,
-                                    );
-                                }
-                                v_written_to_cache = !v_cache_ptr.is_null();
-                                true
-                            } else {
-                                false
+                    let qkv_grouped = if let (Some(d_q), Some(d_k), Some(d_v)) = (
+                        &mut self.d_scratch_q,
+                        &mut self.d_scratch_k,
+                        &mut self.d_scratch_v,
+                    ) {
+                        if layer.q_quant == 1
+                            && layer.k_quant == 1
+                            && (layer.v_quant == 1 || layer.v_quant == 2)
+                            && layer.q_k == layer.kv_k
+                            && !d_q8_1_ptr.is_null()
+                        {
+                            let y_v_ptr = d_v.as_typed_ptr::<f32>();
+                            unsafe {
+                                driver::launch_cuda_mmvq_qkv_mixed(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_k.as_typed_ptr::<f32>(),
+                                    y_v_ptr,
+                                    v_cache_ptr,
+                                    pos as i32,
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    batch_size as i32,
+                                    s,
+                                );
                             }
+                            v_written_to_cache = !v_cache_ptr.is_null();
+                            true
                         } else {
                             false
-                        };
+                        }
+                    } else {
+                        false
+                    };
 
                     if !qkv_grouped {
                         if let Some(d_q) = &mut self.d_scratch_q {
@@ -2199,12 +2101,9 @@ impl CudaBackend {
                         }
                     }
 
-                    if let (Some(d_out), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
-                        &self.d_scratch_attn_out,
-                        &mut self.d_scratch_dequant_w,
-                        &mut self.d_scratch_act_f16,
-                        &mut self.d_scratch_act,
-                    ) {
+                    if let (Some(d_out), Some(d_act)) =
+                        (&self.d_scratch_attn_out, &mut self.d_scratch_act)
+                    {
                         let o_m = if layer.o_m > 0 { layer.o_m } else { h };
                         let o_k = if layer.o_k > 0 {
                             layer.o_k
@@ -2213,60 +2112,26 @@ impl CudaBackend {
                         };
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            let req_w_bytes = o_m * o_k * 2;
-                            let req_x_bytes = tail_batch * o_k * 2;
-                            if layer.o_quant == 1
-                                && false
-                                && tail_batch >= 8
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                let num_w_elements = (o_m * o_k) as i32;
-                                let num_x_elements = (tail_batch * o_k) as i32;
-                                driver::launch_cuda_convert_f32_to_f16(
-                                    d_x_f16.as_raw_ptr(),
-                                    d_out.as_typed_ptr::<f32>(),
-                                    num_x_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_dequantize_q4_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_wo.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    hid_dst_ptr,
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    o_m as i32,
-                                    o_k as i32,
-                                    tail_batch as i32,
-                                    1,
-                                    s,
-                                );
-                            } else {
-                                if !d_q8_1_ptr.is_null() {
-                                    driver::launch_cuda_quantize_q8_1(
-                                        d_out.as_typed_ptr::<f32>(),
-                                        d_q8_1_ptr,
-                                        (tail_batch * o_k) as i32,
-                                        s,
-                                    );
-                                }
-                                Self::dispatch_mmvq_add(
-                                    hid_dst_ptr,
-                                    &layer.d_wo,
+                            if !d_q8_1_ptr.is_null() {
+                                driver::launch_cuda_quantize_q8_1(
                                     d_out.as_typed_ptr::<f32>(),
                                     d_q8_1_ptr,
-                                    o_m,
-                                    o_k,
-                                    layer.o_quant,
-                                    tail_batch,
+                                    (tail_batch * o_k) as i32,
                                     s,
-                                    d_act,
                                 );
                             }
+                            Self::dispatch_mmvq_add(
+                                hid_dst_ptr,
+                                &layer.d_wo,
+                                d_out.as_typed_ptr::<f32>(),
+                                d_q8_1_ptr,
+                                o_m,
+                                o_k,
+                                layer.o_quant,
+                                tail_batch,
+                                s,
+                                d_act,
+                            );
                         }
                     }
 
@@ -2298,67 +2163,11 @@ impl CudaBackend {
                         }
                     }
 
-                    if let (Some(d_gate), Some(d_up), Some(d_w_f16), Some(d_x_f16)) = (
-                        &mut self.d_scratch_gate,
-                        &mut self.d_scratch_up,
-                        &mut self.d_scratch_dequant_w,
-                        &mut self.d_scratch_act_f16,
-                    ) {
+                    if let (Some(d_gate), Some(d_up)) =
+                        (&mut self.d_scratch_gate, &mut self.d_scratch_up)
+                    {
                         unsafe {
-                            let req_w_bytes = layer.inter_m * h * 2;
-                            let req_x_bytes = tail_batch * h * 2;
-                            if layer.gate_quant == 1
-                                && layer.up_quant == 1
-                                && false
-                                && tail_batch >= 8
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                let num_w_elements = (layer.inter_m * h) as i32;
-                                let num_x_elements = (tail_batch * h) as i32;
-                                driver::launch_cuda_convert_f32_to_f16(
-                                    d_x_f16.as_raw_ptr(),
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    num_x_elements,
-                                    s,
-                                );
-                                // Gate
-                                driver::launch_cuda_dequantize_q4_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_w1.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    d_gate.as_typed_ptr::<f32>(),
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    layer.inter_m as i32,
-                                    h as i32,
-                                    tail_batch as i32,
-                                    0,
-                                    s,
-                                );
-                                // Up
-                                driver::launch_cuda_dequantize_q4_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_w3.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    d_up.as_typed_ptr::<f32>(),
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    layer.inter_m as i32,
-                                    h as i32,
-                                    tail_batch as i32,
-                                    0,
-                                    s,
-                                );
-                            } else if layer.gate_quant == 1
-                                && layer.up_quant == 1
-                                && !d_q8_1_ptr.is_null()
+                            if layer.gate_quant == 1 && layer.up_quant == 1 && !d_q8_1_ptr.is_null()
                             {
                                 driver::launch_cuda_mmvq_gate_up_q4_k(
                                     d_gate.as_typed_ptr::<f32>(),
@@ -2413,60 +2222,23 @@ impl CudaBackend {
                         }
                     }
 
-                    if let (Some(d_gate), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
-                        &self.d_scratch_gate,
-                        &mut self.d_scratch_dequant_w,
-                        &mut self.d_scratch_act_f16,
-                        &mut self.d_scratch_act,
-                    ) {
+                    if let (Some(d_gate), Some(d_act)) =
+                        (&self.d_scratch_gate, &mut self.d_scratch_act)
+                    {
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            let req_w_bytes = h * layer.inter_m * 2;
-                            let req_x_bytes = tail_batch * layer.inter_m * 2;
-                            if layer.down_quant == 2
-                                && false
-                                && tail_batch >= 8
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                let num_w_elements = (h * layer.inter_m) as i32;
-                                let num_x_elements = (tail_batch * layer.inter_m) as i32;
-                                driver::launch_cuda_convert_f32_to_f16(
-                                    d_x_f16.as_raw_ptr(),
-                                    d_gate.as_typed_ptr::<f32>(),
-                                    num_x_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_dequantize_q6_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_w2.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    hid_dst_ptr,
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    h as i32,
-                                    layer.inter_m as i32,
-                                    tail_batch as i32,
-                                    1,
-                                    s,
-                                );
-                            } else {
-                                Self::dispatch_mmvq_add(
-                                    hid_dst_ptr,
-                                    &layer.d_w2,
-                                    d_gate.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    h,
-                                    layer.inter_m,
-                                    layer.down_quant,
-                                    tail_batch,
-                                    s,
-                                    d_act,
-                                );
-                            }
+                            Self::dispatch_mmvq_add(
+                                hid_dst_ptr,
+                                &layer.d_w2,
+                                d_gate.as_typed_ptr::<f32>(),
+                                d_q8_1_ptr,
+                                h,
+                                layer.inter_m,
+                                layer.down_quant,
+                                tail_batch,
+                                s,
+                                d_act,
+                            );
                         }
                     }
                 }
@@ -2816,143 +2588,45 @@ impl CudaBackend {
                     };
 
                     let mut v_written_to_cache = false;
-                    let qkv_grouped =
-                        if let (Some(d_q), Some(d_k), Some(d_v), Some(d_w_f16), Some(d_x_f16)) = (
-                            &mut self.d_scratch_q,
-                            &mut self.d_scratch_k,
-                            &mut self.d_scratch_v,
-                            &mut self.d_scratch_dequant_w,
-                            &mut self.d_scratch_act_f16,
-                        ) {
-                            let req_w_bytes = layer.q_m.max(layer.kv_m) * layer.q_k * 2;
-                            let req_x_bytes = batch_size * layer.q_k * 2;
-                            let enable_batched_wmma = false;
-                            if enable_batched_wmma
-                                && batch_size >= 8
-                                && layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && (layer.v_quant == 1 || layer.v_quant == 2)
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                unsafe {
-                                    let num_x = (batch_size * layer.q_k) as i32;
-                                    driver::launch_cuda_convert_f32_to_f16(
-                                        d_x_f16.as_raw_ptr(),
-                                        d_norm.as_typed_ptr::<f32>(),
-                                        num_x,
-                                        s,
-                                    );
-                                    // Q projection (Q4_K)
-                                    let num_q_w = (layer.q_m * layer.q_k) as i32;
-                                    driver::launch_cuda_dequantize_q4_k_f16(
-                                        d_w_f16.as_raw_ptr(),
-                                        layer.d_wq.as_raw_ptr(),
-                                        num_q_w,
-                                        s,
-                                    );
-                                    driver::launch_cuda_cublas_gemm_fp16_f32(
-                                        d_q.as_typed_ptr::<f32>(),
-                                        d_w_f16.as_raw_ptr(),
-                                        d_x_f16.as_raw_ptr(),
-                                        layer.q_m as i32,
-                                        layer.q_k as i32,
-                                        batch_size as i32,
-                                        0,
-                                        s,
-                                    );
-                                    // K projection (Q4_K)
-                                    let num_k_w = (layer.kv_m * layer.kv_k) as i32;
-                                    driver::launch_cuda_dequantize_q4_k_f16(
-                                        d_w_f16.as_raw_ptr(),
-                                        layer.d_wk.as_raw_ptr(),
-                                        num_k_w,
-                                        s,
-                                    );
-                                    driver::launch_cuda_cublas_gemm_fp16_f32(
-                                        d_k.as_typed_ptr::<f32>(),
-                                        d_w_f16.as_raw_ptr(),
-                                        d_x_f16.as_raw_ptr(),
-                                        layer.kv_m as i32,
-                                        layer.kv_k as i32,
-                                        batch_size as i32,
-                                        0,
-                                        s,
-                                    );
-                                    // V projection (Q4_K or Q6_K)
-                                    let num_v_w = (layer.kv_m * layer.kv_k) as i32;
-                                    if layer.v_quant == 1 {
-                                        driver::launch_cuda_dequantize_q4_k_f16(
-                                            d_w_f16.as_raw_ptr(),
-                                            layer.d_wv.as_raw_ptr(),
-                                            num_v_w,
-                                            s,
-                                        );
-                                    } else {
-                                        driver::launch_cuda_dequantize_q6_k_f16(
-                                            d_w_f16.as_raw_ptr(),
-                                            layer.d_wv.as_raw_ptr(),
-                                            num_v_w,
-                                            s,
-                                        );
-                                    }
-                                    driver::launch_cuda_cublas_gemm_fp16_f32(
-                                        d_v.as_typed_ptr::<f32>(),
-                                        d_w_f16.as_raw_ptr(),
-                                        d_x_f16.as_raw_ptr(),
-                                        layer.kv_m as i32,
-                                        layer.kv_k as i32,
-                                        batch_size as i32,
-                                        0,
-                                        s,
-                                    );
-                                    if !v_cache_ptr.is_null() {
-                                        let v_dst = (v_cache_ptr as *mut u8).add(pos * kv_dim * 2)
-                                            as *mut std::ffi::c_void;
-                                        driver::launch_cuda_convert_f32_to_f16(
-                                            v_dst,
-                                            d_v.as_typed_ptr::<f32>(),
-                                            (batch_size * kv_dim) as i32,
-                                            s,
-                                        );
-                                        v_written_to_cache = true;
-                                    }
-                                }
-                                true
-                            } else if layer.q_quant == 1
-                                && layer.k_quant == 1
-                                && (layer.v_quant == 1 || layer.v_quant == 2)
-                                && layer.q_k == layer.kv_k
-                                && !d_q8_1_ptr.is_null()
-                            {
-                                let y_v_ptr = d_v.as_typed_ptr::<f32>();
-                                unsafe {
-                                    driver::launch_cuda_mmvq_qkv_mixed(
-                                        d_q.as_typed_ptr::<f32>(),
-                                        d_k.as_typed_ptr::<f32>(),
-                                        y_v_ptr,
-                                        v_cache_ptr,
-                                        pos as i32,
-                                        layer.d_wq.as_raw_ptr(),
-                                        layer.d_wk.as_raw_ptr(),
-                                        layer.d_wv.as_raw_ptr(),
-                                        d_q8_1_ptr,
-                                        layer.q_m as i32,
-                                        layer.kv_m as i32,
-                                        layer.q_k as i32,
-                                        layer.v_quant as i32,
-                                        batch_size as i32,
-                                        s,
-                                    );
-                                }
-                                v_written_to_cache = !v_cache_ptr.is_null();
-                                true
-                            } else {
-                                false
+                    let qkv_grouped = if let (Some(d_q), Some(d_k), Some(d_v)) = (
+                        &mut self.d_scratch_q,
+                        &mut self.d_scratch_k,
+                        &mut self.d_scratch_v,
+                    ) {
+                        if layer.q_quant == 1
+                            && layer.k_quant == 1
+                            && (layer.v_quant == 1 || layer.v_quant == 2)
+                            && layer.q_k == layer.kv_k
+                            && !d_q8_1_ptr.is_null()
+                        {
+                            let y_v_ptr = d_v.as_typed_ptr::<f32>();
+                            unsafe {
+                                driver::launch_cuda_mmvq_qkv_mixed(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_k.as_typed_ptr::<f32>(),
+                                    y_v_ptr,
+                                    v_cache_ptr,
+                                    pos as i32,
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    batch_size as i32,
+                                    s,
+                                );
                             }
+                            v_written_to_cache = !v_cache_ptr.is_null();
+                            true
                         } else {
                             false
-                        };
+                        }
+                    } else {
+                        false
+                    };
 
                     if !qkv_grouped {
                         if let Some(d_q) = &mut self.d_scratch_q {
@@ -3152,12 +2826,9 @@ impl CudaBackend {
                         }
                     }
 
-                    if let (Some(d_out), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
-                        &self.d_scratch_attn_out,
-                        &mut self.d_scratch_dequant_w,
-                        &mut self.d_scratch_act_f16,
-                        &mut self.d_scratch_act,
-                    ) {
+                    if let (Some(d_out), Some(d_act)) =
+                        (&self.d_scratch_attn_out, &mut self.d_scratch_act)
+                    {
                         let o_m = if layer.o_m > 0 { layer.o_m } else { h };
                         let o_k = if layer.o_k > 0 {
                             layer.o_k
@@ -3166,60 +2837,26 @@ impl CudaBackend {
                         };
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            let req_w_bytes = o_m * o_k * 2;
-                            let req_x_bytes = tail_batch * o_k * 2;
-                            if layer.o_quant == 1
-                                && false
-                                && tail_batch >= 8
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                let num_w_elements = (o_m * o_k) as i32;
-                                let num_x_elements = (tail_batch * o_k) as i32;
-                                driver::launch_cuda_convert_f32_to_f16(
-                                    d_x_f16.as_raw_ptr(),
-                                    d_out.as_typed_ptr::<f32>(),
-                                    num_x_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_dequantize_q4_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_wo.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    hid_dst_ptr,
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    o_m as i32,
-                                    o_k as i32,
-                                    tail_batch as i32,
-                                    1,
-                                    s,
-                                );
-                            } else {
-                                if !d_q8_1_ptr.is_null() {
-                                    driver::launch_cuda_quantize_q8_1(
-                                        d_out.as_typed_ptr::<f32>(),
-                                        d_q8_1_ptr,
-                                        (tail_batch * o_k) as i32,
-                                        s,
-                                    );
-                                }
-                                Self::dispatch_mmvq_add(
-                                    hid_dst_ptr,
-                                    &layer.d_wo,
+                            if !d_q8_1_ptr.is_null() {
+                                driver::launch_cuda_quantize_q8_1(
                                     d_out.as_typed_ptr::<f32>(),
                                     d_q8_1_ptr,
-                                    o_m,
-                                    o_k,
-                                    layer.o_quant,
-                                    tail_batch,
+                                    (tail_batch * o_k) as i32,
                                     s,
-                                    d_act,
                                 );
                             }
+                            Self::dispatch_mmvq_add(
+                                hid_dst_ptr,
+                                &layer.d_wo,
+                                d_out.as_typed_ptr::<f32>(),
+                                d_q8_1_ptr,
+                                o_m,
+                                o_k,
+                                layer.o_quant,
+                                tail_batch,
+                                s,
+                                d_act,
+                            );
                         }
                     }
 
@@ -3251,67 +2888,11 @@ impl CudaBackend {
                         }
                     }
 
-                    if let (Some(d_gate), Some(d_up), Some(d_w_f16), Some(d_x_f16)) = (
-                        &mut self.d_scratch_gate,
-                        &mut self.d_scratch_up,
-                        &mut self.d_scratch_dequant_w,
-                        &mut self.d_scratch_act_f16,
-                    ) {
+                    if let (Some(d_gate), Some(d_up)) =
+                        (&mut self.d_scratch_gate, &mut self.d_scratch_up)
+                    {
                         unsafe {
-                            let req_w_bytes = layer.inter_m * h * 2;
-                            let req_x_bytes = tail_batch * h * 2;
-                            if layer.gate_quant == 1
-                                && layer.up_quant == 1
-                                && false
-                                && tail_batch >= 8
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                let num_w_elements = (layer.inter_m * h) as i32;
-                                let num_x_elements = (tail_batch * h) as i32;
-                                driver::launch_cuda_convert_f32_to_f16(
-                                    d_x_f16.as_raw_ptr(),
-                                    d_norm.as_typed_ptr::<f32>(),
-                                    num_x_elements,
-                                    s,
-                                );
-                                // Gate
-                                driver::launch_cuda_dequantize_q4_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_w1.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    d_gate.as_typed_ptr::<f32>(),
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    layer.inter_m as i32,
-                                    h as i32,
-                                    tail_batch as i32,
-                                    0,
-                                    s,
-                                );
-                                // Up
-                                driver::launch_cuda_dequantize_q4_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_w3.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    d_up.as_typed_ptr::<f32>(),
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    layer.inter_m as i32,
-                                    h as i32,
-                                    tail_batch as i32,
-                                    0,
-                                    s,
-                                );
-                            } else if layer.gate_quant == 1
-                                && layer.up_quant == 1
-                                && !d_q8_1_ptr.is_null()
+                            if layer.gate_quant == 1 && layer.up_quant == 1 && !d_q8_1_ptr.is_null()
                             {
                                 driver::launch_cuda_mmvq_gate_up_q4_k(
                                     d_gate.as_typed_ptr::<f32>(),
@@ -3366,60 +2947,23 @@ impl CudaBackend {
                         }
                     }
 
-                    if let (Some(d_gate), Some(d_w_f16), Some(d_x_f16), Some(d_act)) = (
-                        &self.d_scratch_gate,
-                        &mut self.d_scratch_dequant_w,
-                        &mut self.d_scratch_act_f16,
-                        &mut self.d_scratch_act,
-                    ) {
+                    if let (Some(d_gate), Some(d_act)) =
+                        (&self.d_scratch_gate, &mut self.d_scratch_act)
+                    {
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            let req_w_bytes = h * layer.inter_m * 2;
-                            let req_x_bytes = tail_batch * layer.inter_m * 2;
-                            if layer.down_quant == 2
-                                && false
-                                && tail_batch >= 8
-                                && d_w_f16.size_bytes() >= req_w_bytes
-                                && d_x_f16.size_bytes() >= req_x_bytes
-                            {
-                                let num_w_elements = (h * layer.inter_m) as i32;
-                                let num_x_elements = (tail_batch * layer.inter_m) as i32;
-                                driver::launch_cuda_convert_f32_to_f16(
-                                    d_x_f16.as_raw_ptr(),
-                                    d_gate.as_typed_ptr::<f32>(),
-                                    num_x_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_dequantize_q6_k_f16(
-                                    d_w_f16.as_raw_ptr(),
-                                    layer.d_w2.as_raw_ptr(),
-                                    num_w_elements,
-                                    s,
-                                );
-                                driver::launch_cuda_cublas_gemm_fp16_f32(
-                                    hid_dst_ptr,
-                                    d_w_f16.as_raw_ptr(),
-                                    d_x_f16.as_raw_ptr(),
-                                    h as i32,
-                                    layer.inter_m as i32,
-                                    tail_batch as i32,
-                                    1,
-                                    s,
-                                );
-                            } else {
-                                Self::dispatch_mmvq_add(
-                                    hid_dst_ptr,
-                                    &layer.d_w2,
-                                    d_gate.as_typed_ptr::<f32>(),
-                                    d_q8_1_ptr,
-                                    h,
-                                    layer.inter_m,
-                                    layer.down_quant,
-                                    tail_batch,
-                                    s,
-                                    d_act,
-                                );
-                            }
+                            Self::dispatch_mmvq_add(
+                                hid_dst_ptr,
+                                &layer.d_w2,
+                                d_gate.as_typed_ptr::<f32>(),
+                                d_q8_1_ptr,
+                                h,
+                                layer.inter_m,
+                                layer.down_quant,
+                                tail_batch,
+                                s,
+                                d_act,
+                            );
                         }
                     }
                 }
@@ -3573,9 +3117,9 @@ impl CudaBackend {
         if b == 0 {
             return Ok(Vec::new());
         }
-        if b > 64 {
+        if b > 128 {
             return Err(EngineError::BackendError(format!(
-                "Batch size {b} exceeds max continuous batching slots (64)"
+                "Batch size {b} exceeds max continuous batching slots (128)"
             )));
         }
 
@@ -3600,7 +3144,8 @@ impl CudaBackend {
             5..=8 => 8,
             9..=16 => 16,
             17..=32 => 32,
-            _ => 64,
+            33..=64 => 64,
+            _ => 128,
         };
 
         let mut padded_tokens = batch_tokens.to_vec();
@@ -3618,19 +3163,19 @@ impl CudaBackend {
 
         if self.d_batch_positions.is_none() {
             self.d_batch_positions = Some(
-                CudaDeviceBuffer::allocate(64 * std::mem::size_of::<i32>())
+                CudaDeviceBuffer::allocate(128 * std::mem::size_of::<i32>())
                     .map_err(EngineError::BackendError)?,
             );
         }
         if self.d_batch_slots.is_none() {
             self.d_batch_slots = Some(
-                CudaDeviceBuffer::allocate(64 * std::mem::size_of::<i32>())
+                CudaDeviceBuffer::allocate(128 * std::mem::size_of::<i32>())
                     .map_err(EngineError::BackendError)?,
             );
         }
         if self.d_batch_tokens.is_none() {
             self.d_batch_tokens = Some(
-                CudaDeviceBuffer::allocate(64 * std::mem::size_of::<i32>())
+                CudaDeviceBuffer::allocate(128 * std::mem::size_of::<i32>())
                     .map_err(EngineError::BackendError)?,
             );
         }
@@ -4764,7 +4309,8 @@ impl HardwareBackend for CudaBackend {
 
                         // FFN RMSNorm + Q8_1
                         if layer.d_ffn_norm.size_bytes() > 0 {
-                            let norm_ffn_out_ptr = if layer.gate_quant == 1 || layer.gate_quant == 9 {
+                            let norm_ffn_out_ptr = if layer.gate_quant == 1 || layer.gate_quant == 9
+                            {
                                 std::ptr::null_mut()
                             } else {
                                 d_norm_ptr
@@ -4795,9 +4341,7 @@ impl HardwareBackend for CudaBackend {
                                 (d_up_ptr, d_up_ptr.cast_const())
                             };
 
-                            if layer.gate_quant == 1
-                                && layer.up_quant == 1
-                                && !d_q8_1_ptr.is_null()
+                            if layer.gate_quant == 1 && layer.up_quant == 1 && !d_q8_1_ptr.is_null()
                             {
                                 driver::launch_cuda_gemv_gate_up_q4_k(
                                     d_gate_ptr,
@@ -5766,7 +5310,8 @@ impl HardwareBackend for CudaBackend {
                     if has_ffn {
                         // FFN RMSNorm + Q8_1 quantization fused
                         if layer.d_ffn_norm.size_bytes() > 0 {
-                            let norm_ffn_out_ptr = if layer.gate_quant == 1 || layer.gate_quant == 9 {
+                            let norm_ffn_out_ptr = if layer.gate_quant == 1 || layer.gate_quant == 9
+                            {
                                 std::ptr::null_mut()
                             } else {
                                 d_norm.as_typed_ptr::<f32>()

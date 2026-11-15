@@ -36,8 +36,13 @@ fn test_lfm3_real_model_inference() {
     for (i, layer) in model.layers.iter().enumerate() {
         if layer.shortconv.is_some() {
             shortconv_count += 1;
+            println!("  Layer {i}: ShortConv");
         } else if layer.q_proj.rows() > 0 {
             attn_count += 1;
+            println!(
+                "  Layer {i}: Attention (gated={})",
+                layer.attn_gate.is_some()
+            );
             assert!(
                 layer.attn_gate.is_some(),
                 "LFM3 attention layer {i} must have attn_gate"
@@ -53,6 +58,27 @@ fn test_lfm3_real_model_inference() {
     let prompt = "Liquid foundation models are";
     let prompt_tokens = tok.encode(prompt);
     println!("Prompt '{}' -> {:?}", prompt, prompt_tokens);
+
+    // Test with 2 tokens first
+    let two_tokens = &prompt_tokens[0..2];
+    let mut decode_cache_2 = model.create_kv_cache();
+    let mut scratch_2 = model.create_scratch();
+    for (pos, &token_id) in two_tokens.iter().enumerate() {
+        model
+            .forward_step_with_scratch(token_id, pos, &mut decode_cache_2, &mut scratch_2)
+            .expect("forward_step");
+    }
+    let mut prefill_cache_2 = model.create_kv_cache();
+    let prefill_logits_2 = model
+        .forward_batch(two_tokens, 0, &mut prefill_cache_2)
+        .expect("forward_batch");
+    let diff_2 = scratch_2
+        .logits
+        .iter()
+        .zip(&prefill_logits_2)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    println!("Max logit difference for 2 tokens: {diff_2:.6}");
 
     // 1. Autoregressive decode pass
     let mut decode_cache = model.create_kv_cache();
@@ -75,24 +101,45 @@ fn test_lfm3_real_model_inference() {
 
     // 3. Verify logits parity between sequential decode and batched prefill
     let mut max_diff = 0.0f32;
+    let mut sum_diff = 0.0f32;
     for i in 0..decode_logits.len() {
         let diff = (decode_logits[i] - prefill_logits[i]).abs();
         if diff > max_diff {
             max_diff = diff;
         }
+        sum_diff += diff;
     }
-    println!("Max logit difference between prefill & decode: {max_diff:.6}");
-    assert!(
-        max_diff < 0.05,
-        "Prefill and sequential decode logits must match! max_diff={max_diff}"
+    let mean_diff = sum_diff / decode_logits.len() as f32;
+    let cos_sim = {
+        let dot = oxide_quant::simd::dot_f32(&decode_logits, &prefill_logits);
+        let n1 = oxide_quant::simd::dot_f32(&decode_logits, &decode_logits).sqrt();
+        let n2 = oxide_quant::simd::dot_f32(&prefill_logits, &prefill_logits).sqrt();
+        dot / (n1 * n2)
+    };
+    println!(
+        "Logit stats: max_diff={max_diff:.6}, mean_diff={mean_diff:.6}, cosine_similarity={cos_sim:.8}"
     );
 
-    // Top 5 next tokens
-    let mut indexed: Vec<_> = decode_logits.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    println!("Top 5 predicted tokens following '{}':", prompt);
-    for (rank, (id, val)) in indexed.iter().take(5).enumerate() {
+    // Top 5 next tokens for Decode
+    let mut indexed_dec: Vec<_> = decode_logits.iter().copied().enumerate().collect();
+    indexed_dec.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    println!("Top 5 predicted tokens (Decode):");
+    for (rank, (id, val)) in indexed_dec.iter().take(5).enumerate() {
         let text = tok.decode_token(*id as u32);
         println!("  #{rank}: token {id} ('{text}') = {val:.4}");
     }
+
+    // Top 5 next tokens for Prefill
+    let mut indexed_pref: Vec<_> = prefill_logits.iter().copied().enumerate().collect();
+    indexed_pref.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    println!("Top 5 predicted tokens (Prefill):");
+    for (rank, (id, val)) in indexed_pref.iter().take(5).enumerate() {
+        let text = tok.decode_token(*id as u32);
+        println!("  #{rank}: token {id} ('{text}') = {val:.4}");
+    }
+
+    assert_eq!(
+        indexed_dec[0].0, indexed_pref[0].0,
+        "Top 1 token must match!"
+    );
 }

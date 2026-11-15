@@ -380,6 +380,15 @@ impl Llama3KvCacheLayer {
             sc.reset();
         }
     }
+
+    /// Transactionally rewinds speculative tokens without reallocating buffers.
+    pub fn rewind(&mut self, target_len: usize, kv_dim: usize) {
+        if self.current_len > target_len {
+            self.current_len = target_len;
+            self.k.truncate(target_len * kv_dim);
+            self.v.truncate(target_len * kv_dim);
+        }
+    }
 }
 
 /// Quantized or dense weight matrix with direct SIMD kernel dispatch and zero-copy mmap slicing.
@@ -1393,12 +1402,42 @@ impl QuantizedTensor {
         q8_k_act: &mut Vec<oxide_quant::int_quant::BlockQ8_K>,
     ) {
         oxide_quant::simd::quantize_row_q8_k(vector, q8_k_act);
+        if let (
+            Self::Q4_K {
+                blocks: b1,
+                m: m1,
+                n: n1,
+            },
+            Self::Q4_K {
+                blocks: b2, m: m2, ..
+            },
+            Self::Q4_K {
+                blocks: b3, m: m3, ..
+            },
+        ) = (t1, t2, t3)
+        {
+            oxide_quant::simd::gemv_qkv_q4_k_prequantized(
+                b1.as_ref(),
+                *m1,
+                b2.as_ref(),
+                *m2,
+                b3.as_ref(),
+                *m3,
+                *n1,
+                q8_k_act,
+                out1,
+                out2,
+                out3,
+            );
+            return;
+        }
         t1.gemv_with_q8_k_act(q8_k_act, vector, out1);
         t2.gemv_with_q8_k_act(q8_k_act, vector, out2);
         t3.gemv_with_q8_k_act(q8_k_act, vector, out3);
     }
 
-    /// Fused 2-way projection (e.g. Gate and Up) over the same normalized input vector.
+    /// Fused 2-way projection (e.g. Gate and Up) over the same normalized input vector,
+    /// optionally computing SwiGLU / GeLU activation in the same ThreadTeam dispatch pass.
     pub fn fused_gemv_2way(
         t1: &Self,
         out1: &mut [f32],
@@ -1406,10 +1445,38 @@ impl QuantizedTensor {
         out2: &mut [f32],
         vector: &[f32],
         q8_k_act: &mut Vec<oxide_quant::int_quant::BlockQ8_K>,
-    ) {
+        mut activated: Option<(&mut [f32], bool)>,
+    ) -> bool {
         oxide_quant::simd::quantize_row_q8_k(vector, q8_k_act);
+        if let (
+            Self::Q4_K {
+                blocks: b1,
+                m: m1,
+                n: n1,
+            },
+            Self::Q4_K {
+                blocks: b2, m: m2, ..
+            },
+            Some((act, is_gemma)),
+        ) = (t1, t2, activated.as_mut())
+            && *m1 == *m2
+        {
+            oxide_quant::simd::gemv_gate_up_swiglu_q4_k_prequantized(
+                b1.as_ref(),
+                b2.as_ref(),
+                *m1,
+                *n1,
+                q8_k_act,
+                out1,
+                out2,
+                act,
+                *is_gemma,
+            );
+            return true;
+        }
         t1.gemv_with_q8_k_act(q8_k_act, vector, out1);
         t2.gemv_with_q8_k_act(q8_k_act, vector, out2);
+        false
     }
 
     #[must_use]
@@ -3513,9 +3580,15 @@ impl Llama3Model {
                 }
 
                 let o_in_dim = layer.o_proj.cols();
-                layer
-                    .o_proj
-                    .gemv(&scratch.attn_out[..o_in_dim], &mut scratch.o_proj_out[..h]);
+                oxide_quant::simd::quantize_row_q8_k(
+                    &scratch.attn_out[..o_in_dim],
+                    &mut scratch.q8_k_act,
+                );
+                layer.o_proj.gemv_with_q8_k_act(
+                    &scratch.q8_k_act,
+                    &scratch.attn_out[..o_in_dim],
+                    &mut scratch.o_proj_out[..h],
+                );
 
                 // Post-attention norm (Gemma 2 / Gemma 4 / Nemotron)
                 if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
@@ -3553,37 +3626,46 @@ impl Llama3Model {
                 self.config.is_gemma,
             );
 
-            QuantizedTensor::fused_gemv_2way(
+            let swiglu_fused = QuantizedTensor::fused_gemv_2way(
                 &layer.gate_proj,
                 &mut scratch.gate[..cur_inter],
                 &layer.up_proj,
                 &mut scratch.up[..cur_inter],
                 &scratch.ffn_norm_hidden[..h],
                 &mut scratch.q8_k_ffn_act,
+                Some((&mut scratch.activated[..cur_inter], self.config.is_gemma)),
             );
 
-            if self.config.is_gemma {
-                // Gemma GeLU activation (tanh approximation): 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-                const SQRT_2_OVER_PI: f32 = 0.797_884_6;
-                for i in 0..cur_inter {
-                    let g = scratch.gate[i];
-                    let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
-                    let gelu_g = 0.5 * g * (1.0 + inner.tanh());
-                    scratch.activated[i] = gelu_g * scratch.up[i];
+            if !swiglu_fused {
+                if self.config.is_gemma {
+                    // Gemma GeLU activation (tanh approximation): 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+                    const SQRT_2_OVER_PI: f32 = 0.797_884_6;
+                    for i in 0..cur_inter {
+                        let g = scratch.gate[i];
+                        let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
+                        let gelu_g = 0.5 * g * (1.0 + inner.tanh());
+                        scratch.activated[i] = gelu_g * scratch.up[i];
+                    }
+                } else {
+                    // SwiGLU: silu(gate) * up
+                    oxide_quant::simd::swiglu_f32(
+                        &scratch.gate[..cur_inter],
+                        &scratch.up[..cur_inter],
+                        &mut scratch.activated[..cur_inter],
+                    );
                 }
-            } else {
-                // SwiGLU: silu(gate) * up
-                oxide_quant::simd::swiglu_f32(
-                    &scratch.gate[..cur_inter],
-                    &scratch.up[..cur_inter],
-                    &mut scratch.activated[..cur_inter],
-                );
             }
 
             let d_cols = layer.down_proj.cols().min(cur_inter);
-            layer
-                .down_proj
-                .gemv(&scratch.activated[..d_cols], &mut scratch.mlp_out[..h]);
+            oxide_quant::simd::quantize_row_q8_k(
+                &scratch.activated[..d_cols],
+                &mut scratch.q8_k_ffn_act,
+            );
+            layer.down_proj.gemv_with_q8_k_act(
+                &scratch.q8_k_ffn_act,
+                &scratch.activated[..d_cols],
+                &mut scratch.mlp_out[..h],
+            );
 
             // Post-FFN norm (Gemma 2 / Gemma 4 / Nemotron)
             if !layer.post_ffn_norm.is_empty() && layer.post_ffn_norm.len() >= h {
@@ -3698,9 +3780,12 @@ impl Llama3Model {
             );
         }
 
-        layer
-            .o_proj
-            .gemv(&scratch.attn_out, &mut scratch.o_proj_out);
+        oxide_quant::simd::quantize_row_q8_k(&scratch.attn_out, &mut scratch.q8_k_act);
+        layer.o_proj.gemv_with_q8_k_act(
+            &scratch.q8_k_act,
+            &scratch.attn_out,
+            &mut scratch.o_proj_out,
+        );
 
         // Residual 1
         for i in 0..h {
@@ -3717,25 +3802,30 @@ impl Llama3Model {
         );
 
         let inter_dim = self.config.intermediate_dim;
-        QuantizedTensor::fused_gemv_2way(
+        let swiglu_fused = QuantizedTensor::fused_gemv_2way(
             &layer.gate_proj,
             &mut scratch.gate,
             &layer.up_proj,
             &mut scratch.up,
             &scratch.ffn_norm_hidden,
             &mut scratch.q8_k_ffn_act,
+            Some((&mut scratch.activated, self.config.is_gemma)),
         );
 
-        // SwiGLU: down_proj(silu(gate) * up)
-        oxide_quant::simd::swiglu_f32(
-            &scratch.gate[..inter_dim],
-            &scratch.up[..inter_dim],
-            &mut scratch.activated[..inter_dim],
-        );
+        if !swiglu_fused {
+            oxide_quant::simd::swiglu_f32(
+                &scratch.gate[..inter_dim],
+                &scratch.up[..inter_dim],
+                &mut scratch.activated[..inter_dim],
+            );
+        }
 
-        layer
-            .down_proj
-            .gemv(&scratch.activated, &mut scratch.mlp_out);
+        oxide_quant::simd::quantize_row_q8_k(&scratch.activated, &mut scratch.q8_k_ffn_act);
+        layer.down_proj.gemv_with_q8_k_act(
+            &scratch.q8_k_ffn_act,
+            &scratch.activated,
+            &mut scratch.mlp_out,
+        );
 
         // Residual 2
         for i in 0..h {

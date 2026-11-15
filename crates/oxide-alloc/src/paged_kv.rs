@@ -241,6 +241,25 @@ impl SequenceBlockTable {
         Ok((assigned_block, token_offset))
     }
 
+    /// Transactionally rewinds sequence tokens to `target_tokens`, releasing unneeded physical page blocks to arena.
+    pub fn rewind(&mut self, target_tokens: usize, arena: &PagedKvArena) {
+        if self.num_tokens <= target_tokens {
+            return;
+        }
+        self.num_tokens = target_tokens;
+        let needed_blocks = if target_tokens == 0 {
+            0
+        } else {
+            (target_tokens + TOKENS_PER_PAGE - 1) / TOKENS_PER_PAGE
+        };
+        while self.block_ids.len() > needed_blocks {
+            if let Some(freed_id) = self.block_ids.pop() {
+                arena.release_block(freed_id);
+            }
+            self.block_scores.pop();
+        }
+    }
+
     /// Prunes logical blocks down to `max_blocks_budget` using H2O (Heavy-Hitter Oracle) + StreamingLLM:
     /// - Locks initial attention sink blocks (`sink_tokens`)
     /// - Locks recent sliding-window blocks (`local_rolling_tokens`)

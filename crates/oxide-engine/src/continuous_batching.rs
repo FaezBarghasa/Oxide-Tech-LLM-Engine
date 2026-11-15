@@ -42,6 +42,15 @@ pub struct TokenEvent {
     pub finish_reason: Option<String>,
 }
 
+/// Execution Phase of an individual sequence in the Continuous Batching engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequencePhase {
+    /// Ingesting prompt tokens in chunks up to `prefill_config.compute_prefill_budget()`.
+    Prefill { uncomputed_start: usize },
+    /// Generating autoregressive output tokens one per step.
+    Decode,
+}
+
 /// Active Sequence State managed by the Continuous Batching scheduler.
 #[derive(Debug)]
 struct ActiveSequence {
@@ -59,6 +68,7 @@ struct ActiveSequence {
     sampler_state: SamplerState,
     dfa: Option<Arc<DfaSchemaGrammar>>,
     dfa_state: u32,
+    phase: SequencePhase,
 }
 
 /// SLA-aware dynamic chunked prefill scheduler configuration.
@@ -290,23 +300,30 @@ impl ContinuousBatchingEngine {
                 );
             }
 
-            let prefill_tokens = if prompt_tokens.len() > 1 {
-                if matched_len < prompt_tokens.len() - 1 {
-                    &prompt_tokens[matched_len..prompt_tokens.len() - 1]
-                } else {
-                    &[]
-                }
+            let target_prefill_len = prompt_tokens.len().saturating_sub(1);
+            let (phase, initial_token, initial_pos) = if matched_len < target_prefill_len {
+                (
+                    SequencePhase::Prefill {
+                        uncomputed_start: matched_len,
+                    },
+                    prompt_tokens[matched_len],
+                    matched_len,
+                )
             } else {
-                &[]
+                self.radix_cache.insert(&prompt_tokens, &[slot_id as u32]);
+                (
+                    SequencePhase::Decode,
+                    *prompt_tokens.last().unwrap_or(&1),
+                    target_prefill_len,
+                )
             };
-            if !prefill_tokens.is_empty() {
-                pipe.prefill(slot_id as u64, prefill_tokens, slot_id as u16)
-                    .map_err(|e| format!("Prefill failed: {e}"))?;
-            }
-            self.radix_cache.insert(&prompt_tokens, &[slot_id as u32]);
 
-            let initial_token = *prompt_tokens.last().unwrap_or(&1);
-            let initial_pos = prompt_tokens.len().saturating_sub(1);
+            // Radix tree LRU capacity check (>90% of max budget)
+            let max_token_budget = self.max_slots * 2048;
+            if self.radix_cache.total_tokens() > (max_token_budget * 90) / 100 {
+                self.radix_cache
+                    .evict_to_budget((max_token_budget * 80) / 100);
+            }
 
             let sampling_config = SamplingConfig {
                 temperature,
@@ -330,54 +347,58 @@ impl ContinuousBatchingEngine {
                 sampler_state,
                 dfa,
                 dfa_state: 0,
+                phase,
             };
 
-            // Initial DFA jump-forward if grammar begins with deterministic syntax
-            if let Some(ref grammar) = seq.dfa.clone() {
-                let (jump_bytes, next_state) = grammar.find_jump_forward_bytes(seq.dfa_state, 16);
-                if !jump_bytes.is_empty() {
-                    let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
-                        if let Ok(s) = std::str::from_utf8(&jump_bytes) {
-                            tok.encode(s)
+            // Initial DFA jump-forward if grammar begins with deterministic syntax and in decode phase
+            if matches!(seq.phase, SequencePhase::Decode) {
+                if let Some(ref grammar) = seq.dfa.clone() {
+                    let (jump_bytes, next_state) =
+                        grammar.find_jump_forward_bytes(seq.dfa_state, 16);
+                    if !jump_bytes.is_empty() {
+                        let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
+                            if let Ok(s) = std::str::from_utf8(&jump_bytes) {
+                                tok.encode(s)
+                            } else {
+                                jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                            }
                         } else {
                             jump_bytes.iter().map(|&b| u32::from(b)).collect()
-                        }
-                    } else {
-                        jump_bytes.iter().map(|&b| u32::from(b)).collect()
-                    };
-
-                    for &jump_tok in &jump_tokens {
-                        if seq.generated_count >= seq.max_tokens {
-                            break;
-                        }
-                        let is_accepting = grammar
-                            .accepting_states
-                            .get(next_state as usize)
-                            .copied()
-                            .unwrap_or(false);
-                        let reached_max = seq.generated_count + 1 >= seq.max_tokens;
-                        let is_terminal = reached_max || is_accepting;
-                        let finish_reason = if is_accepting {
-                            Some("stop".to_string())
-                        } else if reached_max {
-                            Some("length".to_string())
-                        } else {
-                            None
                         };
 
-                        let event = TokenEvent {
-                            token_id: jump_tok,
-                            is_terminal,
-                            finish_reason,
-                        };
-                        let _ = seq.sender.send(event);
-                        let _ = pipe.prefill(slot_id as u64, &[jump_tok], slot_id as u16);
+                        for &jump_tok in &jump_tokens {
+                            if seq.generated_count >= seq.max_tokens {
+                                break;
+                            }
+                            let is_accepting = grammar
+                                .accepting_states
+                                .get(next_state as usize)
+                                .copied()
+                                .unwrap_or(false);
+                            let reached_max = seq.generated_count + 1 >= seq.max_tokens;
+                            let is_terminal = reached_max || is_accepting;
+                            let finish_reason = if is_accepting {
+                                Some("stop".to_string())
+                            } else if reached_max {
+                                Some("length".to_string())
+                            } else {
+                                None
+                            };
 
-                        seq.current_token = jump_tok;
-                        seq.current_position += 1;
-                        seq.generated_count += 1;
+                            let event = TokenEvent {
+                                token_id: jump_tok,
+                                is_terminal,
+                                finish_reason,
+                            };
+                            let _ = seq.sender.send(event);
+                            let _ = pipe.prefill(slot_id as u64, &[jump_tok], slot_id as u16);
+
+                            seq.current_token = jump_tok;
+                            seq.current_position += 1;
+                            seq.generated_count += 1;
+                        }
+                        seq.dfa_state = next_state;
                     }
-                    seq.dfa_state = next_state;
                 }
             }
 
@@ -385,9 +406,8 @@ impl ContinuousBatchingEngine {
             return Ok(slot_id);
         }
 
-        let model = self.model.as_ref().ok_or("No model configured")?;
+        let _model = self.model.as_ref().ok_or("No model configured")?;
         let arena = self.paged_arena.as_mut().ok_or("No paged arena")?;
-        let scratch = self.scratch.as_mut().ok_or("No scratch buffer")?;
 
         // SGLang Radix Tree Prefix Cache Lookup:
         let (matched_len, cached_blocks) = self.radix_cache.match_longest_prefix(&prompt_tokens);
@@ -400,28 +420,38 @@ impl ContinuousBatchingEngine {
         block_table.block_ids = cached_blocks;
         block_table.num_tokens = matched_len;
 
-        // Prefill un-cached prompt tokens:
-        let uncomputed_tokens = &prompt_tokens[matched_len..];
-        for (i, &tok) in uncomputed_tokens.iter().enumerate() {
-            let pos = matched_len + i;
-            if let Err(e) = model.forward_step_paged(tok, pos, arena, &mut block_table, scratch) {
-                block_table.release_all(arena);
-                return Err(format!("Prefill step failed: {e}"));
+        // Check if arena needs LRU eviction (>90% full)
+        if arena.free_block_count() < (arena.total_blocks * 10) / 100 {
+            let target_token_budget = (arena.total_blocks * 16 * 80) / 100;
+            let evicted = self
+                .radix_cache
+                .evict_to_budget_collecting_blocks(target_token_budget);
+            for b in evicted {
+                arena.release_block(b);
             }
         }
 
-        // Retain blocks for persistent Radix Tree prefix caching
-        for &b in &block_table.block_ids {
-            arena.retain_block(b);
-        }
-
-        // Insert new physical blocks into Radix cache for subsequent prompt reuse
-        self.radix_cache
-            .insert(&prompt_tokens, &block_table.block_ids);
-
-        // Next token to decode is the last prompt token
-        let initial_token = *prompt_tokens.last().unwrap_or(&1);
-        let initial_pos = prompt_tokens.len().saturating_sub(1);
+        let target_prefill_len = prompt_tokens.len().saturating_sub(1);
+        let (phase, initial_token, initial_pos) = if matched_len < target_prefill_len {
+            (
+                SequencePhase::Prefill {
+                    uncomputed_start: matched_len,
+                },
+                prompt_tokens[matched_len],
+                matched_len,
+            )
+        } else {
+            for &b in &block_table.block_ids {
+                arena.retain_block(b);
+            }
+            self.radix_cache
+                .insert(&prompt_tokens, &block_table.block_ids);
+            (
+                SequencePhase::Decode,
+                *prompt_tokens.last().unwrap_or(&1),
+                target_prefill_len,
+            )
+        };
 
         let sampling_config = SamplingConfig {
             temperature,
@@ -431,7 +461,7 @@ impl ContinuousBatchingEngine {
         let sampler = AcademicSamplerEngine::new(sampling_config);
         let sampler_state = SamplerState::new(5.0);
 
-        let mut seq = ActiveSequence {
+        let seq = ActiveSequence {
             request_id,
             block_table,
             prompt_tokens,
@@ -445,62 +475,8 @@ impl ContinuousBatchingEngine {
             sampler_state,
             dfa,
             dfa_state: 0,
+            phase,
         };
-
-        // Initial DFA jump-forward if grammar begins with deterministic syntax
-        if let Some(ref grammar) = seq.dfa.clone() {
-            let (jump_bytes, next_state) = grammar.find_jump_forward_bytes(seq.dfa_state, 16);
-            if !jump_bytes.is_empty() {
-                let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
-                    if let Ok(s) = std::str::from_utf8(&jump_bytes) {
-                        tok.encode(s)
-                    } else {
-                        jump_bytes.iter().map(|&b| u32::from(b)).collect()
-                    }
-                } else {
-                    jump_bytes.iter().map(|&b| u32::from(b)).collect()
-                };
-
-                for &jump_tok in &jump_tokens {
-                    if seq.generated_count >= seq.max_tokens {
-                        break;
-                    }
-                    let is_accepting = grammar
-                        .accepting_states
-                        .get(next_state as usize)
-                        .copied()
-                        .unwrap_or(false);
-                    let reached_max = seq.generated_count + 1 >= seq.max_tokens;
-                    let is_terminal = reached_max || is_accepting;
-                    let finish_reason = if is_accepting {
-                        Some("stop".to_string())
-                    } else if reached_max {
-                        Some("length".to_string())
-                    } else {
-                        None
-                    };
-
-                    let event = TokenEvent {
-                        token_id: jump_tok,
-                        is_terminal,
-                        finish_reason,
-                    };
-                    let _ = seq.sender.send(event);
-                    let _ = model.forward_step_paged(
-                        jump_tok,
-                        seq.current_position,
-                        arena,
-                        &mut seq.block_table,
-                        scratch,
-                    );
-
-                    seq.current_token = jump_tok;
-                    seq.current_position += 1;
-                    seq.generated_count += 1;
-                }
-                seq.dfa_state = next_state;
-            }
-        }
 
         self.active_sequences.insert(slot_id, seq);
         Ok(slot_id)
@@ -522,7 +498,8 @@ impl ContinuousBatchingEngine {
         }
     }
 
-    /// Single-pass forward decode iteration over all active sequences.
+    /// Single-pass iteration-level continuous batching scheduler.
+    /// Interleaves SLA-bounded chunked prefill with unified batched decode in the same iteration.
     fn step_batch(&mut self) {
         let mut finished_slots = Vec::new();
 
@@ -532,34 +509,89 @@ impl ContinuousBatchingEngine {
                 return;
             }
 
-            let mut batch_tokens = Vec::with_capacity(slot_keys.len());
-            let mut batch_positions = Vec::with_capacity(slot_keys.len());
-            let mut slot_indices = Vec::with_capacity(slot_keys.len());
+            let Ok(mut pipe) = pipe_mutex.try_lock() else {
+                return;
+            };
+
+            // Stage 1: SLA-bounded chunked prefill for sequences in Prefill phase
+            let active_decode_count = self
+                .active_sequences
+                .values()
+                .filter(|s| matches!(s.phase, SequencePhase::Decode))
+                .count();
+            let mut prefill_budget = self
+                .prefill_config
+                .compute_prefill_budget(active_decode_count);
 
             for &slot_id in &slot_keys {
-                if let Some(seq) = self.active_sequences.get(&slot_id) {
-                    batch_tokens.push(seq.current_token);
-                    batch_positions.push(seq.current_position);
-                    slot_indices.push(slot_id);
+                if prefill_budget == 0 {
+                    break;
+                }
+                if let Some(seq) = self.active_sequences.get_mut(&slot_id) {
+                    if let SequencePhase::Prefill { uncomputed_start } = seq.phase {
+                        let target_len = seq.prompt_tokens.len().saturating_sub(1);
+                        let needed = target_len.saturating_sub(uncomputed_start);
+                        if needed > 0 {
+                            let chunk_len = needed.min(prefill_budget);
+                            let chunk =
+                                &seq.prompt_tokens[uncomputed_start..uncomputed_start + chunk_len];
+                            if let Err(e) = pipe.prefill(slot_id as u64, chunk, slot_id as u16) {
+                                tracing::error!("Prefill chunk failed for slot {slot_id}: {e}");
+                            }
+                            let next_start = uncomputed_start + chunk_len;
+                            prefill_budget = prefill_budget.saturating_sub(chunk_len);
+
+                            if next_start >= target_len {
+                                self.radix_cache
+                                    .insert(&seq.prompt_tokens, &[slot_id as u32]);
+                                seq.phase = SequencePhase::Decode;
+                                seq.current_token = *seq.prompt_tokens.last().unwrap_or(&1);
+                                seq.current_position = target_len;
+                            } else {
+                                seq.phase = SequencePhase::Prefill {
+                                    uncomputed_start: next_start,
+                                };
+                            }
+                        } else {
+                            self.radix_cache
+                                .insert(&seq.prompt_tokens, &[slot_id as u32]);
+                            seq.phase = SequencePhase::Decode;
+                            seq.current_token = *seq.prompt_tokens.last().unwrap_or(&1);
+                            seq.current_position = target_len;
+                        }
+                    }
                 }
             }
 
-            let next_tokens = {
-                let Ok(mut guard) = pipe_mutex.try_lock() else {
-                    return;
-                };
-                guard.step_continuous_batch(&batch_tokens, &batch_positions, &slot_indices)
-            };
+            // Stage 2: Batched decode iteration across all sequences currently in Decode phase
+            let mut decode_slots = Vec::new();
+            let mut batch_tokens = Vec::new();
+            let mut batch_positions = Vec::new();
 
-            let next_tokens = match next_tokens {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("step_continuous_batch failed: {e}");
-                    return;
+            for &slot_id in &slot_keys {
+                if let Some(seq) = self.active_sequences.get(&slot_id) {
+                    if matches!(seq.phase, SequencePhase::Decode) {
+                        decode_slots.push(slot_id);
+                        batch_tokens.push(seq.current_token);
+                        batch_positions.push(seq.current_position);
+                    }
                 }
-            };
+            }
 
-            for (i, &slot_id) in slot_keys.iter().enumerate() {
+            if decode_slots.is_empty() {
+                return;
+            }
+
+            let next_tokens =
+                match pipe.step_continuous_batch(&batch_tokens, &batch_positions, &decode_slots) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!("step_continuous_batch failed: {e}");
+                        return;
+                    }
+                };
+
+            for (i, &slot_id) in decode_slots.iter().enumerate() {
                 let next_token = next_tokens[i];
                 let is_eos = next_token == 0
                     || next_token == 2
@@ -574,8 +606,7 @@ impl ContinuousBatchingEngine {
                     seq.current_position += 1;
                     seq.generated_count += 1;
 
-                    // H2O (Heavy-Hitter Oracle) + StreamingLLM KV-cache pruning:
-                    // Keep memory strictly bounded for infinite context streaming.
+                    // H2O (Heavy-Hitter Oracle) + StreamingLLM KV-cache pruning
                     if let Some(ref arena_ref) = self.paged_arena {
                         let max_blocks_budget = 128; // 2,048 tokens / 16
                         if seq.block_table.block_ids.len() > max_blocks_budget {
@@ -665,11 +696,7 @@ impl ContinuousBatchingEngine {
                                     finish_reason,
                                 };
                                 let _ = seq.sender.send(event);
-
-                                if let Ok(mut guard) = pipe_mutex.try_lock() {
-                                    let _ =
-                                        guard.prefill(slot_id as u64, &[jump_tok], slot_id as u16);
-                                }
+                                let _ = pipe.prefill(slot_id as u64, &[jump_tok], slot_id as u16);
 
                                 seq.current_token = jump_tok;
                                 seq.current_position += 1;
@@ -704,10 +731,75 @@ impl ContinuousBatchingEngine {
 
         let slot_keys: Vec<usize> = self.active_sequences.keys().copied().collect();
 
+        // Stage 1: CPU/Paged chunked prefill
+        let active_decode_count = self
+            .active_sequences
+            .values()
+            .filter(|s| matches!(s.phase, SequencePhase::Decode))
+            .count();
+        let mut prefill_budget = self
+            .prefill_config
+            .compute_prefill_budget(active_decode_count);
+
+        for &slot_id in &slot_keys {
+            if prefill_budget == 0 {
+                break;
+            }
+            if let Some(seq) = self.active_sequences.get_mut(&slot_id) {
+                if let SequencePhase::Prefill { uncomputed_start } = seq.phase {
+                    let target_len = seq.prompt_tokens.len().saturating_sub(1);
+                    let needed = target_len.saturating_sub(uncomputed_start);
+                    if needed > 0 {
+                        let chunk_len = needed.min(prefill_budget);
+                        let chunk =
+                            &seq.prompt_tokens[uncomputed_start..uncomputed_start + chunk_len];
+                        for (i, &tok) in chunk.iter().enumerate() {
+                            let pos = uncomputed_start + i;
+                            if let Err(e) = model.forward_step_paged(
+                                tok,
+                                pos,
+                                arena,
+                                &mut seq.block_table,
+                                scratch,
+                            ) {
+                                tracing::error!("Prefill step failed for slot {slot_id}: {e}");
+                                break;
+                            }
+                        }
+                        let next_start = uncomputed_start + chunk_len;
+                        prefill_budget = prefill_budget.saturating_sub(chunk_len);
+
+                        if next_start >= target_len {
+                            for &b in &seq.block_table.block_ids {
+                                arena.retain_block(b);
+                            }
+                            self.radix_cache
+                                .insert(&seq.prompt_tokens, &seq.block_table.block_ids);
+                            seq.phase = SequencePhase::Decode;
+                            seq.current_token = *seq.prompt_tokens.last().unwrap_or(&1);
+                            seq.current_position = target_len;
+                        } else {
+                            seq.phase = SequencePhase::Prefill {
+                                uncomputed_start: next_start,
+                            };
+                        }
+                    } else {
+                        seq.phase = SequencePhase::Decode;
+                        seq.current_token = *seq.prompt_tokens.last().unwrap_or(&1);
+                        seq.current_position = target_len;
+                    }
+                }
+            }
+        }
+
+        // Stage 2: Decode step for active sequences in Decode phase
         for slot_id in slot_keys {
             let Some(seq) = self.active_sequences.get_mut(&slot_id) else {
                 continue;
             };
+            if !matches!(seq.phase, SequencePhase::Decode) {
+                continue;
+            }
 
             // Run zero-allocation forward decode step
             let step_res = model.forward_step_paged(
@@ -720,7 +812,6 @@ impl ContinuousBatchingEngine {
 
             match step_res {
                 Ok(()) => {
-                    // Greedy or academic sampling depending on temperature
                     let next_token = if seq.temperature <= 1e-6 {
                         let mut max_idx = 0;
                         let mut max_val = f32::NEG_INFINITY;
@@ -740,8 +831,7 @@ impl ContinuousBatchingEngine {
                     seq.current_position += 1;
                     seq.generated_count += 1;
 
-                    // H2O (Heavy-Hitter Oracle) + StreamingLLM KV-cache pruning:
-                    // Keep memory strictly bounded for infinite context streaming.
+                    // H2O (Heavy-Hitter Oracle) + StreamingLLM KV-cache pruning
                     let max_blocks_budget = 128; // 2,048 tokens / 16
                     if seq.block_table.block_ids.len() > max_blocks_budget {
                         let _evicted = seq

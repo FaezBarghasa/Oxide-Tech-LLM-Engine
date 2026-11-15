@@ -6,7 +6,21 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let model_path = PathBuf::from("/home/jrad/models/Huihui-Qwen3-8B-abliterated-v2.Q4_K_M.gguf");
+    let args: Vec<String> = std::env::args().collect();
+    let target_streams: usize = if args.len() > 1 {
+        args[1].parse().unwrap_or(16)
+    } else {
+        16
+    };
+
+    let model_path = if let Ok(path) = std::env::var("OXIDE_MODEL") {
+        PathBuf::from(path)
+    } else if args.len() > 2 {
+        PathBuf::from(&args[2])
+    } else {
+        PathBuf::from("/home/jrad/models/Huihui-Qwen3-8B-abliterated-v2.Q4_K_M.gguf")
+    };
+
     println!("Loading physical model from {:?}...", model_path);
 
     let file = File::open(&model_path)?;
@@ -18,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         &model_path.to_string_lossy(),
         "cuda",
         None,
-        16,
+        target_streams,
         None,
     )?;
     pipe.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
@@ -33,13 +47,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "The largest ocean on Earth is the",
         "Artificial intelligence is the field of",
     ];
-
-    let args: Vec<String> = std::env::args().collect();
-    let target_streams: usize = if args.len() > 1 {
-        args[1].parse().unwrap_or(16)
-    } else {
-        16
-    };
 
     let mut prompts = Vec::new();
     while prompts.len() < target_streams {

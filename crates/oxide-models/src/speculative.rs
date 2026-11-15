@@ -137,6 +137,13 @@ impl SpeculativeDecodingEngine {
             accepted_tokens.push(bonus_token);
         }
 
+        // Transactional rewind: prune any rejected draft tokens from draft KV cache
+        let target_final_pos = current_pos + accepted_tokens.len();
+        let kv_dim = pair.draft_model.config.num_kv_heads * pair.draft_model.config.head_dim;
+        for layer in pair.draft_kv.iter_mut() {
+            layer.rewind(target_final_pos, kv_dim);
+        }
+
         Ok(accepted_tokens)
     }
 }
