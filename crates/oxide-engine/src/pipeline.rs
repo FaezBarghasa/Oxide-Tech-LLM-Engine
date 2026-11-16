@@ -171,12 +171,12 @@ impl SpecializedPipeline {
         slot_indices: &[usize],
     ) -> Result<Vec<u32>> {
         if let Self::Llama3Cuda(engine) = self {
-            if !batch_tokens.is_empty() {
+            if batch_tokens.is_empty() {
+                Ok(Vec::new())
+            } else {
                 engine
                     .backend
                     .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices)
-            } else {
-                Ok(Vec::new())
             }
         } else {
             let mut out = Vec::with_capacity(batch_tokens.len());
