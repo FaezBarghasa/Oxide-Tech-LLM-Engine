@@ -6,12 +6,15 @@
 //! - Lock-free multi-client streaming: transmits sampled tokens directly into client channels.
 
 use crate::pipeline::SpecializedPipeline;
+use crossbeam_utils::sync::{Parker, Unparker};
 use oxide_alloc::{PagedKvArena, RadixPrefixCache, SequenceBlockTable};
 use oxide_core::dfa::{DFA_ERROR_STATE, DfaSchemaGrammar};
 use oxide_core::sampler::{AcademicSamplerEngine, SamplerState, SamplingConfig};
 use oxide_models::{GgufTokenizer, Llama3Model, Llama3ScratchBuffers};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Command sent from HTTP/SSE/gRPC request handlers to the background iteration engine.
@@ -76,6 +79,7 @@ struct ActiveSequence {
 pub struct ChunkedPrefillConfig {
     pub min_chunk_tokens: usize,
     pub max_chunk_tokens: usize,
+    pub max_num_batched_tokens: usize,
     pub sla_itl_micros: u64,
     pub base_step_micros: u64,
     pub prefill_alpha_micros_per_tok: f32,
@@ -86,6 +90,7 @@ impl Default for ChunkedPrefillConfig {
         Self {
             min_chunk_tokens: 32,
             max_chunk_tokens: 512,
+            max_num_batched_tokens: 2048,
             sla_itl_micros: 25_000,
             base_step_micros: 2_000,
             prefill_alpha_micros_per_tok: 25.0,
@@ -98,13 +103,71 @@ impl ChunkedPrefillConfig {
     pub fn compute_prefill_budget(&self, active_decode_batch: usize) -> usize {
         let decode_est_micros = self.base_step_micros + (active_decode_batch as u64 * 350);
         let headroom = self.sla_itl_micros.saturating_sub(decode_est_micros);
-        let budget = (headroom as f32 / self.prefill_alpha_micros_per_tok.max(1.0)) as usize;
+        let time_budget = (headroom as f32 / self.prefill_alpha_micros_per_tok.max(1.0)) as usize;
+        let token_capacity_budget = self.max_num_batched_tokens.saturating_sub(active_decode_batch);
+        let budget = time_budget.min(token_capacity_budget);
         budget.clamp(self.min_chunk_tokens, self.max_chunk_tokens)
     }
 }
 
+/// Prefill chunk slice descriptor for ragged batching.
+#[derive(Debug, Clone)]
+pub struct PrefillChunkDesc {
+    pub slot_id: usize,
+    pub tokens: Vec<u32>,
+    pub seq_id: u16,
+    pub is_final_chunk: bool,
+    pub total_prompt_len: usize,
+}
+
+/// Single token decode slice descriptor for ragged batching.
+#[derive(Debug, Clone)]
+pub struct DecodeSlotDesc {
+    pub slot_id: usize,
+    pub token: u32,
+    pub position: usize,
+}
+
+/// Prefix clone descriptor for zero-copy Radix cache hits.
+#[derive(Debug, Clone)]
+pub struct PrefixCloneDesc {
+    pub src_slot: u64,
+    pub dst_slot: u64,
+    pub num_tokens: usize,
+}
+
+/// Unified ragged chunked prefill + decode mixing execution descriptor.
+#[derive(Debug, Clone)]
+pub struct BatchExecDescriptor {
+    pub prefix_clones: Vec<PrefixCloneDesc>,
+    pub prefill_chunks: Vec<PrefillChunkDesc>,
+    pub decode_slots: Vec<DecodeSlotDesc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrefillChunkResult {
+    pub slot_id: usize,
+    pub tokens_processed: usize,
+    pub is_final_chunk: bool,
+    pub total_prompt_len: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecodeSlotResult {
+    pub slot_id: usize,
+    pub next_token: u32,
+    pub error: Option<String>,
+}
+
+/// Result returned from the dedicated GPU execution worker to the scheduler actor.
+#[derive(Debug, Clone)]
+pub struct BatchExecCompletion {
+    pub prefill_results: Vec<PrefillChunkResult>,
+    pub decode_results: Vec<DecodeSlotResult>,
+}
+
 /// Background Continuous Batching & Radix Cache Actor.
-#[derive(Debug)]
 pub struct ContinuousBatchingEngine {
     model: Option<Arc<Llama3Model>>,
     pipeline: Option<Arc<Mutex<SpecializedPipeline>>>,
@@ -112,10 +175,27 @@ pub struct ContinuousBatchingEngine {
     radix_cache: RadixPrefixCache,
     scratch: Option<Llama3ScratchBuffers>,
     active_sequences: HashMap<usize, ActiveSequence>,
+    pending_prefix_clones: Vec<PrefixCloneDesc>,
+    pending_jump_chunks: Vec<PrefillChunkDesc>,
     max_slots: usize,
     cmd_receiver: mpsc::UnboundedReceiver<EngineCommand>,
     pub prefill_config: ChunkedPrefillConfig,
     pub tokenizer: Option<Arc<GgufTokenizer>>,
+    exec_tx: Option<rtrb::Producer<BatchExecDescriptor>>,
+    comp_rx: Option<rtrb::Consumer<BatchExecCompletion>>,
+    worker_unparker: Option<Unparker>,
+    worker_running: Option<Arc<AtomicBool>>,
+    worker_handle: Option<JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for ContinuousBatchingEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContinuousBatchingEngine")
+            .field("max_slots", &self.max_slots)
+            .field("active_sequences_count", &self.active_sequences.len())
+            .field("prefill_config", &self.prefill_config)
+            .finish()
+    }
 }
 
 impl ContinuousBatchingEngine {
@@ -142,10 +222,17 @@ impl ContinuousBatchingEngine {
             radix_cache,
             scratch: Some(scratch),
             active_sequences: HashMap::with_capacity(max_slots),
+            pending_prefix_clones: Vec::new(),
+            pending_jump_chunks: Vec::new(),
             max_slots,
             cmd_receiver,
             prefill_config: ChunkedPrefillConfig::default(),
             tokenizer: None,
+            exec_tx: None,
+            comp_rx: None,
+            worker_unparker: None,
+            worker_running: None,
+            worker_handle: None,
         }
     }
 
@@ -155,6 +242,21 @@ impl ContinuousBatchingEngine {
         max_slots: usize,
         cmd_receiver: mpsc::UnboundedReceiver<EngineCommand>,
     ) -> Self {
+        let (exec_tx, exec_rx) = rtrb::RingBuffer::<BatchExecDescriptor>::new(64);
+        let (comp_tx, comp_rx) = rtrb::RingBuffer::<BatchExecCompletion>::new(64);
+        let worker_running = Arc::new(AtomicBool::new(true));
+        let worker_running_thread = Arc::clone(&worker_running);
+        let parker = Parker::new();
+        let worker_unparker = parker.unparker().clone();
+        let pipeline_clone = Arc::clone(&pipeline);
+
+        let worker_handle = std::thread::Builder::new()
+            .name("oxide-gpu-worker".to_string())
+            .spawn(move || {
+                run_gpu_worker_loop(exec_rx, comp_tx, pipeline_clone, worker_running_thread, parker);
+            })
+            .expect("Failed to spawn oxide-gpu-worker thread");
+
         Self {
             model: None,
             pipeline: Some(pipeline),
@@ -162,10 +264,17 @@ impl ContinuousBatchingEngine {
             radix_cache: RadixPrefixCache::new(),
             scratch: None,
             active_sequences: HashMap::with_capacity(max_slots),
+            pending_prefix_clones: Vec::new(),
+            pending_jump_chunks: Vec::new(),
             max_slots,
             cmd_receiver,
             prefill_config: ChunkedPrefillConfig::default(),
             tokenizer: None,
+            exec_tx: Some(exec_tx),
+            comp_rx: Some(comp_rx),
+            worker_unparker: Some(worker_unparker),
+            worker_running: Some(worker_running),
+            worker_handle: Some(worker_handle),
         }
     }
 
@@ -182,12 +291,10 @@ impl ContinuousBatchingEngine {
         })
     }
 
-    /// Main iteration scheduler loop (SGLang/vLLM parity).
+    /// Main iteration scheduler loop (SGLang/vLLM parity with lock-free rtrb overlap).
     pub async fn run_loop(&mut self) {
-        let mut interval = tokio::time::interval(std::time::Duration::from_micros(200));
-
         loop {
-            // 1. Ingest all pending commands from clients without blocking
+            // 1. Ingest all pending commands from clients non-blockingly
             while let Ok(cmd) = self.cmd_receiver.try_recv() {
                 match cmd {
                     EngineCommand::EnqueueRequest {
@@ -220,7 +327,7 @@ impl ContinuousBatchingEngine {
                 }
             }
 
-            // 2. If no active sequences, await next incoming command
+            // 2. If no active sequences, await next incoming command asynchronously (0% CPU idle)
             if self.active_sequences.is_empty() {
                 match self.cmd_receiver.recv().await {
                     Some(EngineCommand::EnqueueRequest {
@@ -253,10 +360,13 @@ impl ContinuousBatchingEngine {
                 }
             }
 
-            // 3. Execute one batched forward decode step across all active sequences
-            self.step_batch();
-
-            interval.tick().await;
+            // 3. Execute iteration-level continuous batching step
+            if self.exec_tx.is_some() {
+                self.step_batch_overlap().await;
+            } else {
+                self.step_batch();
+                tokio::task::yield_now().await;
+            }
         }
     }
 
@@ -284,15 +394,15 @@ impl ContinuousBatchingEngine {
             return Err("Cannot enqueue empty prompt".to_string());
         }
 
-        if let Some(ref pipe_mutex) = self.pipeline {
-            let mut pipe = pipe_mutex
-                .try_lock()
-                .map_err(|_| "Pipeline busy".to_string())?;
-
+        if self.pipeline.is_some() {
             let (matched_len, cached_slots) = self.radix_cache.match_longest_prefix(&prompt_tokens);
             if matched_len > 0 {
                 if let Some(&src_slot) = cached_slots.first() {
-                    let _ = pipe.clone_kv_prefix(src_slot as u64, slot_id as u64, matched_len);
+                    self.pending_prefix_clones.push(PrefixCloneDesc {
+                        src_slot: src_slot as u64,
+                        dst_slot: slot_id as u64,
+                        num_tokens: matched_len,
+                    });
                 }
                 tracing::info!(
                     "[Radix Tree Prefix Cache] HIT! Reusing {matched_len}/{} prefix tokens (0 ms re-eval)",
@@ -391,12 +501,20 @@ impl ContinuousBatchingEngine {
                                 finish_reason,
                             };
                             let _ = seq.sender.send(event);
-                            let _ = pipe.prefill(slot_id as u64, &[jump_tok], slot_id as u16);
 
                             seq.current_token = jump_tok;
                             seq.current_position += 1;
                             seq.generated_count += 1;
                         }
+
+                        self.pending_jump_chunks.push(PrefillChunkDesc {
+                            slot_id,
+                            tokens: jump_tokens,
+                            seq_id: slot_id as u16,
+                            is_final_chunk: false,
+                            total_prompt_len: seq.prompt_tokens.len(),
+                        });
+
                         seq.dfa_state = next_state;
                     }
                 }
