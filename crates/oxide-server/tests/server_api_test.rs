@@ -185,3 +185,56 @@ async fn test_dynamic_model_loading_and_hot_swapping() {
         assert!(removed);
     }
 }
+
+#[tokio::test]
+async fn test_metrics_and_rerank_endpoints() {
+    let backend = CpuBackend::new(0, 16);
+    let config = CactusNeedleConfig::<8>::default();
+    let engine = OxideEngine::new(backend, config);
+    let pipeline = Arc::new(Mutex::new(SpecializedPipeline::Needle3Cpu(engine)));
+    let dfa_grammar = Arc::new(DfaSchemaGrammar::new_simple_json_validator());
+    let slot_manager = Arc::new(Mutex::new(ContinuousBatchingSlotManager::new(8)));
+    let kv_cache = Arc::new(Mutex::new(HierarchicalKvCache::new(64, 256, 1024)));
+
+    let state = ServerState {
+        pipeline,
+        model_manager: None,
+        batch_engine: None,
+        dfa_grammar,
+        slot_manager,
+        kv_cache,
+        tokenizer: Arc::new(oxide_models::GgufTokenizer::default()),
+    };
+
+    let router = create_router(state);
+    let server = axum_test::TestServer::new(router);
+
+    // 1. Test /metrics
+    let resp = server.get("/metrics").await;
+    assert_eq!(resp.status_code(), axum::http::StatusCode::OK);
+    let body = resp.text();
+    assert!(body.contains("oxide_up 1"));
+    assert!(body.contains("oxide_max_inference_slots 8"));
+    assert!(body.contains("oxide_active_inference_slots 0"));
+
+    // 2. Test /v1/rerank
+    let rerank_payload = serde_json::json!({
+        "model": "needle3",
+        "query": "deep learning architectures",
+        "documents": [
+            "deep neural networks and transformers",
+            "completely unrelated cooking recipes for pasta",
+            "machine learning models and optimization"
+        ],
+        "top_n": 2,
+        "return_documents": true
+    });
+
+    let resp = server.post("/v1/rerank").json(&rerank_payload).await;
+    assert_eq!(resp.status_code(), axum::http::StatusCode::OK);
+    let json_resp: serde_json::Value = resp.json();
+    assert!(json_resp["id"].as_str().unwrap().starts_with("rerank-"));
+    let results = json_resp["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 2);
+    assert!(results[0]["document"]["text"].is_string());
+}

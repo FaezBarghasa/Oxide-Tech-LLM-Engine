@@ -41,7 +41,6 @@ use oxide_models::{ChatMessage, ChatTemplateFormat, ChatTemplateParser, ModelSpe
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
@@ -877,6 +876,156 @@ async fn embeddings_handler(
             total_tokens,
         },
     })
+}
+
+static RERANK_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Request for semantic reranking (Cohere / Jina format).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RerankRequest {
+    pub model: String,
+    pub query: String,
+    pub documents: Vec<String>,
+    pub top_n: Option<usize>,
+    #[serde(default)]
+    pub return_documents: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RerankDocumentText {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RerankDocumentResult {
+    pub index: usize,
+    pub relevance_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<RerankDocumentText>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RerankApiVersion {
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RerankBilledUnits {
+    pub search_units: usize,
+    pub total_tokens: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RerankMeta {
+    pub api_version: RerankApiVersion,
+    pub billed_units: RerankBilledUnits,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RerankResponse {
+    pub id: String,
+    pub results: Vec<RerankDocumentResult>,
+    pub meta: RerankMeta,
+}
+
+async fn rerank_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<RerankRequest>,
+) -> Json<RerankResponse> {
+    let target_pipeline = state.resolve_pipeline(&payload.model).await;
+    let pipe_lock = target_pipeline.lock().await;
+
+    let query_tokens = state.tokenizer.encode(&payload.query);
+    let mut total_tokens = query_tokens.len().max(1);
+
+    let query_emb = pipe_lock
+        .extract_sequence_embedding(&query_tokens)
+        .unwrap_or_else(|_| vec![0.0f32; pipe_lock.hidden_dim()]);
+
+    let mut scored_results = Vec::with_capacity(payload.documents.len());
+
+    for (orig_idx, doc_text) in payload.documents.iter().enumerate() {
+        let doc_tokens = state.tokenizer.encode(doc_text);
+        total_tokens += doc_tokens.len().max(1);
+
+        let doc_emb = pipe_lock
+            .extract_sequence_embedding(&doc_tokens)
+            .unwrap_or_else(|_| vec![0.0f32; pipe_lock.hidden_dim()]);
+
+        // Dot product between L2-normalized embeddings gives the cosine similarity [-1.0, 1.0]
+        let score: f32 = query_emb
+            .iter()
+            .zip(doc_emb.iter())
+            .map(|(&q, &d)| q * d)
+            .sum();
+
+        scored_results.push((orig_idx, score, doc_text));
+    }
+
+    // Sort descending by relevance score
+    scored_results.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    let top_n = payload
+        .top_n
+        .unwrap_or(scored_results.len())
+        .min(scored_results.len());
+
+    let results: Vec<RerankDocumentResult> = scored_results
+        .into_iter()
+        .take(top_n)
+        .map(|(orig_idx, score, doc_text)| RerankDocumentResult {
+            index: orig_idx,
+            relevance_score: score,
+            document: if payload.return_documents {
+                Some(RerankDocumentText {
+                    text: doc_text.clone(),
+                })
+            } else {
+                None
+            },
+        })
+        .collect();
+
+    let req_num = RERANK_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let id = format!("rerank-{req_num:08x}");
+
+    Json(RerankResponse {
+        id,
+        results,
+        meta: RerankMeta {
+            api_version: RerankApiVersion {
+                version: "1".to_string(),
+            },
+            billed_units: RerankBilledUnits {
+                search_units: 1,
+                total_tokens,
+            },
+        },
+    })
+}
+
+async fn metrics_handler(State(state): State<ServerState>) -> impl IntoResponse {
+    let (active_slots, max_slots) = {
+        let mgr = state.slot_manager.lock().await;
+        (mgr.total_active_slots(), mgr.max_slots)
+    };
+
+    let metrics = format!(
+        "# HELP oxide_up Server operational status\n\
+         # TYPE oxide_up gauge\n\
+         oxide_up 1\n\
+         # HELP oxide_active_inference_slots Number of currently leased inference slots\n\
+         # TYPE oxide_active_inference_slots gauge\n\
+         oxide_active_inference_slots {active_slots}\n\
+         # HELP oxide_max_inference_slots Maximum configured continuous batching slots\n\
+         # TYPE oxide_max_inference_slots gauge\n\
+         oxide_max_inference_slots {max_slots}\n"
+    );
+
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        metrics,
+    )
 }
 
 /// Request for Edge Computer Vision detection.
