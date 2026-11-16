@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let tok_idx = tokens[0] as usize;
         let mut cuda_emb0 = vec![0.0f32; h];
         if let Some(ref d_emb) = b.d_token_embd {
-            let mut d_tmp = oxide_backend_cuda::CudaDeviceBuffer::allocate(h * 4).unwrap();
+            let d_tmp = oxide_backend_cuda::CudaDeviceBuffer::allocate(h * 4).unwrap();
             unsafe {
                 oxide_backend_cuda::driver::launch_cuda_dequantize_token_embd(
                     d_tmp.as_typed_ptr::<f32>(),

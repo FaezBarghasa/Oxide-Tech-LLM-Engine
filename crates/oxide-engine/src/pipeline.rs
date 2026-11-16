@@ -254,6 +254,61 @@ impl SpecializedPipeline {
         }
     }
 
+    /// Extracts genuine token embeddings and computes L2-normalized mean-pooled sequence representation.
+    pub fn extract_sequence_embedding(&self, tokens: &[u32]) -> Result<Vec<f32>> {
+        let h = self.hidden_dim();
+        if tokens.is_empty() || h == 0 {
+            return Ok(vec![0.0f32; h]);
+        }
+        let mut mean_emb = vec![0.0f32; h];
+        let mut row = vec![0.0f32; h];
+        match self {
+            Self::Llama3Cuda(engine) => {
+                if let Some(ref lookup) = engine.backend.embedding_lookup {
+                    for &tok in tokens {
+                        lookup(tok as usize, &mut row);
+                        for i in 0..h {
+                            mean_emb[i] += row[i];
+                        }
+                    }
+                } else {
+                    return Err(oxide_core::error::EngineError::BackendError(
+                        "Embedding lookup not configured for CUDA backend".to_string(),
+                    ));
+                }
+            }
+            Self::Llama3Dense { model, .. } | Self::Llama3AmdApuCpuIgpu { model, .. } => {
+                for &tok in tokens {
+                    if let Some(ref t) = model.token_embd_tensor {
+                        t.extract_row(tok as usize, &mut row);
+                    } else if !model.token_embedding.is_empty() {
+                        let offset = (tok as usize) * h;
+                        if offset + h <= model.token_embedding.len() {
+                            row.copy_from_slice(&model.token_embedding[offset..offset + h]);
+                        }
+                    } else {
+                        model.lm_head.extract_row(tok as usize, &mut row);
+                    }
+                    for i in 0..h {
+                        mean_emb[i] += row[i];
+                    }
+                }
+            }
+            _ => {
+                return Err(oxide_core::error::EngineError::UnsupportedCapability);
+            }
+        }
+        let inv = 1.0 / (tokens.len() as f32);
+        for x in &mut mean_emb {
+            *x *= inv;
+        }
+        let norm = mean_emb.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-12);
+        for x in &mut mean_emb {
+            *x /= norm;
+        }
+        Ok(mean_emb)
+    }
+
     /// High-throughput chunked prefill pass on physical GPU evaluating prompt tokens in batched chunks.
     /// Streams layer weights ONCE for all tokens in each chunk and skips the 510MB LM Head on intermediate chunks.
     pub fn prefill_prompt(&mut self, prompt_tokens: &[u32]) -> Result<u32> {

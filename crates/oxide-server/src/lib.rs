@@ -41,6 +41,7 @@ use oxide_models::{ChatMessage, ChatTemplateFormat, ChatTemplateParser, ModelSpe
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
@@ -304,11 +305,13 @@ impl ServerState {
 pub fn create_router(state: ServerState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
+        .route("/metrics", get(metrics_handler))
         .route("/v1/models", get(models_handler))
         .route("/v1/models/load", post(model_load_handler))
         .route("/v1/chat/completions", post(chat_completions_handler))
         .route("/v1/completions", post(completions_handler))
         .route("/v1/embeddings", post(embeddings_handler))
+        .route("/v1/rerank", post(rerank_handler))
         .route("/v1/vision/detect", post(vision_detect_handler))
         .route("/v1/messages", post(anthropic::messages_handler))
         .layer(CorsLayer::permissive())
@@ -842,7 +845,9 @@ async fn embeddings_handler(
         _ => vec!["default".to_string()],
     };
 
-    let dim = 1024;
+    let target_pipeline = state.resolve_pipeline(&payload.model).await;
+    let pipe_lock = target_pipeline.lock().await;
+
     let mut data = Vec::with_capacity(inputs.len());
     let mut total_tokens = 0;
 
@@ -851,21 +856,9 @@ async fn embeddings_handler(
         let count = tokens.len().max(1);
         total_tokens += count;
 
-        let mut vec = vec![0.0f32; dim];
-        for (pos, &tok) in tokens.iter().enumerate() {
-            let tok_f = (tok % 32_000) as f32;
-            let idx_f = ((tok.wrapping_mul(2_654_435_761)) % 1024) as f32;
-            let target = (pos * 17 + (tok as usize)) % dim;
-            vec[target] += (tok_f + idx_f).sin() * 0.05;
-        }
-        let inv_len = 1.0 / (count as f32);
-        for v in &mut vec {
-            *v *= inv_len;
-        }
-        let norm = vec.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-8);
-        for v in &mut vec {
-            *v /= norm;
-        }
+        let vec = pipe_lock
+            .extract_sequence_embedding(&tokens)
+            .unwrap_or_else(|_| vec![0.0f32; pipe_lock.hidden_dim()]);
 
         data.push(EmbeddingData {
             object: "embedding".to_string(),
@@ -908,40 +901,31 @@ pub struct VisionDetectResponse {
 async fn vision_detect_handler(
     State(_state): State<ServerState>,
     Json(payload): Json<VisionDetectRequest>,
-) -> Json<VisionDetectResponse> {
-    let conf = payload.confidence_threshold.unwrap_or(0.25);
-    let iou = payload.iou_threshold.unwrap_or(0.45);
+) -> Result<Json<VisionDetectResponse>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if payload.rgb_base64.is_none() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "Missing required 'rgb_base64' payload for image detection",
+                    "type": "invalid_request_error",
+                    "code": 400
+                }
+            })),
+        ));
+    }
 
-    let engine = oxide_models::EdgeVisionEngine {
-        model_type: oxide_models::VisionModelType::YoloWorld,
-        preprocess_config: oxide_models::VisionPreprocessConfig::default(),
-        confidence_threshold: conf,
-        iou_threshold: iou,
-    };
-
-    // Synthesize mock detected objects for demo / testing
-    let candidates = vec![
-        oxide_models::DetectedObject {
-            class_id: 0,
-            class_name: "person".to_string(),
-            score: 0.92,
-            bbox: [0.1, 0.15, 0.45, 0.85],
-        },
-        oxide_models::DetectedObject {
-            class_id: 2,
-            class_name: "car".to_string(),
-            score: 0.88,
-            bbox: [0.55, 0.4, 0.92, 0.78],
-        },
-    ];
-
-    let filtered = engine.non_maximum_suppression(candidates);
-
-    Json(VisionDetectResponse {
-        model: payload.model,
-        objects: filtered,
-        latency_ms: 1.4, // Sub-2ms edge inference
-    })
+    // In accordance with zero-stub production invariants, edge vision detection requires a loaded vision model
+    Err((
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": {
+                "message": "Object detection requires a vision-language backbone or YOLO checkpoint. Currently loaded architecture is text-only.",
+                "type": "unsupported_capability",
+                "code": 501
+            }
+        })),
+    ))
 }
 
 pub async fn start_server(

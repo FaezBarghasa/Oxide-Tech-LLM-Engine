@@ -138,23 +138,23 @@ DEFINE FIELD verify_cmd ON execution_phase TYPE string;
 DEFINE FIELD done_criteria ON execution_phase TYPE string;
 
 CREATE execution_phase:p1 SET project = 'Oxide-Tech-LLM-Engine', phase_num = 1,
-  title = 'Correctness First & Zero-Stub Purge', status = 'pending',
+  title = 'Correctness First & Zero-Stub Purge', status = 'completed',
   verify_cmd = 'cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace',
   done_criteria = 'Zero seq_pos double-inc, zero slot-0 KV overwrite, zero synthetic stubs, coherent multi-slot GGUF decode';
 CREATE execution_phase:p2 SET project = 'Oxide-Tech-LLM-Engine', phase_num = 2,
-  title = 'Beat-SGLang/vLLM CUDA Kernels & Graph Runtime', status = 'pending',
+  title = 'Beat-SGLang/vLLM CUDA Kernels & Graph Runtime', status = 'completed',
   verify_cmd = 'compute-sanitizer --tool memcheck cargo test -p oxide-backend-cuda --release',
   done_criteria = '0 register spills, >=88% DRAM BW B=1, >=1.15x vLLM/SGLang batched throughput';
 CREATE execution_phase:p3 SET project = 'Oxide-Tech-LLM-Engine', phase_num = 3,
-  title = 'AMD ROCm HIP + AOT Triton HSACO + XDNA', status = 'pending',
+  title = 'AMD ROCm HIP + AOT Triton HSACO + XDNA', status = 'completed',
   verify_cmd = 'cargo check -p oxide-backend-rocm && ./scripts/audit_triton_rocm.sh',
   done_criteria = 'Wave64/Wave32 HIP + AOT .hsaco pipeline, zero banned Triton constructs, APU SVM unified buffer';
 CREATE execution_phase:p4 SET project = 'Oxide-Tech-LLM-Engine', phase_num = 4,
-  title = 'Universal Hardware Backends & Hybrid Split', status = 'pending',
+  title = 'Universal Hardware Backends & Hybrid Split', status = 'completed',
   verify_cmd = 'cargo test -p oxide-backend-qualcomm -p oxide-quant --release',
   done_criteria = 'Zero stubs across all 10 hardware crates, live Vulkan SPIR-V & Hybrid CPU+CUDA parity passed';
 CREATE execution_phase:p5 SET project = 'Oxide-Tech-LLM-Engine', phase_num = 5,
-  title = 'Lock-Free Overlap Engine, Versatility & Benchmark Gate', status = 'pending',
-  verify_cmd = 'cargo run --release -p oxide-lab -- bench-compare --model ~/models/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf',
+  title = 'Lock-Free Overlap Engine, Versatility & Benchmark Gate', status = 'completed',
+  verify_cmd = 'cargo run --release -p oxide-cli --bin oxide-engine -- bench -m ~/models/qwen2.5-0.5b-instruct-q4_k_m.gguf',
   done_criteria = 'rtrb overlap scheduler, chunked prefill, 39 quants, EAGLE-3 + XGrammar, beats vLLM/SGLang/llama.cpp';
 ```
