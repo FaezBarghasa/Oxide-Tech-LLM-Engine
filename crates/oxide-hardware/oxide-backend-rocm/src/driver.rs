@@ -105,8 +105,18 @@ pub fn get_hip_api() -> Option<&'static HipDriverApi> {
 }
 
 /// Checks and dynamically loads `libamdhip64.so` if available on the system.
+/// Also verifies that at least one physical AMD GPU is detected.
 pub fn is_hip_available() -> bool {
-    get_hip_api().is_some()
+    if let Some(api) = get_hip_api()
+        && let Some(get_count_fn) = api.get_device_count
+    {
+        let mut count: i32 = 0;
+        // SAFETY: get_device_count called with a valid pointer to stack allocated i32.
+        let status = unsafe { get_count_fn(&raw mut count) };
+        status == HIP_SUCCESS && count > 0
+    } else {
+        false
+    }
 }
 
 unsafe fn load_sym<T>(handle: *mut c_void, name: &std::ffi::CStr) -> Option<T> {

@@ -11,69 +11,64 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let gguf = GgufFile::parse(&mmap)?;
     let tokenizer = GgufTokenizer::from_gguf(&gguf);
 
-    let prompt = "Count from 1 to 10: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10. Now write down the first ten letters of the alphabet in uppercase:";
+    let prompt = "<|im_start|>user\nWhat is 2+2? Answer in one word.<|im_end|>\n<|im_start|>assistant\n";
     let tokens = tokenizer.encode(prompt);
-    println!("Prompt: {:?}, tokens: {:?}", prompt, tokens);
+    println!("Prompt tokens (len {}): {:?}", tokens.len(), tokens);
 
-    for len in [1, 2, 4, 8, 15, 16, 17, 31, 32, 33, 48, 53] {
-        let sub = &tokens[..len];
-        // Step
-        let mut pipe_s = SpecializedPipeline::from_model_or_path(
-            &model_path.to_string_lossy(),
-            "cuda",
-            None,
-            1,
-            None,
-        )?;
-        pipe_s.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
-        let mut s_tok = 0u32;
-        for (i, &tok) in sub.iter().enumerate() {
-            let is_prefill = i + 1 < sub.len();
-            let cmd = oxide_core::StepCommand::new(1, tok, 0, is_prefill);
-            let res = pipe_s.step(&cmd)?;
-            s_tok = res.sampled_token;
+    // CPU run layer by layer
+    let mut pipe_cpu = SpecializedPipeline::from_model_or_path(
+        &model_path.to_string_lossy(),
+        "cpu",
+        None,
+        1,
+        None,
+    )?;
+    pipe_cpu.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
+
+    // Let's inspect the embeddings on CPU for tokens
+    if let SpecializedPipeline::Llama3Dense { ref model, .. } = pipe_cpu {
+        let mut emb0 = vec![0.0f32; model.config.hidden_dim];
+        if let Some(ref t) = model.token_embd_tensor {
+            t.extract_row(tokens[0] as usize, &mut emb0);
+            println!("CPU tok[0] emb first 4: {:?}", &emb0[..4]);
+            let mut emb_last = vec![0.0f32; model.config.hidden_dim];
+            t.extract_row(*tokens.last().unwrap() as usize, &mut emb_last);
+            println!("CPU tok[last] emb first 4: {:?}", &emb_last[..4]);
         }
-        drop(pipe_s);
+    }
 
-        // Chunk
-        let mut pipe_c = SpecializedPipeline::from_model_or_path(
-            &model_path.to_string_lossy(),
-            "cuda",
-            None,
-            1,
-            None,
-        )?;
-        pipe_c.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
-        let mut c_tok = 0u32;
-        let mut ret_some = false;
-        if let SpecializedPipeline::Llama3Cuda(ref mut eng) = pipe_c {
-            match eng.backend.dispatch_prefill_chunk(sub, true) {
-                Ok(Some(tok)) => {
-                    c_tok = tok;
-                    ret_some = true;
-                }
-                Ok(None) => {
-                    println!("len {}: dispatch_prefill_chunk returned None!", len);
-                }
-                Err(e) => {
-                    println!("len {}: dispatch_prefill_chunk returned Err: {:?}", len, e);
-                }
+    // CUDA run
+    let mut pipe_cuda = SpecializedPipeline::from_model_or_path(
+        &model_path.to_string_lossy(),
+        "cuda",
+        None,
+        1,
+        None,
+    )?;
+    pipe_cuda.configure_sampling(0.0, 0.95, 40, 0.05, 1.1, 64, 42, true);
+    if let SpecializedPipeline::Llama3Cuda(ref mut eng) = pipe_cuda {
+        let b = &mut eng.backend;
+        let s = b.stream.as_ref().unwrap().raw();
+        // Check embedding dequant on CUDA
+        let h = b.hidden_dim;
+        let tok_idx = tokens[0] as usize;
+        let mut cuda_emb0 = vec![0.0f32; h];
+        if let Some(ref d_emb) = b.d_token_embd {
+            let mut d_tmp = oxide_backend_cuda::CudaDeviceBuffer::allocate(h * 4).unwrap();
+            unsafe {
+                oxide_backend_cuda::driver::launch_cuda_dequantize_token_embd(
+                    d_tmp.as_typed_ptr::<f32>(),
+                    d_emb.as_raw_ptr(),
+                    tok_idx as i32,
+                    h as i32,
+                    1.0,
+                    b.token_embd_quant_type as i32,
+                    s,
+                );
             }
-        }
-        drop(pipe_c);
-
-        println!(
-            "len {}: step {} ({:?}), chunk {} ({:?}) [ret_some={}] - match: {}",
-            len,
-            s_tok,
-            tokenizer.decode_token(s_tok),
-            c_tok,
-            tokenizer.decode_token(c_tok),
-            ret_some,
-            s_tok == c_tok
-        );
-        if s_tok != c_tok {
-            break;
+            d_tmp.copy_to_host_async(&mut cuda_emb0, s).unwrap();
+            b.stream.as_ref().unwrap().synchronize().unwrap();
+            println!("CUDA tok[0] emb first 4: {:?}", &cuda_emb0[..4]);
         }
     }
 

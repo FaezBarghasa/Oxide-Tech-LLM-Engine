@@ -3,6 +3,16 @@ use crate::memory::DevicePtr;
 use crate::worker::StepCommand;
 use std::fmt::Debug;
 
+/// Device Probe Report describing physical device capabilities and telemetry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceProbeReport {
+    pub backend_name: &'static str,
+    pub device_count: usize,
+    pub device_names: Vec<String>,
+    pub vram_bytes: Vec<u64>,
+    pub driver_version: String,
+}
+
 /// Core hardware backend abstraction.
 pub trait HardwareBackend: Send + Sync + 'static + Debug {
     type Event: Copy + Send + Sync + Debug;
@@ -18,6 +28,25 @@ pub trait HardwareBackend: Send + Sync + 'static + Debug {
 
     /// Synchronizes the hardware device.
     fn synchronize(&self) -> Result<()>;
+
+    /// Inspects the host environment for available physical hardware accelerators.
+    fn probe_devices() -> Result<DeviceProbeReport>
+    where
+        Self: Sized,
+    {
+        Ok(DeviceProbeReport {
+            backend_name: "generic",
+            device_count: 0,
+            device_names: Vec::new(),
+            vram_bytes: Vec::new(),
+            driver_version: "unknown".to_string(),
+        })
+    }
+
+    /// Returns whether the physical hardware accelerator is present and accessible.
+    fn is_hardware_present(&self) -> bool {
+        true
+    }
 }
 
 /// Static model configuration descriptor.

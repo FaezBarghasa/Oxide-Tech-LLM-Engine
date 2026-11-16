@@ -1,0 +1,23 @@
+{
+  "engine": "Oxide-Tech-LLM-Engine",
+  "backend": "rocm",
+  "architectures": [
+    "gfx90a",
+    "gfx942",
+    "gfx950",
+    "gfx1100",
+    "gfx1201"
+  ],
+  "kernels": {
+    "rmsnorm": {
+      "num_warps": 4,
+      "shared_memory_bytes": 0,
+      "banned_constructs_verified": true
+    },
+    "rope_continuous_batch": {
+      "num_warps": 2,
+      "shared_memory_bytes": 0,
+      "banned_constructs_verified": true
+    }
+  }
+}

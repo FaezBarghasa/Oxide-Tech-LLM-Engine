@@ -549,8 +549,11 @@ impl ContinuousBatchingEngine {
                             prefill_budget = prefill_budget.saturating_sub(chunk_len);
 
                             if next_start >= target_len {
-                                self.radix_cache
-                                    .insert(&seq.prompt_tokens, &[slot_id as u32]);
+                                let num_pages = (seq.prompt_tokens.len() + 15) / 16;
+                                let block_ids: Vec<u32> = (0..num_pages as u32)
+                                    .map(|p| ((slot_id as u32) << 16) | p)
+                                    .collect();
+                                self.radix_cache.insert(&seq.prompt_tokens, &block_ids);
                                 seq.phase = SequencePhase::Decode;
                                 seq.current_token = *seq.prompt_tokens.last().unwrap_or(&1);
                                 seq.current_position = target_len;
@@ -560,8 +563,11 @@ impl ContinuousBatchingEngine {
                                 };
                             }
                         } else {
-                            self.radix_cache
-                                .insert(&seq.prompt_tokens, &[slot_id as u32]);
+                            let num_pages = (seq.prompt_tokens.len() + 15) / 16;
+                            let block_ids: Vec<u32> = (0..num_pages as u32)
+                                .map(|p| ((slot_id as u32) << 16) | p)
+                                .collect();
+                            self.radix_cache.insert(&seq.prompt_tokens, &block_ids);
                             seq.phase = SequencePhase::Decode;
                             seq.current_token = *seq.prompt_tokens.last().unwrap_or(&1);
                             seq.current_position = target_len;
@@ -603,13 +609,24 @@ impl ContinuousBatchingEngine {
 
             for (i, &slot_id) in decode_slots.iter().enumerate() {
                 let next_token = next_tokens[i];
-                let is_eos = next_token == 0
-                    || next_token == 2
-                    || next_token == 128_001
-                    || next_token == 128_008
-                    || next_token == 128_009
-                    || next_token == 151_643
-                    || next_token == 151_645;
+                let is_eos = if let Some(ref tok) = self.tokenizer {
+                    tok.eos_id == Some(next_token)
+                        || (next_token == 0
+                            || next_token == 2
+                            || next_token == 128_001
+                            || next_token == 128_008
+                            || next_token == 128_009
+                            || next_token == 151_643
+                            || next_token == 151_645)
+                } else {
+                    next_token == 0
+                        || next_token == 2
+                        || next_token == 128_001
+                        || next_token == 128_008
+                        || next_token == 128_009
+                        || next_token == 151_643
+                        || next_token == 151_645
+                };
 
                 if let Some(seq) = self.active_sequences.get_mut(&slot_id) {
                     seq.current_token = next_token;
@@ -849,10 +866,18 @@ impl ContinuousBatchingEngine {
                             .prune_heavy_hitters(arena, max_blocks_budget);
                     }
 
-                    let is_eos = next_token == 0
-                        || next_token == 2
-                        || next_token == 128_001
-                        || next_token == 128_009;
+                    let is_eos = if let Some(ref tok) = self.tokenizer {
+                        tok.eos_id == Some(next_token)
+                            || (next_token == 0
+                                || next_token == 2
+                                || next_token == 128_001
+                                || next_token == 128_009)
+                    } else {
+                        next_token == 0
+                            || next_token == 2
+                            || next_token == 128_001
+                            || next_token == 128_009
+                    };
                     let mut is_accepting = false;
                     if let Some(ref grammar) = seq.dfa.clone() {
                         let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {

@@ -3238,9 +3238,7 @@ impl CudaBackend {
         }
 
         let can_capture = self.cuda_graph_enabled
-            && self.token_embd_quant_type == 1
-            && self.d_token_embd.is_some()
-            && self.d_per_layer_emb.is_none();
+            && self.d_token_embd.is_some();
 
         if can_capture {
             if let Some(&handle) = self.batch_decode_graphs.get(&bucket) {

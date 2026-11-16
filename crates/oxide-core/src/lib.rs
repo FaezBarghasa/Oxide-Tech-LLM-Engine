@@ -53,7 +53,8 @@ pub use sampler::{
 };
 pub use thread_team::{ParallelTask, ThreadTeam, global_thread_team};
 pub use traits::{
-    HardwareBackend, HardwareSupports, ModelConfig, OpticalComputeFabric, QuantScheme,
+    DeviceProbeReport, HardwareBackend, HardwareSupports, ModelConfig, OpticalComputeFabric,
+    QuantScheme,
 };
 pub use typestate::{Allocated, Decoding, Prefilling, SequenceRequest, Terminal, Unallocated};
 pub use worker::{ExecutionWorker, StepCommand, StepCompletion};
