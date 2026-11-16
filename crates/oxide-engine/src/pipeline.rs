@@ -20,6 +20,7 @@
     clippy::cast_precision_loss
 )]
 
+use crate::continuous_batching::{PrefillChunkDesc, PrefillChunkResult};
 use crate::engine::OxideEngine;
 use oxide_backend_cpu::CpuBackend;
 use oxide_backend_cuda::CudaBackend;
@@ -170,24 +171,12 @@ impl SpecializedPipeline {
         slot_indices: &[usize],
     ) -> Result<Vec<u32>> {
         if let Self::Llama3Cuda(engine) = self {
-            let is_all_q4_k = engine.backend.layers.iter().all(|l| l.q_quant == 1);
-            if is_all_q4_k && batch_tokens.len() > 1 {
+            if !batch_tokens.is_empty() {
                 engine
                     .backend
                     .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices)
             } else {
-                let mut out = Vec::with_capacity(batch_tokens.len());
-                for i in 0..batch_tokens.len() {
-                    let cmd = StepCommand::new(
-                        slot_indices[i] as u64,
-                        batch_tokens[i],
-                        slot_indices[i] as u16,
-                        false,
-                    );
-                    let completion = engine.step_monomorphized(&cmd)?;
-                    out.push(completion.sampled_token);
-                }
-                Ok(out)
+                Ok(Vec::new())
             }
         } else {
             let mut out = Vec::with_capacity(batch_tokens.len());
@@ -800,6 +789,22 @@ impl SpecializedPipeline {
             }
             Ok(())
         }
+    }
+
+    /// Unified ragged chunked prefill pass evaluating multiple prefill slices across active continuous batching slots.
+    pub fn prefill_ragged(&mut self, chunks: &[PrefillChunkDesc]) -> Vec<PrefillChunkResult> {
+        let mut results = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            let res = self.prefill(chunk.slot_id as u64, &chunk.tokens, chunk.seq_id);
+            results.push(PrefillChunkResult {
+                slot_id: chunk.slot_id,
+                tokens_processed: chunk.tokens.len(),
+                is_final_chunk: chunk.is_final_chunk,
+                total_prompt_len: chunk.total_prompt_len,
+                error: res.err().map(|e| e.to_string()),
+            });
+        }
+        results
     }
 
     /// Universal model loader resolving from a local file path (GGUF/SafeTensors),

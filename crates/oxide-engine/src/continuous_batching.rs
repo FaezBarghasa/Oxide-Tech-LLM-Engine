@@ -1417,7 +1417,6 @@ fn run_gpu_worker_loop(
     while running.load(Ordering::Relaxed) {
         if let Ok(desc) = exec_rx.pop() {
             idle_spins = 0;
-            let mut prefill_results = Vec::with_capacity(desc.prefill_chunks.len());
             let mut decode_results = Vec::with_capacity(desc.decode_slots.len());
 
             let mut pipe = pipeline.blocking_lock();
@@ -1431,17 +1430,8 @@ fn run_gpu_worker_loop(
                 );
             }
 
-            // 2. Process chunked prefill slices
-            for chunk in desc.prefill_chunks {
-                let res = pipe.prefill(chunk.slot_id as u64, &chunk.tokens, chunk.seq_id);
-                prefill_results.push(PrefillChunkResult {
-                    slot_id: chunk.slot_id,
-                    tokens_processed: chunk.tokens.len(),
-                    is_final_chunk: chunk.is_final_chunk,
-                    total_prompt_len: chunk.total_prompt_len,
-                    error: res.err().map(|e| e.to_string()),
-                });
-            }
+            // 2. Process chunked prefill slices via unified ragged prefill
+            let prefill_results = pipe.prefill_ragged(&desc.prefill_chunks);
 
             // 3. Batched decode step
             if !desc.decode_slots.is_empty() {

@@ -204,6 +204,10 @@ pub struct CudaBackend {
     pub h2o_max_blocks_budget: usize,
     pub pinned_host_token_ptr: usize,
     pub current_step_counter: u32,
+    pub host_batch_tokens: [i32; 128],
+    pub host_batch_positions: [i32; 128],
+    pub host_batch_slots: [i32; 128],
+    pub host_batch_sampled: [u32; 128],
 }
 
 impl Drop for CudaBackend {
@@ -383,6 +387,10 @@ impl CudaBackend {
                 .unwrap_or(128),
             pinned_host_token_ptr: pinned_host_token as usize,
             current_step_counter: 0,
+            host_batch_tokens: [0; 128],
+            host_batch_positions: [0; 128],
+            host_batch_slots: [0; 128],
+            host_batch_sampled: [0; 128],
         }
     }
 
@@ -3148,18 +3156,16 @@ impl CudaBackend {
             _ => 128,
         };
 
-        let mut padded_tokens = batch_tokens.to_vec();
-        let mut padded_positions = batch_positions.to_vec();
-        let mut padded_slots = slot_indices.to_vec();
-        while padded_tokens.len() < bucket {
-            padded_tokens.push(0);
-            padded_positions.push(0);
-            padded_slots.push(0);
+        for i in 0..b {
+            self.host_batch_tokens[i] = batch_tokens[i] as i32;
+            self.host_batch_positions[i] = batch_positions[i] as i32;
+            self.host_batch_slots[i] = slot_indices[i] as i32;
         }
-
-        let pos_i32: Vec<i32> = padded_positions.iter().map(|&p| p as i32).collect();
-        let slots_i32: Vec<i32> = padded_slots.iter().map(|&slot| slot as i32).collect();
-        let tok_i32: Vec<i32> = padded_tokens.iter().map(|&t| t as i32).collect();
+        for i in b..bucket {
+            self.host_batch_tokens[i] = 0;
+            self.host_batch_positions[i] = 0;
+            self.host_batch_slots[i] = 0;
+        }
 
         if self.d_batch_positions.is_none() {
             self.d_batch_positions = Some(
@@ -3185,16 +3191,16 @@ impl CudaBackend {
         let d_tok_buf = self.d_batch_tokens.as_mut().unwrap();
 
         d_pos_buf
-            .copy_from_host_async(&pos_i32, s)
+            .copy_from_host_async(&self.host_batch_positions[..bucket], s)
             .map_err(EngineError::BackendError)?;
         d_slots_buf
-            .copy_from_host_async(&slots_i32, s)
+            .copy_from_host_async(&self.host_batch_slots[..bucket], s)
             .map_err(EngineError::BackendError)?;
         d_tok_buf
-            .copy_from_host_async(&tok_i32, s)
+            .copy_from_host_async(&self.host_batch_tokens[..bucket], s)
             .map_err(EngineError::BackendError)?;
 
-        let max_pos = padded_positions.iter().copied().max().unwrap_or(0);
+        let max_pos = batch_positions.iter().copied().max().unwrap_or(0);
         let num_splits = if max_pos >= 256 { 4usize } else { 1usize };
         self.num_splits = num_splits;
 
@@ -3247,10 +3253,9 @@ impl CudaBackend {
                 }
                 if let Some(d_sampled) = &mut self.d_sampled_token {
                     let d_sampled_ptr = d_sampled.as_raw_ptr() as *mut u32;
-                    let mut host_tokens = vec![0u32; b];
                     unsafe {
                         let _ = driver::cudaMemcpyAsync(
-                            host_tokens.as_mut_ptr() as *mut std::ffi::c_void,
+                            self.host_batch_sampled.as_mut_ptr() as *mut std::ffi::c_void,
                             d_sampled_ptr as *const std::ffi::c_void,
                             b * std::mem::size_of::<u32>(),
                             driver::CUDA_MEMCPY_DEVICE_TO_HOST,
@@ -3261,10 +3266,10 @@ impl CudaBackend {
                     for i in 0..b {
                         let slot = slot_indices[i];
                         if slot < self.host_token_buffer.len() {
-                            self.host_token_buffer[slot] = host_tokens[i];
+                            self.host_token_buffer[slot] = self.host_batch_sampled[i];
                         }
                     }
-                    return Ok(host_tokens);
+                    return Ok(self.host_batch_sampled[..b].to_vec());
                 }
             }
         }
@@ -3306,7 +3311,8 @@ impl CudaBackend {
                 if self.host_emb_buffer.len() < total_floats {
                     self.host_emb_buffer.resize(total_floats, 0.0);
                 }
-                for (i, &tok) in padded_tokens.iter().enumerate() {
+                for i in 0..bucket {
+                    let tok = if i < b { batch_tokens[i] } else { 0 };
                     let tok_idx = (tok as usize) % self.vocab_size.max(1);
                     lookup(tok_idx, &mut self.host_emb_buffer[i * h..(i + 1) * h]);
                 }
@@ -3330,7 +3336,8 @@ impl CudaBackend {
             if self.host_emb_buffer.len() < total_floats {
                 self.host_emb_buffer.resize(total_floats, 0.0);
             }
-            for (i, &tok) in padded_tokens.iter().enumerate() {
+            for i in 0..bucket {
+                let tok = if i < b { batch_tokens[i] } else { 0 };
                 let tok_idx = (tok as usize) % self.vocab_size.max(1);
                 lookup(tok_idx, &mut self.host_emb_buffer[i * h..(i + 1) * h]);
             }
@@ -3420,23 +3427,62 @@ impl CudaBackend {
                     ) {
                         let y_v_ptr = d_v.as_typed_ptr::<f32>();
                         unsafe {
-                            driver::launch_cuda_mmvq_qkv_mixed(
-                                d_q.as_typed_ptr::<f32>(),
-                                d_k.as_typed_ptr::<f32>(),
-                                y_v_ptr,
-                                std::ptr::null_mut(),
-                                0,
-                                layer.d_wq.as_raw_ptr(),
-                                layer.d_wk.as_raw_ptr(),
-                                layer.d_wv.as_raw_ptr(),
-                                d_q8_1_ptr,
-                                layer.q_m as i32,
-                                layer.kv_m as i32,
-                                layer.q_k as i32,
-                                layer.v_quant as i32,
-                                bucket as i32,
-                                s,
-                            );
+                            if layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && (layer.v_quant == 1 || layer.v_quant == 2)
+                            {
+                                driver::launch_cuda_mmvq_qkv_mixed(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_k.as_typed_ptr::<f32>(),
+                                    y_v_ptr,
+                                    std::ptr::null_mut(),
+                                    0,
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    bucket as i32,
+                                    s,
+                                );
+                            } else {
+                                Self::dispatch_mmvq(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    &layer.d_wq,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.q_m,
+                                    layer.q_k,
+                                    layer.q_quant,
+                                    bucket,
+                                    s,
+                                );
+                                Self::dispatch_mmvq(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    &layer.d_wk,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.k_quant,
+                                    bucket,
+                                    s,
+                                );
+                                Self::dispatch_mmvq(
+                                    y_v_ptr,
+                                    &layer.d_wv,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.v_quant,
+                                    bucket,
+                                    s,
+                                );
+                            }
                         }
 
                         if let Some(ref d_qb) = layer.d_q_bias {
@@ -3615,27 +3661,18 @@ impl CudaBackend {
                                 (bucket * layer.o_k) as i32,
                                 s,
                             );
-                            if layer.o_quant == 2 {
-                                driver::launch_cuda_mmvq_q6_k_fused_add(
-                                    d_hid.as_typed_ptr::<f32>(),
-                                    layer.d_wo.as_raw_ptr(),
-                                    d_q8_1_ptr,
-                                    layer.o_m as i32,
-                                    layer.o_k as i32,
-                                    bucket as i32,
-                                    s,
-                                );
-                            } else {
-                                driver::launch_cuda_mmvq_q4_k_fused_add(
-                                    d_hid.as_typed_ptr::<f32>(),
-                                    layer.d_wo.as_raw_ptr(),
-                                    d_q8_1_ptr,
-                                    layer.o_m as i32,
-                                    layer.o_k as i32,
-                                    bucket as i32,
-                                    s,
-                                );
-                            }
+                            Self::dispatch_mmvq_add(
+                                d_hid.as_typed_ptr::<f32>(),
+                                &layer.d_wo,
+                                d_out.as_typed_ptr::<f32>(),
+                                d_q8_1_ptr,
+                                layer.o_m,
+                                layer.o_k,
+                                layer.o_quant,
+                                bucket,
+                                s,
+                                self.d_scratch_gate.as_mut().unwrap(),
+                            );
                         }
                     }
                 }
@@ -3663,17 +3700,42 @@ impl CudaBackend {
                         (&mut self.d_scratch_gate, &mut self.d_scratch_up)
                     {
                         unsafe {
-                            driver::launch_cuda_mmvq_gate_up_q4_k(
-                                d_gate.as_typed_ptr::<f32>(),
-                                d_up.as_typed_ptr::<f32>(),
-                                layer.d_w1.as_raw_ptr(),
-                                layer.d_w3.as_raw_ptr(),
-                                d_q8_1_ptr,
-                                layer.inter_m as i32,
-                                h as i32,
-                                bucket as i32,
-                                s,
-                            );
+                            if layer.gate_quant == 1 && layer.up_quant == 1 {
+                                driver::launch_cuda_mmvq_gate_up_q4_k(
+                                    d_gate.as_typed_ptr::<f32>(),
+                                    d_up.as_typed_ptr::<f32>(),
+                                    layer.d_w1.as_raw_ptr(),
+                                    layer.d_w3.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m as i32,
+                                    h as i32,
+                                    bucket as i32,
+                                    s,
+                                );
+                            } else {
+                                Self::dispatch_mmvq(
+                                    d_gate.as_typed_ptr::<f32>(),
+                                    &layer.d_w1,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m,
+                                    h,
+                                    layer.gate_quant,
+                                    bucket,
+                                    s,
+                                );
+                                Self::dispatch_mmvq(
+                                    d_up.as_typed_ptr::<f32>(),
+                                    &layer.d_w3,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m,
+                                    h,
+                                    layer.up_quant,
+                                    bucket,
+                                    s,
+                                );
+                            }
                         }
 
                         let act_n = bucket * layer.inter_m;
@@ -3689,27 +3751,18 @@ impl CudaBackend {
                                     i32::from(self.enable_2_4_sparsity),
                                     s,
                                 );
-                                if layer.down_quant == 2 {
-                                    driver::launch_cuda_mmvq_q6_k_fused_add(
-                                        d_hid.as_typed_ptr::<f32>(),
-                                        layer.d_w2.as_raw_ptr(),
-                                        d_q8_1_swiglu_ptr,
-                                        h as i32,
-                                        layer.inter_m as i32,
-                                        bucket as i32,
-                                        s,
-                                    );
-                                } else {
-                                    driver::launch_cuda_mmvq_q4_k_fused_add(
-                                        d_hid.as_typed_ptr::<f32>(),
-                                        layer.d_w2.as_raw_ptr(),
-                                        d_q8_1_swiglu_ptr,
-                                        h as i32,
-                                        layer.inter_m as i32,
-                                        bucket as i32,
-                                        s,
-                                    );
-                                }
+                                Self::dispatch_mmvq_add(
+                                    d_hid.as_typed_ptr::<f32>(),
+                                    &layer.d_w2,
+                                    d_act.as_typed_ptr::<f32>(),
+                                    d_q8_1_swiglu_ptr,
+                                    h,
+                                    layer.inter_m,
+                                    layer.down_quant,
+                                    bucket,
+                                    s,
+                                    self.d_scratch_k.as_mut().unwrap(),
+                                );
                             }
                         }
                     }
@@ -3769,6 +3822,16 @@ impl CudaBackend {
                         bucket as i32,
                         s,
                     );
+                } else if self.lm_head_quant_type == 9 {
+                    driver::launch_cuda_mmvq_q5_0(
+                        d_logits.as_typed_ptr::<f32>(),
+                        d_lm.as_raw_ptr(),
+                        d_q8_1_ptr,
+                        self.vocab_size as i32,
+                        h as i32,
+                        bucket as i32,
+                        s,
+                    );
                 }
             }
 
@@ -3803,10 +3866,9 @@ impl CudaBackend {
                     }
                 }
 
-                let mut host_tokens = vec![0u32; b];
                 unsafe {
                     let _ = driver::cudaMemcpyAsync(
-                        host_tokens.as_mut_ptr() as *mut std::ffi::c_void,
+                        self.host_batch_sampled.as_mut_ptr() as *mut std::ffi::c_void,
                         d_sampled_ptr as *const std::ffi::c_void,
                         b * std::mem::size_of::<u32>(),
                         driver::CUDA_MEMCPY_DEVICE_TO_HOST,
@@ -3818,10 +3880,10 @@ impl CudaBackend {
                 for i in 0..b {
                     let slot = slot_indices[i];
                     if slot < self.host_token_buffer.len() {
-                        self.host_token_buffer[slot] = host_tokens[i];
+                        self.host_token_buffer[slot] = self.host_batch_sampled[i];
                     }
                 }
-                return Ok(host_tokens);
+                return Ok(self.host_batch_sampled[..b].to_vec());
             }
         }
 
