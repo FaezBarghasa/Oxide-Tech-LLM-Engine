@@ -610,17 +610,9 @@ impl ContinuousBatchingEngine {
             for (i, &slot_id) in decode_slots.iter().enumerate() {
                 let next_token = next_tokens[i];
                 let is_eos = if let Some(ref tok) = self.tokenizer {
-                    tok.eos_id == Some(next_token)
-                        || (next_token == 0
-                            || next_token == 2
-                            || next_token == 128_001
-                            || next_token == 128_008
-                            || next_token == 128_009
-                            || next_token == 151_643
-                            || next_token == 151_645)
+                    tok.is_stop_token(next_token)
                 } else {
-                    next_token == 0
-                        || next_token == 2
+                    next_token == 2
                         || next_token == 128_001
                         || next_token == 128_008
                         || next_token == 128_009
@@ -867,16 +859,15 @@ impl ContinuousBatchingEngine {
                     }
 
                     let is_eos = if let Some(ref tok) = self.tokenizer {
-                        tok.eos_id == Some(next_token)
-                            || (next_token == 0
-                                || next_token == 2
-                                || next_token == 128_001
-                                || next_token == 128_009)
+                        tok.is_stop_token(next_token)
                     } else {
                         next_token == 0
                             || next_token == 2
                             || next_token == 128_001
+                            || next_token == 128_008
                             || next_token == 128_009
+                            || next_token == 151_643
+                            || next_token == 151_645
                     };
                     let mut is_accepting = false;
                     if let Some(ref grammar) = seq.dfa.clone() {

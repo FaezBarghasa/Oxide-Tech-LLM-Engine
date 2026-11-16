@@ -21,11 +21,20 @@ pub const HIP_MEMCPY_HOST_TO_DEVICE: u32 = 1;
 pub const HIP_MEMCPY_DEVICE_TO_HOST: u32 = 2;
 pub const HIP_MEMCPY_DEVICE_TO_DEVICE: u32 = 3;
 
+pub const HIP_HOST_MALLOC_DEFAULT: u32 = 0x0;
+pub const HIP_HOST_MALLOC_PORTABLE: u32 = 0x1;
+pub const HIP_HOST_MALLOC_MAPPED: u32 = 0x2;
+pub const HIP_HOST_MALLOC_WRITECOMBINED: u32 = 0x4;
+pub const HIP_HOST_MALLOC_COHERENT: u32 = 0x4000_0000;
+pub const HIP_HOST_MALLOC_NON_COHERENT: u32 = 0x8000_0000;
+
 type HipSetDeviceFn = unsafe extern "C" fn(i32) -> hipError_t;
 type HipGetDeviceFn = unsafe extern "C" fn(*mut i32) -> hipError_t;
 type HipGetDeviceCountFn = unsafe extern "C" fn(*mut i32) -> hipError_t;
 type HipMallocFn = unsafe extern "C" fn(*mut *mut c_void, usize) -> hipError_t;
 type HipFreeFn = unsafe extern "C" fn(*mut c_void) -> hipError_t;
+type HipHostMallocFn = unsafe extern "C" fn(*mut *mut c_void, usize, u32) -> hipError_t;
+type HipHostFreeFn = unsafe extern "C" fn(*mut c_void) -> hipError_t;
 type HipMemcpyAsyncFn =
     unsafe extern "C" fn(*mut c_void, *const c_void, usize, u32, hipStream_t) -> hipError_t;
 type HipStreamCreateFn = unsafe extern "C" fn(*mut hipStream_t) -> hipError_t;
@@ -40,6 +49,8 @@ pub struct HipDriverApi {
     pub get_device_count: Option<HipGetDeviceCountFn>,
     pub malloc: Option<HipMallocFn>,
     pub free: Option<HipFreeFn>,
+    pub host_malloc: Option<HipHostMallocFn>,
+    pub host_free: Option<HipHostFreeFn>,
     pub memcpy_async: Option<HipMemcpyAsyncFn>,
     pub stream_create: Option<HipStreamCreateFn>,
     pub stream_destroy: Option<HipStreamDestroyFn>,
@@ -91,6 +102,8 @@ fn init_hip_api() -> Option<HipDriverApi> {
             get_device_count: load_sym(handle, c"hipGetDeviceCount"),
             malloc: load_sym(handle, c"hipMalloc"),
             free: load_sym(handle, c"hipFree"),
+            host_malloc: load_sym(handle, c"hipHostMalloc"),
+            host_free: load_sym(handle, c"hipHostFree"),
             memcpy_async: load_sym(handle, c"hipMemcpyAsync"),
             stream_create: load_sym(handle, c"hipStreamCreate"),
             stream_destroy: load_sym(handle, c"hipStreamDestroy"),
@@ -245,6 +258,75 @@ impl Drop for HipDeviceBuffer {
             // SAFETY: Freeing valid device pointer.
             unsafe {
                 let _ = free_fn(self.ptr);
+            }
+            self.ptr = ptr::null_mut();
+        }
+    }
+}
+
+/// Safe RAII Unified Memory Coherent Host Buffer for AMD APU SVM.
+#[derive(Debug)]
+pub struct HipHostBuffer {
+    ptr: *mut c_void,
+    size_bytes: usize,
+}
+
+// SAFETY: Host buffers allocated via hipHostMalloc with HIP_HOST_MALLOC_COHERENT are thread-safe.
+unsafe impl Send for HipHostBuffer {}
+// SAFETY: Host buffers allocated via hipHostMalloc with HIP_HOST_MALLOC_COHERENT are thread-safe.
+unsafe impl Sync for HipHostBuffer {}
+
+impl HipHostBuffer {
+    pub fn allocate_coherent(size_bytes: usize) -> Result<Self, String> {
+        if size_bytes == 0 {
+            return Ok(Self {
+                ptr: ptr::null_mut(),
+                size_bytes: 0,
+            });
+        }
+        if let Some(api) = get_hip_api()
+            && let Some(host_malloc_fn) = api.host_malloc
+        {
+            let mut ptr: *mut c_void = ptr::null_mut();
+            let flags = HIP_HOST_MALLOC_PORTABLE | HIP_HOST_MALLOC_COHERENT;
+            // SAFETY: Calling hipHostMalloc with valid pointer to pointer and valid byte size.
+            let status = unsafe { host_malloc_fn(&raw mut ptr, size_bytes, flags) };
+            if status == HIP_SUCCESS && !ptr.is_null() {
+                return Ok(Self { ptr, size_bytes });
+            }
+            return Err(format!("hipHostMalloc coherent failed with code {status}"));
+        }
+        Err("HIP runtime is not loaded".to_string())
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn as_raw_ptr(&self) -> *mut c_void {
+        self.ptr
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn as_typed_ptr<T>(&self) -> *mut T {
+        self.ptr.cast()
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn size_bytes(&self) -> usize {
+        self.size_bytes
+    }
+}
+
+impl Drop for HipHostBuffer {
+    fn drop(&mut self) {
+        if !self.ptr.is_null()
+            && let Some(api) = get_hip_api()
+            && let Some(host_free_fn) = api.host_free
+        {
+            // SAFETY: Calling hipHostFree on a valid host pointer allocated via hipHostMalloc.
+            unsafe {
+                let _ = host_free_fn(self.ptr);
             }
             self.ptr = ptr::null_mut();
         }

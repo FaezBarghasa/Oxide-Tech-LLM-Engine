@@ -159,6 +159,32 @@ impl GgufTokenizer {
 
     /// Decode a sequence of token IDs back into human-readable text.
     #[must_use]
+    pub fn is_stop_token(&self, token_id: u32) -> bool {
+        if Some(token_id) == self.eos_id {
+            return true;
+        }
+        if let Some(tok_str) = self.id_to_token.get(token_id as usize) {
+            let s = tok_str.as_str();
+            if s == "<|endoftext|>"
+                || s == "<|im_end|>"
+                || s == "<|eot_id|>"
+                || s == "<end_of_turn>"
+                || s == "<eos>"
+                || s == "</s>"
+            {
+                return true;
+            }
+        }
+        token_id == 2
+            || token_id == 128_001
+            || token_id == 128_008
+            || token_id == 128_009
+            || token_id == 151_643
+            || token_id == 151_645
+    }
+
+    /// Decode a sequence of token IDs back into human-readable text.
+    #[must_use]
     pub fn decode(&self, tokens: &[u32]) -> String {
         let mut text = String::new();
         for &tok in tokens {

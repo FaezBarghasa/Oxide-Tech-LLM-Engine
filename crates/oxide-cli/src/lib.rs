@@ -1263,7 +1263,7 @@ async fn run_chat_session(
 
         let is_speculative = draft_model.is_some()
             || match speculative {
-                "auto" => (greedy || temp <= 0.2) && backend_str == "cuda",
+                "auto" => draft_model.is_some(),
                 "ensemble" | "dynamic" | "ngram" | "n-gram" | "prompt-lookup" | "medusa"
                 | "dflash" => backend_str == "cuda" || draft_model.is_some(),
                 _ => false,

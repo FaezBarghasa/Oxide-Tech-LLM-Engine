@@ -27,14 +27,14 @@ __global__ void hip_rmsnorm_kernel(
         sum_sq += val * val;
     }
 
-    // AMD Wavefront 64-lane shuffle reduction
-    for (int offset = 32; offset > 0; offset >>= 1) {
+    // AMD Wavefront shuffle reduction: works for both Wave32 and Wave64
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
         sum_sq += __shfl_down(sum_sq, offset);
     }
 
     __shared__ float s_warp_sums[16];
-    int wave_id = tid / 64;
-    int lane_id = tid % 64;
+    int wave_id = tid / warpSize;
+    int lane_id = tid % warpSize;
 
     if (lane_id == 0) {
         s_warp_sums[wave_id] = sum_sq;
@@ -43,8 +43,8 @@ __global__ void hip_rmsnorm_kernel(
 
     __shared__ float s_inv_rms;
     if (wave_id == 0) {
-        float b_sum = (lane_id < (blockDim.x / 64)) ? s_warp_sums[lane_id] : 0.0f;
-        for (int offset = 32; offset > 0; offset >>= 1) {
+        float b_sum = (lane_id < (blockDim.x / warpSize)) ? s_warp_sums[lane_id] : 0.0f;
+        for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
             b_sum += __shfl_down(b_sum, offset);
         }
         if (lane_id == 0) {
@@ -95,14 +95,14 @@ __global__ void hip_gemv_q4_0_kernel(
         }
     }
 
-    // Wavefront reduction
-    for (int offset = 32; offset > 0; offset >>= 1) {
+    // Wavefront reduction (Wave32 / Wave64)
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
         acc += __shfl_down(acc, offset);
     }
 
     __shared__ float s_acc[16];
-    int wave_id = tid / 64;
-    int lane_id = tid % 64;
+    int wave_id = tid / warpSize;
+    int lane_id = tid % warpSize;
 
     if (lane_id == 0) {
         s_acc[wave_id] = acc;
@@ -110,8 +110,8 @@ __global__ void hip_gemv_q4_0_kernel(
     __syncthreads();
 
     if (wave_id == 0) {
-        float b_acc = (lane_id < (blockDim.x / 64)) ? s_acc[lane_id] : 0.0f;
-        for (int offset = 32; offset > 0; offset >>= 1) {
+        float b_acc = (lane_id < (blockDim.x / warpSize)) ? s_acc[lane_id] : 0.0f;
+        for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
             b_acc += __shfl_down(b_acc, offset);
         }
         if (lane_id == 0) {

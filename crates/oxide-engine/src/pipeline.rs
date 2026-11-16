@@ -170,9 +170,25 @@ impl SpecializedPipeline {
         slot_indices: &[usize],
     ) -> Result<Vec<u32>> {
         if let Self::Llama3Cuda(engine) = self {
-            engine
-                .backend
-                .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices)
+            let is_all_q4_k = engine.backend.layers.iter().all(|l| l.q_quant == 1);
+            if is_all_q4_k && batch_tokens.len() > 1 {
+                engine
+                    .backend
+                    .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices)
+            } else {
+                let mut out = Vec::with_capacity(batch_tokens.len());
+                for i in 0..batch_tokens.len() {
+                    let cmd = StepCommand::new(
+                        slot_indices[i] as u64,
+                        batch_tokens[i],
+                        slot_indices[i] as u16,
+                        false,
+                    );
+                    let completion = engine.step_monomorphized(&cmd)?;
+                    out.push(completion.sampled_token);
+                }
+                Ok(out)
+            }
         } else {
             let mut out = Vec::with_capacity(batch_tokens.len());
             for i in 0..batch_tokens.len() {

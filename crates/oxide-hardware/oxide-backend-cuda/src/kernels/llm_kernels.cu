@@ -4052,7 +4052,7 @@ __global__ __launch_bounds__(256, 1) void mmq_q4_k_cuda_kernel(
     int row_in_tile = lane_id % 16;
     int col_byte = (lane_id / 16) * 16;
     int mem_row = w_row * 16 + row_in_tile;
-    int sub_k = lane_id % 4;
+    int group = lane_id / 4;
 
 #pragma unroll
     for (int chunk = 0; chunk < 4; ++chunk) {
@@ -4091,11 +4091,11 @@ __global__ __launch_bounds__(256, 1) void mmq_q4_k_cuda_kernel(
 #pragma unroll
         for (int tc = 0; tc < 4; ++tc) {
           int tok_base_tc = (w_col * 4 + tc) * 8;
-          int col_b = tok_base_tc + lane_id / 4;
+          int cur_t0 = tok_base_tc + t0;
+          int cur_t1 = tok_base_tc + t1;
 
-          const int *x_qs = (const int *)&s_x[col_b][sub].qs[0];
-          int b0 = x_qs[sub_k];
-          int b1 = x_qs[sub_k + 4];
+          int b0 = ((const int *)s_x[cur_t0][sub].qs)[group];
+          int b1 = ((const int *)s_x[cur_t1][sub].qs)[group];
 
           int d0 = 0, d1 = 0, d2 = 0, d3 = 0;
           asm volatile(
@@ -4103,9 +4103,6 @@ __global__ __launch_bounds__(256, 1) void mmq_q4_k_cuda_kernel(
               "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
               : "+r"(d0), "+r"(d1), "+r"(d2), "+r"(d3)
               : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
-
-          int cur_t0 = tok_base_tc + t0;
-          int cur_t1 = tok_base_tc + t1;
 
           float d8_t0 = __low2float(s_x[cur_t0][sub].ds);
           float sum8_t0 = __high2float(s_x[cur_t0][sub].ds);

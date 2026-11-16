@@ -427,22 +427,6 @@ async fn chat_completions_handler(
         stream: stream_mode,
     };
 
-    // Acquire RAII slot lease
-    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await
-    else {
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": {
-                    "message": "All inference slots busy (concurrency limit reached)",
-                    "type": "server_error",
-                    "code": 503
-                }
-            })),
-        )
-            .into_response();
-    };
-
     let target_pipeline = state.resolve_pipeline(&payload.model).await;
     let tokenizer = Arc::clone(&state.tokenizer);
     let initial_token = prompt_tokens.last().copied().unwrap_or(1);
@@ -469,7 +453,6 @@ async fn chat_completions_handler(
             Ok(mut token_rx) => {
                 if stream_mode {
                     let stream = async_stream::stream! {
-                        let _guard = slot_guard;
                         let mut first = true;
 
                         while let Some(event) = token_rx.recv().await {
@@ -541,6 +524,22 @@ async fn chat_completions_handler(
             }
         }
     }
+
+    // Acquire RAII slot lease for single-request pipeline fallback
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await
+    else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "All inference slots busy (concurrency limit reached)",
+                    "type": "server_error",
+                    "code": 503
+                }
+            })),
+        )
+            .into_response();
+    };
 
     let prefill_tokens = if prompt_tokens.len() > 1 {
         &prompt_tokens[..prompt_tokens.len() - 1]
@@ -688,21 +687,6 @@ async fn completions_handler(
         stream: false,
     };
 
-    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await
-    else {
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": {
-                    "message": "All inference slots busy (concurrency limit reached)",
-                    "type": "server_error",
-                    "code": 503
-                }
-            })),
-        )
-            .into_response();
-    };
-
     let tokenizer = Arc::clone(&state.tokenizer);
 
     // High-throughput Continuous Batching path for completions
@@ -728,8 +712,6 @@ async fn completions_handler(
             }
         }
 
-        drop(slot_guard);
-
         let resp = CompletionResponse {
             id: req_id,
             object: "text_completion".to_string(),
@@ -749,6 +731,21 @@ async fn completions_handler(
 
         return Json(resp).into_response();
     }
+
+    let Some(slot_guard) = LeasedSlotGuard::lease(&state.slot_manager, slot_request.clone()).await
+    else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "All inference slots busy (concurrency limit reached)",
+                    "type": "server_error",
+                    "code": 503
+                }
+            })),
+        )
+            .into_response();
+    };
 
     let sampling_config = SamplingConfig {
         temperature: payload.temperature.unwrap_or(0.7),

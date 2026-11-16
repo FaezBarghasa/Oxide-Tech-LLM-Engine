@@ -323,7 +323,10 @@ pub fn dot_q8_0_vnni(u_act: &[u8; 32], s_wt: &[i8; 32], scale_product: f32) -> f
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512vnni", enable = "avx512vl")]
 unsafe fn dot_q8_0_vnni_avx512vl(u_act: &[u8; 32], s_wt: &[i8; 32], scale_product: f32) -> f32 {
-    use core::arch::x86_64::{_mm256_dpbusd_epi32, _mm256_loadu_si256, _mm256_setzero_si256};
+    use core::arch::x86_64::{
+        _mm_add_epi32, _mm_cvtsi128_si32, _mm_srli_si128, _mm256_castsi256_si128,
+        _mm256_dpbusd_epi32, _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_setzero_si256,
+    };
 
     // SAFETY: Verified AVX-512 VNNI / VL and slices are 32 bytes aligned or unaligned.
     unsafe {
@@ -332,11 +335,13 @@ unsafe fn dot_q8_0_vnni_avx512vl(u_act: &[u8; 32], s_wt: &[i8; 32], scale_produc
         let acc = _mm256_setzero_si256();
         let res = _mm256_dpbusd_epi32(acc, a, b);
 
-        let mut out = [0i32; 8];
-        core::arch::x86_64::_mm256_storeu_si256(out.as_mut_ptr().cast(), res);
-
-        let sum: i32 = out.iter().sum();
-        sum as f32 * scale_product
+        let hi = _mm256_extracti128_si256(res, 1);
+        let lo = _mm256_castsi256_si128(res);
+        let sum128 = _mm_add_epi32(hi, lo);
+        let sum64 = _mm_add_epi32(sum128, _mm_srli_si128(sum128, 8));
+        let sum32 = _mm_add_epi32(sum64, _mm_srli_si128(sum64, 4));
+        let scalar_sum = _mm_cvtsi128_si32(sum32);
+        scalar_sum as f32 * scale_product
     }
 }
 
