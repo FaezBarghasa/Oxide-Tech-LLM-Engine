@@ -194,7 +194,7 @@ impl std::fmt::Debug for ContinuousBatchingEngine {
             .field("max_slots", &self.max_slots)
             .field("active_sequences_count", &self.active_sequences.len())
             .field("prefill_config", &self.prefill_config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -253,7 +253,7 @@ impl ContinuousBatchingEngine {
         let worker_handle = std::thread::Builder::new()
             .name("oxide-gpu-worker".to_string())
             .spawn(move || {
-                run_gpu_worker_loop(exec_rx, comp_tx, pipeline_clone, worker_running_thread, parker);
+                run_gpu_worker_loop(exec_rx, comp_tx, &pipeline_clone, &worker_running_thread, &parker);
             })
             .expect("Failed to spawn oxide-gpu-worker thread");
 
@@ -1100,6 +1100,401 @@ impl ContinuousBatchingEngine {
         for slot_id in finished_slots {
             if let Some(mut seq) = self.active_sequences.remove(&slot_id) {
                 seq.block_table.release_all(arena);
+            }
+        }
+    }
+
+    /// Lock-free overlap iteration step dispatched via rtrb SPSC ring buffer.
+    /// Interleaves SLA-bounded chunked prefill slices and unified decode tokens in one ragged descriptor.
+    async fn step_batch_overlap(&mut self) {
+        let slot_keys: Vec<usize> = self.active_sequences.keys().copied().collect();
+        if slot_keys.is_empty() {
+            return;
+        }
+
+        let mut finished_slots = Vec::new();
+
+        // Stage 1: SLA-bounded chunked prefill budgeting (Task 5.2)
+        let active_decode_count = self
+            .active_sequences
+            .values()
+            .filter(|s| matches!(s.phase, SequencePhase::Decode))
+            .count();
+        let mut prefill_budget = self
+            .prefill_config
+            .compute_prefill_budget(active_decode_count);
+
+        let mut prefill_chunks = Vec::new();
+        // Drain any pending jump prefill chunks
+        prefill_chunks.append(&mut self.pending_jump_chunks);
+
+        for &slot_id in &slot_keys {
+            if prefill_budget == 0 {
+                break;
+            }
+            if let Some(seq) = self.active_sequences.get(&slot_id) {
+                if let SequencePhase::Prefill { uncomputed_start } = seq.phase {
+                    let target_len = seq.prompt_tokens.len().saturating_sub(1);
+                    let needed = target_len.saturating_sub(uncomputed_start);
+                    if needed > 0 {
+                        let chunk_len = needed.min(prefill_budget);
+                        let chunk =
+                            seq.prompt_tokens[uncomputed_start..uncomputed_start + chunk_len].to_vec();
+                        prefill_budget = prefill_budget.saturating_sub(chunk_len);
+                        let is_final = uncomputed_start + chunk_len >= target_len;
+                        prefill_chunks.push(PrefillChunkDesc {
+                            slot_id,
+                            tokens: chunk,
+                            seq_id: slot_id as u16,
+                            is_final_chunk: is_final,
+                            total_prompt_len: seq.prompt_tokens.len(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Stage 2: Batched decode iteration across active decode sequences
+        let mut decode_slots = Vec::new();
+        for &slot_id in &slot_keys {
+            if let Some(seq) = self.active_sequences.get(&slot_id) {
+                if matches!(seq.phase, SequencePhase::Decode) {
+                    decode_slots.push(DecodeSlotDesc {
+                        slot_id,
+                        token: seq.current_token,
+                        position: seq.current_position,
+                    });
+                }
+            }
+        }
+
+        let prefix_clones = std::mem::take(&mut self.pending_prefix_clones);
+
+        if prefill_chunks.is_empty() && decode_slots.is_empty() && prefix_clones.is_empty() {
+            return;
+        }
+
+        let desc = BatchExecDescriptor {
+            prefix_clones,
+            prefill_chunks,
+            decode_slots,
+        };
+
+        // Stage 3: Lock-free SPSC dispatch to dedicated worker thread
+        let Some(ref mut exec_tx) = self.exec_tx else {
+            return;
+        };
+
+        while exec_tx.push(desc.clone()).is_err() {
+            tokio::task::yield_now().await;
+        }
+        if let Some(ref unparker) = self.worker_unparker {
+            unparker.unpark();
+        }
+
+        // Stage 4: Overlap wait with micro-spins then tokio yield
+        let Some(ref mut comp_rx) = self.comp_rx else {
+            return;
+        };
+
+        let mut spin_count: u32 = 0;
+        let completion = loop {
+            if let Ok(comp) = comp_rx.pop() {
+                break comp;
+            }
+            spin_count = spin_count.saturating_add(1);
+            if spin_count < 32 {
+                std::hint::spin_loop();
+            } else {
+                tokio::task::yield_now().await;
+            }
+        };
+
+        // Stage 5: Ingest prefill results
+        for p_res in completion.prefill_results {
+            if let Some(err) = p_res.error {
+                tracing::error!("Prefill failed for slot {}: {err}", p_res.slot_id);
+                if let Some(seq) = self.active_sequences.get(&p_res.slot_id) {
+                    let _ = seq.sender.send(TokenEvent {
+                        token_id: 0,
+                        is_terminal: true,
+                        finish_reason: Some(format!("prefill_error: {err}")),
+                    });
+                }
+                finished_slots.push(p_res.slot_id);
+                continue;
+            }
+
+            if let Some(seq) = self.active_sequences.get_mut(&p_res.slot_id) {
+                if let SequencePhase::Prefill { uncomputed_start } = seq.phase {
+                    let next_start = uncomputed_start + p_res.tokens_processed;
+                    let target_len = seq.prompt_tokens.len().saturating_sub(1);
+                    if next_start >= target_len || p_res.is_final_chunk {
+                        let num_pages = (seq.prompt_tokens.len() + 15) / 16;
+                        let block_ids: Vec<u32> = (0..num_pages as u32)
+                            .map(|p| ((p_res.slot_id as u32) << 16) | p)
+                            .collect();
+                        self.radix_cache.insert(&seq.prompt_tokens, &block_ids);
+                        seq.phase = SequencePhase::Decode;
+                        seq.current_token = *seq.prompt_tokens.last().unwrap_or(&1);
+                        seq.current_position = target_len;
+                    } else {
+                        seq.phase = SequencePhase::Prefill {
+                            uncomputed_start: next_start,
+                        };
+                    }
+                }
+            }
+        }
+
+        // Stage 6: Ingest decode results and emit token streaming events
+        for d_res in completion.decode_results {
+            let slot_id = d_res.slot_id;
+            if let Some(err) = d_res.error {
+                tracing::error!("Decode failed for slot {slot_id}: {err}");
+                finished_slots.push(slot_id);
+                continue;
+            }
+
+            let next_token = d_res.next_token;
+            let is_eos = if let Some(ref tok) = self.tokenizer {
+                tok.is_stop_token(next_token)
+            } else {
+                next_token == 2
+                    || next_token == 128_001
+                    || next_token == 128_008
+                    || next_token == 128_009
+                    || next_token == 151_643
+                    || next_token == 151_645
+            };
+
+            if let Some(seq) = self.active_sequences.get_mut(&slot_id) {
+                seq.current_token = next_token;
+                seq.current_position += 1;
+                seq.generated_count += 1;
+
+                let mut is_accepting = false;
+                if let Some(ref grammar) = seq.dfa.clone() {
+                    let tok_bytes: Vec<u8> = if let Some(ref tok) = self.tokenizer {
+                        tok.decode_token(next_token).into_bytes()
+                    } else {
+                        vec![next_token as u8]
+                    };
+                    for b in tok_bytes {
+                        if let Ok(next_s) = grammar.transition(seq.dfa_state, b) {
+                            if next_s != DFA_ERROR_STATE {
+                                seq.dfa_state = next_s;
+                            }
+                        }
+                    }
+                    is_accepting = grammar
+                        .accepting_states
+                        .get(seq.dfa_state as usize)
+                        .copied()
+                        .unwrap_or(false);
+                }
+
+                let reached_max = seq.generated_count >= seq.max_tokens;
+                let is_terminal = is_eos || reached_max || is_accepting;
+
+                let finish_reason = if is_eos || is_accepting {
+                    Some("stop".to_string())
+                } else if reached_max {
+                    Some("length".to_string())
+                } else {
+                    None
+                };
+
+                let event = TokenEvent {
+                    token_id: next_token,
+                    is_terminal,
+                    finish_reason,
+                };
+
+                let send_ok = seq.sender.send(event).is_ok();
+                if is_terminal || !send_ok {
+                    finished_slots.push(slot_id);
+                } else if let Some(ref grammar) = seq.dfa.clone() {
+                    let (jump_bytes, next_state) =
+                        grammar.find_jump_forward_bytes(seq.dfa_state, 16);
+                    if !jump_bytes.is_empty() {
+                        let jump_tokens: Vec<u32> = if let Some(ref tok) = self.tokenizer {
+                            if let Ok(s) = std::str::from_utf8(&jump_bytes) {
+                                tok.encode(s)
+                            } else {
+                                jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                            }
+                        } else {
+                            jump_bytes.iter().map(|&b| u32::from(b)).collect()
+                        };
+
+                        for &jump_tok in &jump_tokens {
+                            if seq.generated_count >= seq.max_tokens {
+                                break;
+                            }
+                            let is_jump_accepting = grammar
+                                .accepting_states
+                                .get(next_state as usize)
+                                .copied()
+                                .unwrap_or(false);
+                            let reached_max = seq.generated_count + 1 >= seq.max_tokens;
+                            let is_terminal = reached_max || is_jump_accepting;
+                            let finish_reason = if is_jump_accepting {
+                                Some("stop".to_string())
+                            } else if reached_max {
+                                Some("length".to_string())
+                            } else {
+                                None
+                            };
+
+                            let event = TokenEvent {
+                                token_id: jump_tok,
+                                is_terminal,
+                                finish_reason,
+                            };
+                            let _ = seq.sender.send(event);
+
+                            seq.current_token = jump_tok;
+                            seq.current_position += 1;
+                            seq.generated_count += 1;
+
+                            if is_terminal {
+                                finished_slots.push(slot_id);
+                                break;
+                            }
+                        }
+
+                        // Queue jump tokens for prefill in the next batch to keep KV cache synchronized
+                        self.pending_jump_chunks.push(PrefillChunkDesc {
+                            slot_id,
+                            tokens: jump_tokens,
+                            seq_id: slot_id as u16,
+                            is_final_chunk: false,
+                            total_prompt_len: seq.prompt_tokens.len(),
+                        });
+
+                        seq.dfa_state = next_state;
+                    }
+                }
+            }
+        }
+
+        // Stage 7: Clean up finished sequences
+        for slot_id in finished_slots {
+            self.active_sequences.remove(&slot_id);
+        }
+    }
+}
+
+impl Drop for ContinuousBatchingEngine {
+    fn drop(&mut self) {
+        if let Some(ref running) = self.worker_running {
+            running.store(false, Ordering::Relaxed);
+        }
+        if let Some(ref unparker) = self.worker_unparker {
+            unparker.unpark();
+        }
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Dedicated OS worker thread loop for GPU batch execution.
+fn run_gpu_worker_loop(
+    mut exec_rx: rtrb::Consumer<BatchExecDescriptor>,
+    mut comp_tx: rtrb::Producer<BatchExecCompletion>,
+    pipeline: &Arc<Mutex<SpecializedPipeline>>,
+    running: &Arc<AtomicBool>,
+    parker: &Parker,
+) {
+    let core_ids = core_affinity::get_core_ids().unwrap_or_default();
+    if let Some(core) = core_ids.into_iter().find(|c| c.id == 2) {
+        let _ = core_affinity::set_for_current(core);
+    }
+
+    let mut idle_spins: u64 = 0;
+    while running.load(Ordering::Relaxed) {
+        if let Ok(desc) = exec_rx.pop() {
+            idle_spins = 0;
+            let mut prefill_results = Vec::with_capacity(desc.prefill_chunks.len());
+            let mut decode_results = Vec::with_capacity(desc.decode_slots.len());
+
+            let mut pipe = pipeline.blocking_lock();
+
+            // 1. Process Radix prefix clones
+            for clone_cmd in desc.prefix_clones {
+                let _ = pipe.clone_kv_prefix(
+                    clone_cmd.src_slot,
+                    clone_cmd.dst_slot,
+                    clone_cmd.num_tokens,
+                );
+            }
+
+            // 2. Process chunked prefill slices
+            for chunk in desc.prefill_chunks {
+                let res = pipe.prefill(chunk.slot_id as u64, &chunk.tokens, chunk.seq_id);
+                prefill_results.push(PrefillChunkResult {
+                    slot_id: chunk.slot_id,
+                    tokens_processed: chunk.tokens.len(),
+                    is_final_chunk: chunk.is_final_chunk,
+                    total_prompt_len: chunk.total_prompt_len,
+                    error: res.err().map(|e| e.to_string()),
+                });
+            }
+
+            // 3. Batched decode step
+            if !desc.decode_slots.is_empty() {
+                let batch_tokens: Vec<u32> =
+                    desc.decode_slots.iter().map(|d| d.token).collect();
+                let batch_positions: Vec<usize> =
+                    desc.decode_slots.iter().map(|d| d.position).collect();
+                let slot_indices: Vec<usize> =
+                    desc.decode_slots.iter().map(|d| d.slot_id).collect();
+
+                match pipe.step_continuous_batch(&batch_tokens, &batch_positions, &slot_indices) {
+                    Ok(next_tokens) => {
+                        for (i, slot) in desc.decode_slots.into_iter().enumerate() {
+                            decode_results.push(DecodeSlotResult {
+                                slot_id: slot.slot_id,
+                                next_token: next_tokens[i],
+                                error: None,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        for slot in desc.decode_slots {
+                            decode_results.push(DecodeSlotResult {
+                                slot_id: slot.slot_id,
+                                next_token: 0,
+                                error: Some(e.to_string()),
+                            });
+                        }
+                    }
+                }
+            }
+
+            drop(pipe);
+
+            let completion = BatchExecCompletion {
+                prefill_results,
+                decode_results,
+            };
+
+            while comp_tx.push(completion.clone()).is_err() {
+                if !running.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::hint::spin_loop();
+            }
+        } else {
+            idle_spins = idle_spins.saturating_add(1);
+            if idle_spins <= 200 {
+                std::hint::spin_loop();
+            } else if idle_spins <= 2000 {
+                std::thread::yield_now();
+            } else {
+                parker.park_timeout(std::time::Duration::from_micros(50));
             }
         }
     }

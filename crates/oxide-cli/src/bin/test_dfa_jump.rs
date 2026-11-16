@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("Full output text: {:?}", generated_text);
     assert!(
-        generated_text.starts_with("{\"answer\": "),
+        generated_text.trim_start().starts_with("{\"answer\": "),
         "Generated text must begin with deterministic DFA prefix"
     );
 

@@ -1421,7 +1421,9 @@ name = "oxide-engine"
 version = "0.5.0"
 dependencies = [
  "bytemuck",
+ "core_affinity",
  "crossbeam",
+ "crossbeam-utils",
  "oxide-alloc",
  "oxide-backend-cpu",
  "oxide-backend-cuda",
