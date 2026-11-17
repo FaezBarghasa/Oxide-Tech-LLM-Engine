@@ -3376,6 +3376,182 @@ pub fn gemv_qkv_q4_k_prequantized(
     });
 }
 
+/// Unified Fused Q(Q4_K) + K(Q4_K) + V(Q6_K) Matrix-Vector Multiplication in a single ThreadTeam pass.
+#[allow(clippy::too_many_arguments, clippy::if_not_else)]
+pub fn gemv_qkv_q4_k_q6_k_prequantized(
+    q_matrix: &[crate::gguf_quants::BlockQ4_K],
+    m_q: usize,
+    k_matrix: &[crate::gguf_quants::BlockQ4_K],
+    m_k: usize,
+    v_matrix: &[crate::int_quant::BlockQ6_K],
+    m_v: usize,
+    n: usize,
+    q8_k_act: &[crate::int_quant::BlockQ8_K],
+    out_q: &mut [f32],
+    out_k: &mut [f32],
+    out_v: &mut [f32],
+) {
+    let blocks_per_row = n / 256;
+    let m_total = m_q + m_k + m_v;
+
+    let team = oxide_core::thread_team::global_thread_team(get_team_threads());
+    let q_ptr = out_q.as_mut_ptr() as usize;
+    let k_ptr = out_k.as_mut_ptr() as usize;
+    let v_ptr = out_v.as_mut_ptr() as usize;
+
+    team.dispatch_rows(m_total, |start, end| {
+        let mut row = start;
+        #[cfg(target_arch = "x86_64")]
+        let has_vnni = is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
+        #[cfg(target_arch = "x86_64")]
+        let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+        #[cfg(not(target_arch = "x86_64"))]
+        let (has_vnni, has_avx2) = (false, false);
+
+        #[cfg(target_arch = "x86_64")]
+        if has_vnni {
+            while row + 3 < end {
+                if row + 3 < m_q {
+                    let r0 = &q_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                    let r1 = &q_matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                    let r2 = &q_matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                    let r3 = &q_matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                    let (v0, v1, v2, v3) =
+                        unsafe { dot_q4_k_q8_k_4rows_avx512vnni(r0, r1, r2, r3, q8_k_act) };
+                    unsafe {
+                        let dst = (q_ptr as *mut f32).add(row);
+                        *dst = v0;
+                        *dst.add(1) = v1;
+                        *dst.add(2) = v2;
+                        *dst.add(3) = v3;
+                    }
+                    row += 4;
+                    continue;
+                } else if row >= m_q && row + 3 < m_q + m_k {
+                    let k_row = row - m_q;
+                    let r0 = &k_matrix[k_row * blocks_per_row..(k_row + 1) * blocks_per_row];
+                    let r1 = &k_matrix[(k_row + 1) * blocks_per_row..(k_row + 2) * blocks_per_row];
+                    let r2 = &k_matrix[(k_row + 2) * blocks_per_row..(k_row + 3) * blocks_per_row];
+                    let r3 = &k_matrix[(k_row + 3) * blocks_per_row..(k_row + 4) * blocks_per_row];
+                    let (v0, v1, v2, v3) =
+                        unsafe { dot_q4_k_q8_k_4rows_avx512vnni(r0, r1, r2, r3, q8_k_act) };
+                    unsafe {
+                        let dst = (k_ptr as *mut f32).add(k_row);
+                        *dst = v0;
+                        *dst.add(1) = v1;
+                        *dst.add(2) = v2;
+                        *dst.add(3) = v3;
+                    }
+                    row += 4;
+                    continue;
+                }
+                break;
+            }
+        } else if has_avx2 {
+            while row + 3 < end {
+                if row + 3 < m_q {
+                    let r0 = &q_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                    let r1 = &q_matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                    let r2 = &q_matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                    let r3 = &q_matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                    let (v0, v1, v2, v3) =
+                        unsafe { dot_q4_k_q8_k_4rows_avx2(r0, r1, r2, r3, q8_k_act) };
+                    unsafe {
+                        let dst = (q_ptr as *mut f32).add(row);
+                        *dst = v0;
+                        *dst.add(1) = v1;
+                        *dst.add(2) = v2;
+                        *dst.add(3) = v3;
+                    }
+                    row += 4;
+                    continue;
+                } else if row >= m_q && row + 3 < m_q + m_k {
+                    let k_row = row - m_q;
+                    let r0 = &k_matrix[k_row * blocks_per_row..(k_row + 1) * blocks_per_row];
+                    let r1 = &k_matrix[(k_row + 1) * blocks_per_row..(k_row + 2) * blocks_per_row];
+                    let r2 = &k_matrix[(k_row + 2) * blocks_per_row..(k_row + 3) * blocks_per_row];
+                    let r3 = &k_matrix[(k_row + 3) * blocks_per_row..(k_row + 4) * blocks_per_row];
+                    let (v0, v1, v2, v3) =
+                        unsafe { dot_q4_k_q8_k_4rows_avx2(r0, r1, r2, r3, q8_k_act) };
+                    unsafe {
+                        let dst = (k_ptr as *mut f32).add(k_row);
+                        *dst = v0;
+                        *dst.add(1) = v1;
+                        *dst.add(2) = v2;
+                        *dst.add(3) = v3;
+                    }
+                    row += 4;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        // Q6_K 2-row fast path and remaining rows
+        while row + 1 < end && row >= m_q + m_k {
+            let v_row = row - (m_q + m_k);
+            let r0 = &v_matrix[v_row * blocks_per_row..(v_row + 1) * blocks_per_row];
+            let r1 = &v_matrix[(v_row + 1) * blocks_per_row..(v_row + 2) * blocks_per_row];
+            #[cfg(target_arch = "x86_64")]
+            if has_avx2 {
+                let (v0, v1) = unsafe { dot_q6_k_q8_k_2rows_avx2(r0, r1, q8_k_act) };
+                unsafe {
+                    let dst = (v_ptr as *mut f32).add(v_row);
+                    *dst = v0;
+                    *dst.add(1) = v1;
+                }
+                row += 2;
+                continue;
+            }
+            let v0 = dot_q6_k_q8_k_row_portable(r0, q8_k_act);
+            let v1 = dot_q6_k_q8_k_row_portable(r1, q8_k_act);
+            unsafe {
+                let dst = (v_ptr as *mut f32).add(v_row);
+                *dst = v0;
+                *dst.add(1) = v1;
+            }
+            row += 2;
+        }
+
+        while row < end {
+            if row < m_q {
+                let r = &q_matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let val = if has_avx2 {
+                    unsafe { dot_q4_k_q8_k_row_avx2(r, q8_k_act) }
+                } else {
+                    dot_q4_k_q8_k_row_portable(r, q8_k_act)
+                };
+                unsafe {
+                    *((q_ptr as *mut f32).add(row)) = val;
+                }
+            } else if row < m_q + m_k {
+                let k_row = row - m_q;
+                let r = &k_matrix[k_row * blocks_per_row..(k_row + 1) * blocks_per_row];
+                let val = if has_avx2 {
+                    unsafe { dot_q4_k_q8_k_row_avx2(r, q8_k_act) }
+                } else {
+                    dot_q4_k_q8_k_row_portable(r, q8_k_act)
+                };
+                unsafe {
+                    *((k_ptr as *mut f32).add(k_row)) = val;
+                }
+            } else {
+                let v_row = row - (m_q + m_k);
+                let r = &v_matrix[v_row * blocks_per_row..(v_row + 1) * blocks_per_row];
+                let val = if has_avx2 {
+                    unsafe { dot_q6_k_q8_k_row_avx2(r, q8_k_act) }
+                } else {
+                    dot_q6_k_q8_k_row_portable(r, q8_k_act)
+                };
+                unsafe {
+                    *((v_ptr as *mut f32).add(v_row)) = val;
+                }
+            }
+            row += 1;
+        }
+    });
+}
+
 /// Fused Gate + Up + SwiGLU Matrix-Vector Multiplication in a single ThreadTeam dispatch pass.
 #[allow(clippy::too_many_arguments, clippy::if_not_else)]
 pub fn gemv_gate_up_swiglu_q4_k_prequantized(

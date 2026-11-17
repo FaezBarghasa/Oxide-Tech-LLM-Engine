@@ -1431,6 +1431,35 @@ impl QuantizedTensor {
             );
             return;
         }
+        if let (
+            Self::Q4_K {
+                blocks: b1,
+                m: m1,
+                n: n1,
+            },
+            Self::Q4_K {
+                blocks: b2, m: m2, ..
+            },
+            Self::Q6_K {
+                blocks: b3, m: m3, ..
+            },
+        ) = (t1, t2, t3)
+        {
+            oxide_quant::simd::gemv_qkv_q4_k_q6_k_prequantized(
+                b1.as_ref(),
+                *m1,
+                b2.as_ref(),
+                *m2,
+                b3.as_ref(),
+                *m3,
+                *n1,
+                q8_k_act,
+                out1,
+                out2,
+                out3,
+            );
+            return;
+        }
         t1.gemv_with_q8_k_act(q8_k_act, vector, out1);
         t2.gemv_with_q8_k_act(q8_k_act, vector, out2);
         t3.gemv_with_q8_k_act(q8_k_act, vector, out3);
@@ -3327,8 +3356,9 @@ impl Llama3Model {
         );
 
         // 4. LM Head projection to vocabulary logits
+        oxide_quant::simd::quantize_row_q8_k(&scratch.final_norm[..h], &mut scratch.q8_k_act);
         self.lm_head
-            .gemv(&scratch.final_norm[..h], &mut scratch.logits);
+            .gemv_with_q8_k_act(&scratch.q8_k_act, &scratch.final_norm[..h], &mut scratch.logits);
 
         if let Some(cap) = self.config.final_logit_softcapping_f32()
             && cap > 0.0
@@ -3896,7 +3926,9 @@ impl Llama3Model {
         );
 
         // 4. LM Head projection to vocabulary logits
-        self.lm_head.gemv(&scratch.final_norm, &mut scratch.logits);
+        oxide_quant::simd::quantize_row_q8_k(&scratch.final_norm, &mut scratch.q8_k_act);
+        self.lm_head
+            .gemv_with_q8_k_act(&scratch.q8_k_act, &scratch.final_norm, &mut scratch.logits);
 
         Ok(())
     }
