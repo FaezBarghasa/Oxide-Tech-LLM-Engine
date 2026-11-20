@@ -1020,7 +1020,10 @@ async fn metrics_handler(State(state): State<ServerState>) -> impl IntoResponse 
     );
 
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         metrics,
     )
 }

@@ -8,9 +8,17 @@ use oxide_core::roofline::RooflineReceipt;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
-#[command(name = "oxide-roofline", about = "Hardware Auto-Profiler & Roofline Analysis")]
+#[command(
+    name = "oxide-roofline",
+    about = "Hardware Auto-Profiler & Roofline Analysis"
+)]
 struct Args {
-    #[arg(short, long, default_value = "cpu", help = "Backend to profile (cpu, cuda)")]
+    #[arg(
+        short,
+        long,
+        default_value = "cpu",
+        help = "Backend to profile (cpu, cuda)"
+    )]
     backend: String,
 }
 
@@ -34,16 +42,27 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let total_bytes = (size_bytes * iters * 2) as f64; // read + write
     let measured_bw_gbps = (total_bytes / elapsed) / 1e9;
 
-    println!("[*] Measured Memory Bandwidth: {:.2} GB/s", measured_bw_gbps);
+    println!(
+        "[*] Measured Memory Bandwidth: {:.2} GB/s",
+        measured_bw_gbps
+    );
 
     // Theoretical ceilings
     let peak_compute_tflops = if args.backend == "cuda" { 15.0 } else { 1.15 };
-    println!("[*] Physical Compute Peak (FP32): {:.2} TFLOPS", peak_compute_tflops);
+    println!(
+        "[*] Physical Compute Peak (FP32): {:.2} TFLOPS",
+        peak_compute_tflops
+    );
 
     let ridge_point = (peak_compute_tflops * 1000.0) / measured_bw_gbps;
-    println!("[*] Ridge Point Arithmetic Intensity: {:.1} FLOPs/byte", ridge_point);
+    println!(
+        "[*] Ridge Point Arithmetic Intensity: {:.1} FLOPs/byte",
+        ridge_point
+    );
     println!("\nRegime Classification:");
-    println!("  - Autoregressive Decode (Batch=1, INT4, ~4 FLOPs/B) -> 100% MEMORY BANDWIDTH BOUND");
+    println!(
+        "  - Autoregressive Decode (Batch=1, INT4, ~4 FLOPs/B) -> 100% MEMORY BANDWIDTH BOUND"
+    );
     println!("  - Prompt Prefill (Batch=128+, INT8/FP16, >100 FLOPs/B) -> 100% COMPUTE BOUND");
 
     // Roofline receipt validation test (simulating 10 tok/s on an 8B model at Q4 ~ 4GB)
@@ -56,7 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         false,
     );
     match receipt {
-        Ok(r) => println!("\n[+] Roofline sanity check passed: MBU ratio = {:.2}%", r.mbu_ratio * 100.0),
+        Ok(r) => println!(
+            "\n[+] Roofline sanity check passed: MBU ratio = {:.2}%",
+            r.mbu_ratio * 100.0
+        ),
         Err(e) => println!("\n[!] Roofline validation notice: {}", e),
     }
 

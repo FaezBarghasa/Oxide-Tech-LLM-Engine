@@ -11,7 +11,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let gguf = GgufFile::parse(&mmap)?;
     let tokenizer = GgufTokenizer::from_gguf(&gguf);
 
-    let prompt = "<|im_start|>user\nWhat is 2+2? Answer in one word.<|im_end|>\n<|im_start|>assistant\n";
+    let prompt =
+        "<|im_start|>user\nWhat is 2+2? Answer in one word.<|im_end|>\n<|im_start|>assistant\n";
     let tokens = tokenizer.encode(prompt);
     println!("Prompt tokens (len {}): {:?}", tokens.len(), tokens);
 

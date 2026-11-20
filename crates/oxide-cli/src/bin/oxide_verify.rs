@@ -11,7 +11,10 @@ use std::fs::File;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "oxide-verify", about = "Verify model execution parity against reference")]
+#[command(
+    name = "oxide-verify",
+    about = "Verify model execution parity against reference"
+)]
 struct Args {
     #[arg(short, long, help = "Path to GGUF model")]
     model: PathBuf,
@@ -19,10 +22,18 @@ struct Args {
     #[arg(short, long, default_value = "cpu", help = "Backend (cpu, cuda, etc.)")]
     backend: String,
 
-    #[arg(long, default_value_t = 0.9999, help = "Minimum cosine similarity threshold")]
+    #[arg(
+        long,
+        default_value_t = 0.9999,
+        help = "Minimum cosine similarity threshold"
+    )]
     threshold: f32,
 
-    #[arg(long, default_value_t = 16, help = "Number of greedy tokens to evaluate")]
+    #[arg(
+        long,
+        default_value_t = 16,
+        help = "Number of greedy tokens to evaluate"
+    )]
     tokens: usize,
 }
 
@@ -66,8 +77,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    println!("[+] Generated {} tokens successfully.", generated_tokens.len());
-    println!("[+] Backend '{}' maturity: {:?}", args.backend, pipe.backend_maturity());
+    println!(
+        "[+] Generated {} tokens successfully.",
+        generated_tokens.len()
+    );
+    println!(
+        "[+] Backend '{}' maturity: {:?}",
+        args.backend,
+        pipe.backend_maturity()
+    );
     println!("=== Verification PASSED (Deterministic Parity Confirmed) ===");
 
     Ok(())

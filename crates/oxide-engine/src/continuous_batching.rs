@@ -104,7 +104,9 @@ impl ChunkedPrefillConfig {
         let decode_est_micros = self.base_step_micros + (active_decode_batch as u64 * 350);
         let headroom = self.sla_itl_micros.saturating_sub(decode_est_micros);
         let time_budget = (headroom as f32 / self.prefill_alpha_micros_per_tok.max(1.0)) as usize;
-        let token_capacity_budget = self.max_num_batched_tokens.saturating_sub(active_decode_batch);
+        let token_capacity_budget = self
+            .max_num_batched_tokens
+            .saturating_sub(active_decode_batch);
         let budget = time_budget.min(token_capacity_budget);
         budget.clamp(self.min_chunk_tokens, self.max_chunk_tokens)
     }
@@ -253,7 +255,13 @@ impl ContinuousBatchingEngine {
         let worker_handle = std::thread::Builder::new()
             .name("oxide-gpu-worker".to_string())
             .spawn(move || {
-                run_gpu_worker_loop(exec_rx, comp_tx, &pipeline_clone, &worker_running_thread, &parker);
+                run_gpu_worker_loop(
+                    exec_rx,
+                    comp_tx,
+                    &pipeline_clone,
+                    &worker_running_thread,
+                    &parker,
+                );
             })
             .expect("Failed to spawn oxide-gpu-worker thread");
 
@@ -1138,8 +1146,9 @@ impl ContinuousBatchingEngine {
                     let needed = target_len.saturating_sub(uncomputed_start);
                     if needed > 0 {
                         let chunk_len = needed.min(prefill_budget);
-                        let chunk =
-                            seq.prompt_tokens[uncomputed_start..uncomputed_start + chunk_len].to_vec();
+                        let chunk = seq.prompt_tokens
+                            [uncomputed_start..uncomputed_start + chunk_len]
+                            .to_vec();
                         prefill_budget = prefill_budget.saturating_sub(chunk_len);
                         let is_final = uncomputed_start + chunk_len >= target_len;
                         prefill_chunks.push(PrefillChunkDesc {
@@ -1435,8 +1444,7 @@ fn run_gpu_worker_loop(
 
             // 3. Batched decode step
             if !desc.decode_slots.is_empty() {
-                let batch_tokens: Vec<u32> =
-                    desc.decode_slots.iter().map(|d| d.token).collect();
+                let batch_tokens: Vec<u32> = desc.decode_slots.iter().map(|d| d.token).collect();
                 let batch_positions: Vec<usize> =
                     desc.decode_slots.iter().map(|d| d.position).collect();
                 let slot_indices: Vec<usize> =

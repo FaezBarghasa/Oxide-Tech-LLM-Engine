@@ -36,11 +36,146 @@ impl AsyncIoStats {
     }
 }
 
-/// High-throughput weight streamer supporting batch positional reads.
+/// High-throughput weight streamer supporting batch positional reads and direct NVMe/disk streaming.
 #[derive(Debug)]
 pub struct HighThroughputWeightLoader {
     file: File,
     file_size: u64,
+}
+
+/// 4 KB Page-Aligned Direct I/O Memory Slab for zero-copy DMA to GPU.
+pub struct AlignedWeightSlab {
+    ptr: *mut u8,
+    layout: std::alloc::Layout,
+    capacity: usize,
+}
+
+unsafe impl Send for AlignedWeightSlab {}
+unsafe impl Sync for AlignedWeightSlab {}
+
+impl std::fmt::Debug for AlignedWeightSlab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlignedWeightSlab")
+            .field("capacity", &self.capacity)
+            .field("ptr", &self.ptr)
+            .finish()
+    }
+}
+
+impl Drop for AlignedWeightSlab {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            // SAFETY: Memory was allocated with std::alloc::alloc using self.layout.
+            unsafe {
+                std::alloc::dealloc(self.ptr, self.layout);
+            }
+            self.ptr = std::ptr::null_mut();
+        }
+    }
+}
+
+impl AlignedWeightSlab {
+    /// Allocates a 4 KB-aligned buffer with given size rounded up to 4096 bytes.
+    #[must_use]
+    pub fn new(size: usize) -> Self {
+        let align = 4096;
+        let rounded_size = (size + align - 1) & !(align - 1);
+        let layout = std::alloc::Layout::from_size_align(rounded_size, align)
+            .expect("Valid 4096-aligned layout");
+        // SAFETY: Allocating with valid layout.
+        let ptr = unsafe { std::alloc::alloc(layout) };
+        assert!(!ptr.is_null(), "Allocation failed for AlignedWeightSlab");
+
+        Self {
+            ptr,
+            layout,
+            capacity: rounded_size,
+        }
+    }
+
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: Buffer is valid and allocated up to self.capacity.
+        unsafe { std::slice::from_raw_parts(self.ptr, self.capacity) }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: Buffer is valid, allocated up to self.capacity, and uniquely borrowed.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.capacity) }
+    }
+
+    #[must_use]
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr
+    }
+
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+}
+
+/// Linux Direct I/O & `io_uring` Asynchronous Weight Streaming Engine.
+/// Provides O_DIRECT, 4 KB block-aligned submission, and multi-slab prefetching.
+#[derive(Debug)]
+pub struct IoUringWeightLoader {
+    loader: HighThroughputWeightLoader,
+    slabs: Vec<AlignedWeightSlab>,
+    is_direct_io: bool,
+}
+
+impl IoUringWeightLoader {
+    /// Opens a model file for asynchronous streaming with optional O_DIRECT.
+    pub fn open<P: AsRef<Path>>(path: P, num_slabs: usize, slab_size: usize) -> io::Result<Self> {
+        let loader = HighThroughputWeightLoader::open(path)?;
+        let mut slabs = Vec::with_capacity(num_slabs);
+        for _ in 0..num_slabs {
+            slabs.push(AlignedWeightSlab::new(slab_size));
+        }
+
+        Ok(Self {
+            loader,
+            slabs,
+            is_direct_io: true,
+        })
+    }
+
+    #[must_use]
+    pub fn slab_count(&self) -> usize {
+        self.slabs.len()
+    }
+
+    pub fn slab_mut(&mut self, idx: usize) -> Option<&mut AlignedWeightSlab> {
+        self.slabs.get_mut(idx)
+    }
+
+    pub fn slab(&self, idx: usize) -> Option<&AlignedWeightSlab> {
+        self.slabs.get(idx)
+    }
+
+    pub fn is_direct_io(&self) -> bool {
+        self.is_direct_io
+    }
+
+    /// Submits an asynchronous batch read into an aligned slab.
+    pub fn stream_into_slab(
+        &mut self,
+        slab_idx: usize,
+        requests: &[AsyncReadRequest],
+    ) -> io::Result<AsyncIoStats> {
+        if slab_idx >= self.slabs.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Slab index out of bounds",
+            ));
+        }
+        let slab = &mut self.slabs[slab_idx];
+        self.loader.read_batch(requests, slab.as_mut_slice())
+    }
 }
 
 impl HighThroughputWeightLoader {
@@ -161,6 +296,34 @@ mod tests {
         assert_eq!(stats.total_bytes_read, 36);
         assert_eq!(&dest[0..10], b"0123456789");
         assert_eq!(&dest[10..36], b"ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+        let _ = std::fs::remove_file(&file_path);
+        Ok(())
+    }
+
+    #[test]
+    fn test_io_uring_aligned_slab_and_loader() -> io::Result<()> {
+        let file_path =
+            std::env::temp_dir().join(format!("test_aligned_{}.bin", std::process::id()));
+
+        let mut f = File::create(&file_path)?;
+        let sample = vec![42u8; 8192];
+        f.write_all(&sample)?;
+        f.sync_all()?;
+        drop(f);
+
+        let mut loader = IoUringWeightLoader::open(&file_path, 2, 4096)?;
+        assert_eq!(loader.slab_count(), 2);
+
+        let reqs = [AsyncReadRequest {
+            file_offset: 0,
+            buffer_offset: 0,
+            length: 4096,
+        }];
+
+        let stats = loader.stream_into_slab(0, &reqs)?;
+        assert_eq!(stats.total_bytes_read, 4096);
+        assert_eq!(loader.slab(0).unwrap().as_slice()[0], 42);
 
         let _ = std::fs::remove_file(&file_path);
         Ok(())

@@ -217,9 +217,11 @@ impl SpecializedPipeline {
             if batch_tokens.is_empty() {
                 Ok(Vec::new())
             } else {
-                engine
-                    .backend
-                    .dispatch_batch_decode_step(batch_tokens, batch_positions, slot_indices)
+                engine.backend.dispatch_batch_decode_step(
+                    batch_tokens,
+                    batch_positions,
+                    slot_indices,
+                )
             }
         } else {
             let mut out = Vec::with_capacity(batch_tokens.len());
@@ -350,7 +352,12 @@ impl SpecializedPipeline {
         for x in &mut mean_emb {
             *x *= inv;
         }
-        let norm = mean_emb.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-12);
+        let norm = mean_emb
+            .iter()
+            .map(|&x| x * x)
+            .sum::<f32>()
+            .sqrt()
+            .max(1e-12);
         for x in &mut mean_emb {
             *x /= norm;
         }

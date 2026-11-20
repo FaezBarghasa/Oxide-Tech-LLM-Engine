@@ -3357,8 +3357,11 @@ impl Llama3Model {
 
         // 4. LM Head projection to vocabulary logits
         oxide_quant::simd::quantize_row_q8_k(&scratch.final_norm[..h], &mut scratch.q8_k_act);
-        self.lm_head
-            .gemv_with_q8_k_act(&scratch.q8_k_act, &scratch.final_norm[..h], &mut scratch.logits);
+        self.lm_head.gemv_with_q8_k_act(
+            &scratch.q8_k_act,
+            &scratch.final_norm[..h],
+            &mut scratch.logits,
+        );
 
         if let Some(cap) = self.config.final_logit_softcapping_f32()
             && cap > 0.0
@@ -3927,8 +3930,11 @@ impl Llama3Model {
 
         // 4. LM Head projection to vocabulary logits
         oxide_quant::simd::quantize_row_q8_k(&scratch.final_norm, &mut scratch.q8_k_act);
-        self.lm_head
-            .gemv_with_q8_k_act(&scratch.q8_k_act, &scratch.final_norm, &mut scratch.logits);
+        self.lm_head.gemv_with_q8_k_act(
+            &scratch.q8_k_act,
+            &scratch.final_norm,
+            &mut scratch.logits,
+        );
 
         Ok(())
     }
