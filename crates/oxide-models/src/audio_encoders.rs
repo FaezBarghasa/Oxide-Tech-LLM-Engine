@@ -65,7 +65,7 @@ impl AfWhisperMlpProjector {
                     sum += w_row[j] * val;
                 }
                 // Fast GELU approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-                let c = 0.797_884_56f32 * (sum + 0.044_715f32 * sum.powi(3));
+                let c = 0.797_884_6_f32 * (sum + 0.044_715f32 * sum.powi(3));
                 inter[i] = 0.5 * sum * (1.0 + c.tanh());
             }
 

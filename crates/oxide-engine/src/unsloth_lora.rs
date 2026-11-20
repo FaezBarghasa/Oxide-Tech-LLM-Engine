@@ -68,12 +68,12 @@ impl UnslothTensorPair {
 
         for o in 0..self.out_dim {
             let b_row = &self.lora_b[o * self.rank..(o + 1) * self.rank];
-            for r in 0..self.rank {
-                let b_val = b_row[r] * self.scaling;
+            for (r, &b_elem) in b_row.iter().enumerate() {
+                let b_val = b_elem * self.scaling;
                 let a_row = &self.lora_a[r * self.in_dim..(r + 1) * self.in_dim];
                 let out_offset = o * self.in_dim;
-                for i in 0..self.in_dim {
-                    delta_w[out_offset + i] += b_val * a_row[i];
+                for (i, &a_elem) in a_row.iter().enumerate() {
+                    delta_w[out_offset + i] += b_val * a_elem;
                 }
             }
         }
@@ -85,22 +85,22 @@ impl UnslothTensorPair {
         assert_eq!(output.len(), self.out_dim);
 
         let mut inter = vec![0.0f32; self.rank];
-        for r in 0..self.rank {
+        for (r, inter_val) in inter.iter_mut().enumerate() {
             let a_row = &self.lora_a[r * self.in_dim..(r + 1) * self.in_dim];
             let mut sum = 0.0f32;
             for (i, &inp) in input.iter().enumerate() {
                 sum += inp * a_row[i];
             }
-            inter[r] = sum;
+            *inter_val = sum;
         }
 
-        for o in 0..self.out_dim {
+        for (o, out_elem) in output.iter_mut().enumerate() {
             let b_row = &self.lora_b[o * self.rank..(o + 1) * self.rank];
             let mut sum = 0.0f32;
             for (r, &val) in inter.iter().enumerate() {
                 sum += b_row[r] * val;
             }
-            output[o] += sum * self.scaling;
+            *out_elem += sum * self.scaling;
         }
     }
 }

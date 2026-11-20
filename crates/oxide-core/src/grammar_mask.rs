@@ -24,9 +24,7 @@ impl Default for GrammarLogitMasker {
     fn default() -> Self {
         let mut mask = [false; 256];
         // Allow valid printable ASCII JSON tokens by default
-        for b in 0x20..=0x7E {
-            mask[b] = true;
-        }
+        mask[0x20..=0x7E].fill(true);
         mask[b'\n' as usize] = true;
         mask[b'\t' as usize] = true;
         Self {
@@ -45,9 +43,7 @@ impl GrammarLogitMasker {
     /// Restricts allowed tokens to numeric digits and separators (e.g. for parameter values).
     pub fn restrict_to_numbers(&mut self) {
         self.allowed_ascii_mask.fill(false);
-        for b in b'0'..=b'9' {
-            self.allowed_ascii_mask[b as usize] = true;
-        }
+        self.allowed_ascii_mask[b'0' as usize..=b'9' as usize].fill(true);
         self.allowed_ascii_mask[b'.' as usize] = true;
         self.allowed_ascii_mask[b'-' as usize] = true;
         self.allowed_ascii_mask[b',' as usize] = true;
@@ -62,10 +58,8 @@ impl GrammarLogitMasker {
         }
         let len = vocab_ascii_bytes.len().min(logits.len());
         for i in 0..len {
-            if let Some(b) = vocab_ascii_bytes[i] {
-                if !self.allowed_ascii_mask[b as usize] {
-                    logits[i] = f32::NEG_INFINITY;
-                }
+            if vocab_ascii_bytes[i].is_some_and(|b| !self.allowed_ascii_mask[b as usize]) {
+                logits[i] = f32::NEG_INFINITY;
             }
         }
     }
