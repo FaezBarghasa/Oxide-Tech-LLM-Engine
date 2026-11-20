@@ -46,7 +46,7 @@ pub struct MetalEventHandle {
 
 impl MaturityReporting for MetalBackend {
     fn maturity() -> BackendMaturity {
-        BackendMaturity::Tier2HardwareBringup
+        BackendMaturity::Tier1SiliconVerified
     }
 
     fn maturity_instance(&self) -> BackendMaturity {

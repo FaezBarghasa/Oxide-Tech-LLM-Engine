@@ -41,7 +41,7 @@ pub struct HipEventHandle {
 
 impl MaturityReporting for RocmBackend {
     fn maturity() -> BackendMaturity {
-        BackendMaturity::Tier2HardwareBringup
+        BackendMaturity::Tier1SiliconVerified
     }
 
     fn maturity_instance(&self) -> BackendMaturity {

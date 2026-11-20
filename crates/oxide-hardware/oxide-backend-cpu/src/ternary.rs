@@ -148,15 +148,17 @@ mod tests {
 
     #[test]
     fn test_tq2_0_tmac_avx2_parity() {
-        let mut blk = oxide_quant::BlockTQ2_0::default();
-        blk.d = oxide_quant::f16::from_f32(1.5);
-        for i in 0..64 {
-            blk.qs[i] = ((i * 37) & 0xFF) as u8;
+        let mut blk = oxide_quant::BlockTQ2_0 {
+            d: oxide_quant::f16::from_f32(1.5),
+            ..Default::default()
+        };
+        for (i, q) in blk.qs.iter_mut().enumerate() {
+            *q = ((i * 37) & 0xFF) as u8;
         }
 
         let mut act = [0.0f32; 256];
-        for i in 0..256 {
-            act[i] = (i as f32 - 128.0) * 0.01;
+        for (i, a) in act.iter_mut().enumerate() {
+            *a = (i as f32 - 128.0) * 0.01;
         }
 
         let mut dequant = [0.0f32; 256];
@@ -169,14 +171,12 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: Verified AVX2 and FMA features are detected at runtime.
             let tmac_dot = unsafe { dot_tq2_0_tmac_avx2(&blk, &act) };
             let diff = (tmac_dot - reference_dot).abs();
             assert!(
                 diff < 1e-3,
-                "TQ2_0 TMAC mismatch: ref={}, tmac={}, diff={}",
-                reference_dot,
-                tmac_dot,
-                diff
+                "TQ2_0 TMAC mismatch: ref={reference_dot}, tmac={tmac_dot}, diff={diff}"
             );
         }
     }

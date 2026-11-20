@@ -50,7 +50,9 @@ pub struct AlignedWeightSlab {
     capacity: usize,
 }
 
+// SAFETY: AlignedWeightSlab owns a dedicated heap allocation with unique ownership.
 unsafe impl Send for AlignedWeightSlab {}
+// SAFETY: Immutable concurrent references cannot mutate the underlying buffer.
 unsafe impl Sync for AlignedWeightSlab {}
 
 impl std::fmt::Debug for AlignedWeightSlab {
@@ -58,6 +60,7 @@ impl std::fmt::Debug for AlignedWeightSlab {
         f.debug_struct("AlignedWeightSlab")
             .field("capacity", &self.capacity)
             .field("ptr", &self.ptr)
+            .field("layout", &self.layout)
             .finish()
     }
 }

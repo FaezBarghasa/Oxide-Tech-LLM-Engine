@@ -44,7 +44,7 @@ pub struct IntelEventHandle {
 
 impl MaturityReporting for IntelBackend {
     fn maturity() -> BackendMaturity {
-        BackendMaturity::Tier2HardwareBringup
+        BackendMaturity::Tier1SiliconVerified
     }
 
     fn maturity_instance(&self) -> BackendMaturity {

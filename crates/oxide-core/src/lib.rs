@@ -29,6 +29,7 @@ pub mod error;
 pub mod hardware;
 pub mod macros;
 pub mod memory;
+pub mod okir;
 pub mod roofline;
 pub mod sampler;
 pub mod thread_team;

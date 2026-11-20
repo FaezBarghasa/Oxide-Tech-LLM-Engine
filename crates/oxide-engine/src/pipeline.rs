@@ -134,10 +134,9 @@ impl SpecializedPipeline {
             Self::Llama3Rknn(e) => e.backend.maturity_instance(),
             Self::Llama3Hailo(e) => e.backend.maturity_instance(),
             Self::Llama3Cpu(e) => e.backend.maturity_instance(),
-            Self::Llama3Dense { .. } | Self::Llama3AmdApuCpuIgpu { .. } => {
-                oxide_core::traits::BackendMaturity::Tier1SiliconVerified
-            }
-            Self::DiffusionPipeline(_)
+            Self::Llama3Dense { .. }
+            | Self::Llama3AmdApuCpuIgpu { .. }
+            | Self::DiffusionPipeline(_)
             | Self::AudioPipeline(_)
             | Self::KronosTradingPipeline(_)
             | Self::HybridMultiDevice(_) => {

@@ -335,7 +335,7 @@ fn test_gemv_ptq1_0_multithreaded() {
     let vector = vec![1.0f32; n];
     let mut output = vec![0.0f32; m];
 
-    let _ = gemv_ptq1_0(&matrix, &vector, m, n, &mut output);
+    gemv_ptq1_0(&matrix, &vector, m, n, &mut output);
     assert_eq!(output.len(), m);
     let _expected = block.dot_product_128(input.as_slice().try_into().unwrap());
     for &val in &output {
