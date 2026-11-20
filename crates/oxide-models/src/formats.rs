@@ -65,6 +65,94 @@ pub struct SafeTensorInfo {
     pub data_offsets: (u64, u64),
 }
 
+#[inline]
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
+    if offset + 2 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 2] = bytes[offset..offset + 2]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(u16::from_le_bytes(arr))
+}
+
+#[inline]
+fn read_i16(bytes: &[u8], offset: usize) -> Result<i16> {
+    if offset + 2 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 2] = bytes[offset..offset + 2]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(i16::from_le_bytes(arr))
+}
+
+#[inline]
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
+    if offset + 4 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 4] = bytes[offset..offset + 4]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(u32::from_le_bytes(arr))
+}
+
+#[inline]
+fn read_i32(bytes: &[u8], offset: usize) -> Result<i32> {
+    if offset + 4 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 4] = bytes[offset..offset + 4]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(i32::from_le_bytes(arr))
+}
+
+#[inline]
+fn read_f32(bytes: &[u8], offset: usize) -> Result<f32> {
+    if offset + 4 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 4] = bytes[offset..offset + 4]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(f32::from_le_bytes(arr))
+}
+
+#[inline]
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
+    if offset + 8 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 8] = bytes[offset..offset + 8]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(u64::from_le_bytes(arr))
+}
+
+#[inline]
+fn read_i64(bytes: &[u8], offset: usize) -> Result<i64> {
+    if offset + 8 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 8] = bytes[offset..offset + 8]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(i64::from_le_bytes(arr))
+}
+
+#[inline]
+fn read_f64(bytes: &[u8], offset: usize) -> Result<f64> {
+    if offset + 8 > bytes.len() {
+        return Err(EngineError::InvalidArtifactHeader);
+    }
+    let arr: [u8; 8] = bytes[offset..offset + 8]
+        .try_into()
+        .map_err(|_| EngineError::InvalidArtifactHeader)?;
+    Ok(f64::from_le_bytes(arr))
+}
+
 /// Zero-copy SafeTensors Header Parser.
 #[derive(Debug, Clone, Default)]
 pub struct SafeTensorsHeader {
@@ -79,7 +167,7 @@ impl SafeTensorsHeader {
             return Err(EngineError::InvalidArtifactHeader);
         }
 
-        let header_len = u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
+        let header_len = read_u64(bytes, 0)? as usize;
         if bytes.len() < 8 + header_len {
             return Err(EngineError::InvalidArtifactHeader);
         }
@@ -164,9 +252,9 @@ impl GgufHeader {
         if &magic != GGUF_MAGIC {
             return Err(EngineError::InvalidArtifactHeader);
         }
-        let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        let tensor_count = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-        let metadata_kv_count = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+        let version = read_u32(bytes, 4)?;
+        let tensor_count = read_u64(bytes, 8)?;
+        let metadata_kv_count = read_u64(bytes, 16)?;
         Ok(Self {
             magic,
             version,
@@ -227,9 +315,9 @@ impl GgufFile {
             return Err(EngineError::InvalidArtifactHeader);
         }
 
-        let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        let tensor_count = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-        let metadata_kv_count = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+        let version = read_u32(bytes, 4)?;
+        let tensor_count = read_u64(bytes, 8)?;
+        let metadata_kv_count = read_u64(bytes, 16)?;
 
         let header = GgufHeader {
             magic,
@@ -251,7 +339,7 @@ impl GgufFile {
             if offset + 4 > bytes.len() {
                 break;
             }
-            let val_type = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            let val_type = read_u32(bytes, offset)?;
             offset += 4;
 
             let (val, new_offset) = Self::read_gguf_value(bytes, offset, val_type)?;
@@ -270,7 +358,7 @@ impl GgufFile {
             if offset + 4 > bytes.len() {
                 break;
             }
-            let n_dims = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            let n_dims = read_u32(bytes, offset)?;
             offset += 4;
 
             let mut dims = Vec::new();
@@ -278,7 +366,7 @@ impl GgufFile {
                 if offset + 8 > bytes.len() {
                     break;
                 }
-                let d = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                let d = read_u64(bytes, offset)?;
                 offset += 8;
                 dims.push(d);
             }
@@ -286,7 +374,7 @@ impl GgufFile {
             if offset + 4 > bytes.len() {
                 break;
             }
-            let qtype_code = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            let qtype_code = read_u32(bytes, offset)?;
             offset += 4;
 
             let qtype = match qtype_code {
@@ -335,7 +423,7 @@ impl GgufFile {
             if offset + 8 > bytes.len() {
                 break;
             }
-            let t_offset = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+            let t_offset = read_u64(bytes, offset)?;
             offset += 8;
 
             tensors.insert(
@@ -374,7 +462,7 @@ impl GgufFile {
         if offset + 8 > bytes.len() {
             return Err(EngineError::InvalidArtifactHeader);
         }
-        let len = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        let len = read_u64(bytes, offset)? as usize;
         offset += 8;
         if offset + len > bytes.len() {
             return Err(EngineError::InvalidArtifactHeader);
@@ -403,27 +491,27 @@ impl GgufFile {
             }
             2 => {
                 // UINT16
-                let v = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                let v = read_u16(bytes, offset)?;
                 Ok((GgufValue::Uint16(v), offset + 2))
             }
             3 => {
                 // INT16
-                let v = i16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                let v = read_i16(bytes, offset)?;
                 Ok((GgufValue::Int16(v), offset + 2))
             }
             4 => {
                 // UINT32
-                let v = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                let v = read_u32(bytes, offset)?;
                 Ok((GgufValue::Uint32(v), offset + 4))
             }
             5 => {
                 // INT32
-                let v = i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                let v = read_i32(bytes, offset)?;
                 Ok((GgufValue::Int32(v), offset + 4))
             }
             6 => {
                 // FLOAT32
-                let v = f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                let v = read_f32(bytes, offset)?;
                 Ok((GgufValue::Float32(v), offset + 4))
             }
             7 => {
@@ -441,10 +529,9 @@ impl GgufFile {
                 if offset + 12 > bytes.len() {
                     return Err(EngineError::InvalidArtifactHeader);
                 }
-                let item_type = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                let item_type = read_u32(bytes, offset)?;
                 offset += 4;
-                let count =
-                    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+                let count = read_u64(bytes, offset)? as usize;
                 offset += 8;
 
                 let mut arr = Vec::with_capacity(count.min(1024));
@@ -457,17 +544,17 @@ impl GgufFile {
             }
             10 => {
                 // UINT64
-                let v = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                let v = read_u64(bytes, offset)?;
                 Ok((GgufValue::Uint64(v), offset + 8))
             }
             11 => {
                 // INT64
-                let v = i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                let v = read_i64(bytes, offset)?;
                 Ok((GgufValue::Int64(v), offset + 8))
             }
             12 => {
                 // FLOAT64
-                let v = f64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                let v = read_f64(bytes, offset)?;
                 Ok((GgufValue::Float64(v), offset + 8))
             }
             _ => Ok((GgufValue::Uint32(0), offset)),

@@ -35,7 +35,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/kernels/llm_kernels.cu");
     println!("cargo:rerun-if-changed=src/kernels/fwht.cu");
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set by Cargo"));
 
     if let Some(nvcc) = find_nvcc() {
         println!("cargo:rustc-cfg=has_cuda");

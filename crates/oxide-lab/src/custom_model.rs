@@ -114,7 +114,7 @@ impl CustomModel {
             return Err(EngineError::ShapeMismatch);
         }
 
-        let last_token = *tokens.last().unwrap() as usize;
+        let last_token = *tokens.last().ok_or(EngineError::ShapeMismatch)? as usize;
         let h = self.config.hidden_dim;
 
         // 1. Embedding lookup

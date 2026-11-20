@@ -3198,9 +3198,15 @@ impl CudaBackend {
             );
         }
 
-        let d_pos_buf = self.d_batch_positions.as_mut().unwrap();
-        let d_slots_buf = self.d_batch_slots.as_mut().unwrap();
-        let d_tok_buf = self.d_batch_tokens.as_mut().unwrap();
+        let d_pos_buf = self.d_batch_positions.as_mut().ok_or_else(|| {
+            EngineError::BackendError("CUDA d_batch_positions buffer not initialized".to_string())
+        })?;
+        let d_slots_buf = self.d_batch_slots.as_mut().ok_or_else(|| {
+            EngineError::BackendError("CUDA d_batch_slots buffer not initialized".to_string())
+        })?;
+        let d_tok_buf = self.d_batch_tokens.as_mut().ok_or_else(|| {
+            EngineError::BackendError("CUDA d_batch_tokens buffer not initialized".to_string())
+        })?;
 
         d_pos_buf
             .copy_from_host_async(&self.host_batch_positions[..bucket], s)
@@ -3683,7 +3689,11 @@ impl CudaBackend {
                                 layer.o_quant,
                                 bucket,
                                 s,
-                                self.d_scratch_gate.as_mut().unwrap(),
+                                self.d_scratch_gate.as_mut().ok_or_else(|| {
+                                    EngineError::BackendError(
+                                        "CUDA d_scratch_gate buffer not allocated".to_string(),
+                                    )
+                                })?,
                             );
                         }
                     }
@@ -3773,7 +3783,11 @@ impl CudaBackend {
                                     layer.down_quant,
                                     bucket,
                                     s,
-                                    self.d_scratch_k.as_mut().unwrap(),
+                                    self.d_scratch_k.as_mut().ok_or_else(|| {
+                                        EngineError::BackendError(
+                                            "CUDA d_scratch_k buffer not allocated".to_string(),
+                                        )
+                                    })?,
                                 );
                             }
                         }
@@ -3959,8 +3973,12 @@ impl HardwareBackend for CudaBackend {
                 );
             }
 
-            let d_sp = self.d_seq_pos.as_mut().unwrap();
-            let d_in_tok = self.d_input_token.as_mut().unwrap();
+            let d_sp = self.d_seq_pos.as_mut().ok_or_else(|| {
+                EngineError::BackendError("CUDA d_seq_pos buffer not initialized".to_string())
+            })?;
+            let d_in_tok = self.d_input_token.as_mut().ok_or_else(|| {
+                EngineError::BackendError("CUDA d_input_token buffer not initialized".to_string())
+            })?;
 
             if let Some(handle) = self.decode_graph_handle {
                 let gpu_pos_match = self.last_gpu_seq_pos == Some(self.seq_pos);
@@ -4046,24 +4064,53 @@ impl HardwareBackend for CudaBackend {
                     } else {
                         1.0f32
                     };
-                    let d_sp_ptr = self.d_seq_pos.as_ref().unwrap().as_typed_ptr::<i32>();
-                    let d_in_tok_ptr = self.d_input_token.as_ref().unwrap().as_typed_ptr::<i32>();
-                    let d_emb_ptr = self.d_token_embd.as_ref().unwrap().as_raw_ptr();
-                    let d_hid_ptr = self.d_hidden.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_norm_ptr = self.d_scratch_norm.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_q_ptr = self.d_scratch_q.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_k_ptr = self.d_scratch_k.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_v_ptr = self.d_scratch_v.as_ref().unwrap().as_typed_ptr::<f32>();
+                    let d_sp_ptr = self.d_seq_pos.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_seq_pos buffer not allocated".to_string())
+                    })?.as_typed_ptr::<i32>();
+                    let d_in_tok_ptr = self.d_input_token.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_input_token buffer not allocated".to_string())
+                    })?.as_typed_ptr::<i32>();
+                    let d_emb_ptr = self.d_token_embd.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_token_embd buffer not allocated".to_string())
+                    })?.as_raw_ptr();
+                    let d_hid_ptr = self.d_hidden.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_hidden buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
+                    let d_norm_ptr = self.d_scratch_norm.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_scratch_norm buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
+                    let d_q_ptr = self.d_scratch_q.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_scratch_q buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
+                    let d_k_ptr = self.d_scratch_k.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_scratch_k buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
+                    let d_v_ptr = self.d_scratch_v.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_scratch_v buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
                     let d_out_ptr = self
                         .d_scratch_attn_out
                         .as_ref()
-                        .unwrap()
+                        .ok_or_else(|| {
+                            EngineError::BackendError("CUDA d_scratch_attn_out buffer not allocated".to_string())
+                        })?
                         .as_typed_ptr::<f32>();
-                    let d_gate_ptr = self.d_scratch_gate.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_up_ptr = self.d_scratch_up.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_logits_ptr = self.d_logits.as_ref().unwrap().as_typed_ptr::<f32>();
-                    let d_sampled_ptr =
-                        self.d_sampled_token.as_ref().unwrap().as_raw_ptr() as *mut u32;
+                    let d_gate_ptr = self.d_scratch_gate.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_scratch_gate buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
+                    let d_up_ptr = self.d_scratch_up.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_scratch_up buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
+                    let d_logits_ptr = self.d_logits.as_ref().ok_or_else(|| {
+                        EngineError::BackendError("CUDA d_logits buffer not allocated".to_string())
+                    })?.as_typed_ptr::<f32>();
+                    let d_sampled_ptr = self
+                        .d_sampled_token
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError("CUDA d_sampled_token buffer not allocated".to_string())
+                        })?
+                        .as_raw_ptr() as *mut u32;
                     let d_val_ptr = unsafe { d_sampled_ptr.add(1) as *mut f32 };
                     let d_q8_1_ptr = if let Some(ref buf) = self.d_scratch_q8_1_a {
                         buf.as_raw_ptr()
