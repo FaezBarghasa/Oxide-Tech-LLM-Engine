@@ -34,6 +34,7 @@
 
 pub mod attention_kernels;
 pub mod audio;
+pub mod audio_encoders;
 pub mod bonsai2;
 pub mod chat_template;
 pub mod compact_attention;
@@ -46,6 +47,7 @@ pub mod flash_attn;
 pub mod formats;
 pub mod gdn;
 pub mod hf_architectures;
+pub mod hybrid_embeds;
 pub mod llama3;
 pub mod loader;
 pub mod lora;

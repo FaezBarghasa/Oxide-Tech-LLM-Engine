@@ -27,6 +27,7 @@
     clippy::unreadable_literal
 )]
 
+pub mod audio_prefix_cache;
 pub mod compact_kv;
 pub mod device_arena;
 pub mod hierarchical_kv;

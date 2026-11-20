@@ -42,6 +42,7 @@ pub mod sparse_context;
 pub mod speculative;
 pub mod tensor_split;
 pub mod typestate_fsm;
+pub mod unsloth_lora;
 
 pub use arena::GraphArena;
 pub use continuous_batching::{ContinuousBatchingEngine, EngineCommand, EngineHandle, TokenEvent};
