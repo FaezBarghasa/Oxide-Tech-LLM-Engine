@@ -2577,6 +2577,7 @@ pub fn run_lab_command(args: LabArgs) -> Result<(), Box<dyn std::error::Error + 
     }
 }
 
+#[cfg(feature = "unsafe-pci-unlock")]
 pub fn run_gpu_unlock_probe(
     args: &GpuUnlockArgs,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -2893,5 +2894,13 @@ pub fn run_gpu_unlock_probe(
         }
     }
     println!("============================================================================");
+    Ok(())
+}
+
+#[cfg(not(feature = "unsafe-pci-unlock"))]
+pub fn run_gpu_unlock_probe(
+    _args: &GpuUnlockArgs,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    eprintln!("Error: 'gpu-unlock' command requires building with '--features unsafe-pci-unlock'");
     Ok(())
 }

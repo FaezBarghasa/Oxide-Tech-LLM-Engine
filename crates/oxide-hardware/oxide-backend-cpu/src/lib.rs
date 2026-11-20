@@ -107,8 +107,4 @@ impl HardwareBackend for CpuBackend {
     fn synchronize(&self) -> Result<()> {
         Ok(())
     }
-
-    fn maturity(&self) -> BackendMaturity {
-        BackendMaturity::Tier1SiliconVerified
-    }
 }

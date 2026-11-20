@@ -10,52 +10,36 @@ pub struct TpuLlmKernels;
 
 impl TpuLlmKernels {
     /// Dispatches TPU Matrix Multiply Unit (MXU) 128x128 systolic matrix multiplication.
+    ///
+    /// Requires loaded model weights and compiled PJRT execution graph.
     pub fn dispatch_tpu_mxu_gemv_bf16(
-        out: &mut [f32],
-        weights_bf16: &[u16],
-        activations_bf16: &[u16],
-        m: usize,
-        n: usize,
-    ) {
-        assert!(weights_bf16.len() >= m * n);
-        assert!(activations_bf16.len() >= n);
-        assert!(out.len() >= m);
-
-        for row in 0..m {
-            let offset = row * n;
-            let mut acc = 0.0f32;
-            for col in 0..n {
-                let w = half::bf16::from_bits(weights_bf16[offset + col]).to_f32();
-                let a = half::bf16::from_bits(activations_bf16[col]).to_f32();
-                acc += w * a;
-            }
-            out[row] = acc;
-        }
+        _out: &mut [f32],
+        _weights_bf16: &[u16],
+        _activations_bf16: &[u16],
+        _m: usize,
+        _n: usize,
+    ) -> Result<()> {
+        Err(oxide_core::error::EngineError::BackendNotReady {
+            backend: "tpu",
+            missing_artifact: "StableHLO/PJRT compiled graph",
+        })
     }
 
     /// Dispatches TPU v5e/v5p/v6e FP8 Matrix Multiply Unit (MXU) systolic operation.
+    ///
+    /// Requires loaded model weights and compiled PJRT execution graph.
     pub fn dispatch_tpu_mxu_gemv_fp8(
-        out: &mut [f32],
-        weights_fp8: &[u8],
-        activations_fp8: &[u8],
-        scale: f32,
-        m: usize,
-        n: usize,
-    ) {
-        assert!(weights_fp8.len() >= m * n);
-        assert!(activations_fp8.len() >= n);
-        assert!(out.len() >= m);
-
-        for row in 0..m {
-            let offset = row * n;
-            let mut acc = 0.0f32;
-            for col in 0..n {
-                let w = weights_fp8[offset + col] as f32 - 128.0;
-                let a = activations_fp8[col] as f32 - 128.0;
-                acc += w * a;
-            }
-            out[row] = acc * scale;
-        }
+        _out: &mut [f32],
+        _weights_fp8: &[u8],
+        _activations_fp8: &[u8],
+        _scale: f32,
+        _m: usize,
+        _n: usize,
+    ) -> Result<()> {
+        Err(oxide_core::error::EngineError::BackendNotReady {
+            backend: "tpu",
+            missing_artifact: "StableHLO/PJRT compiled graph",
+        })
     }
 
     /// Dispatches TPU Vector Processing Unit (VPU) RMSNorm.
@@ -88,8 +72,8 @@ mod tests {
         let w = vec![half::bf16::from_f32(1.0).to_bits(); 64];
         let a = vec![half::bf16::from_f32(0.5).to_bits(); 64];
         let mut out = [0.0f32; 1];
-        TpuLlmKernels::dispatch_tpu_mxu_gemv_bf16(&mut out, &w, &a, 1, 64);
-        assert!((out[0] - 32.0).abs() < 1e-1);
+        let res = TpuLlmKernels::dispatch_tpu_mxu_gemv_bf16(&mut out, &w, &a, 1, 64);
+        assert!(res.is_err());
     }
 
     #[test]

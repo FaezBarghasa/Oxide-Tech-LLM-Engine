@@ -29,6 +29,7 @@ pub mod error;
 pub mod hardware;
 pub mod macros;
 pub mod memory;
+pub mod roofline;
 pub mod sampler;
 pub mod thread_team;
 pub mod traits;
@@ -49,6 +50,7 @@ pub use hardware::{
     TensorCoreGeneration,
 };
 pub use memory::DevicePtr;
+pub use roofline::RooflineReceipt;
 pub use sampler::{
     AcademicSamplerEngine, GbnfGrammarEngine, GbnfRule, MirostatMode, SamplerState, SamplingConfig,
 };

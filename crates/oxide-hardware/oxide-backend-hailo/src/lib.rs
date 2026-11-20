@@ -35,13 +35,23 @@ use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
     TensorCoreGeneration,
 };
-use oxide_core::traits::HardwareBackend;
+use oxide_core::traits::{BackendMaturity, HardwareBackend, MaturityReporting};
 use oxide_core::worker::StepCommand;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HailoEventHandle {
     pub vstream_event_id: u64,
+}
+
+impl MaturityReporting for HailoBackend {
+    fn maturity() -> BackendMaturity {
+        BackendMaturity::Tier3GraphLoweringInProgress
+    }
+
+    fn maturity_instance(&self) -> BackendMaturity {
+        Self::maturity()
+    }
 }
 
 pub struct HailoBackend {

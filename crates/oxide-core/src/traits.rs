@@ -42,7 +42,7 @@ pub struct DeviceProbeReport {
 }
 
 /// Core hardware backend abstraction.
-pub trait HardwareBackend: Send + Sync + 'static + Debug {
+pub trait HardwareBackend: Send + Sync + 'static + Debug + MaturityReporting {
     type Event: Copy + Send + Sync + Debug;
 
     /// Dispatches a single token forward step to the hardware execution stream.
@@ -74,11 +74,6 @@ pub trait HardwareBackend: Send + Sync + 'static + Debug {
     /// Returns whether the physical hardware accelerator is present and accessible.
     fn is_hardware_present(&self) -> bool {
         true
-    }
-
-    /// Returns the silicon maturity tier for this backend.
-    fn backend_maturity(&self) -> BackendMaturity {
-        BackendMaturity::Tier3GraphLoweringInProgress
     }
 }
 

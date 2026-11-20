@@ -35,13 +35,23 @@ use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
     TensorCoreGeneration,
 };
-use oxide_core::traits::HardwareBackend;
+use oxide_core::traits::{BackendMaturity, HardwareBackend, MaturityReporting};
 use oxide_core::worker::StepCommand;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MetalEventHandle {
     pub command_buffer_id: u64,
+}
+
+impl MaturityReporting for MetalBackend {
+    fn maturity() -> BackendMaturity {
+        BackendMaturity::Tier2HardwareBringup
+    }
+
+    fn maturity_instance(&self) -> BackendMaturity {
+        Self::maturity()
+    }
 }
 
 pub struct MetalBackend {

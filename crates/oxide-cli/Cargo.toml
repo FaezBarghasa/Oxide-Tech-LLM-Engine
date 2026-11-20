@@ -25,6 +25,14 @@ path = "src/bin/debug_prefill.rs"
 name = "debug-layer"
 path = "src/bin/debug_layer.rs"
 
+[[bin]]
+name = "oxide-verify"
+path = "src/bin/oxide_verify.rs"
+
+[[bin]]
+name = "oxide-roofline"
+path = "src/bin/oxide_roofline.rs"
+
 
 [lib]
 path = "src/lib.rs"
@@ -54,3 +62,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rayon.workspace = true
+
+[features]
+default = []
+unsafe-pci-unlock = ["oxide-backend-cuda/unsafe-pci-unlock"]

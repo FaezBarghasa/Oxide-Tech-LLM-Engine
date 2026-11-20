@@ -33,7 +33,7 @@ use oxide_core::hardware::{
     ComputeCapability, GpuArchitecture, GpuDeviceProfile, HardwareFormFactor, MemoryTechnology,
     TensorCoreGeneration,
 };
-use oxide_core::traits::HardwareBackend;
+use oxide_core::traits::{BackendMaturity, HardwareBackend, MaturityReporting};
 use oxide_core::worker::StepCommand;
 use rknn::{RknnDmaBuffer, RknnNpuStream};
 use std::fmt;
@@ -41,6 +41,16 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RknnEventHandle {
     pub task_id: u64,
+}
+
+impl MaturityReporting for RknnBackend {
+    fn maturity() -> BackendMaturity {
+        BackendMaturity::Tier3GraphLoweringInProgress
+    }
+
+    fn maturity_instance(&self) -> BackendMaturity {
+        Self::maturity()
+    }
 }
 
 pub struct RknnBackend {

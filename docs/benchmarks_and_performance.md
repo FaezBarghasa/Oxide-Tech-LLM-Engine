@@ -57,7 +57,7 @@ The following benchmarks were measured on the physical workstation test bed (**A
 | **Inter-Token Latency (ITL)** | **99.0 ms** | **138.8 ms** | Pipelined vector register accumulation |
 | **DDR5 Bus Saturation** | **~91.0%** of physical peak | **~65.2%** of physical peak | Memory prefetch and cacheline turnaround |
 | **Cold Model Load Time** | **~2,400 ms** (2.4 s) | **25.91 ms** | **Oxide is 92x faster** (Zero-copy mmap slicing) |
-| **Prompt Processing (TTFT)** | **37.0 tok/s** (pp128) | **139.8 ms** (~915 tok/s effective) | **Oxide is ~24x faster** in initial sequence dispatch |
+| **Prompt Processing (TTFT)** | **37.0 tok/s** (pp128) | **~35 – 42 tok/s** (pp128) | Real compute-bound prompt evaluation on 8 physical Zen 4 cores |
 
 #### Physical Memory Bandwidth Analysis (DDR5-5200)
 - In single-sequence autoregressive decode (batch size = 1), generating each token requires streaming the **entire model weights (4.68 GiB / 5.03 GB)** through the memory bus.

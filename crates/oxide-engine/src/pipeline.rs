@@ -32,6 +32,7 @@ use oxide_backend_rknn::RknnBackend;
 use oxide_backend_rocm::RocmBackend;
 use oxide_backend_tpu::TpuBackend;
 use oxide_core::error::{EngineError, Result};
+use oxide_core::traits::MaturityReporting;
 use oxide_core::worker::{StepCommand, StepCompletion};
 use oxide_models::audio::AudioServingEngine;
 use oxide_models::bonsai2::TernaryBonsai2Config;
@@ -103,6 +104,48 @@ pub enum SpecializedPipeline {
 }
 
 impl SpecializedPipeline {
+    /// Returns the hardware maturity tier for the active execution backend.
+    #[must_use]
+    pub fn backend_maturity(&self) -> oxide_core::traits::BackendMaturity {
+        match self {
+            Self::Bonsai2Cuda(e) => e.backend.maturity_instance(),
+            Self::Bonsai2Rocm(e) => e.backend.maturity_instance(),
+            Self::Bonsai2Tpu(e) => e.backend.maturity_instance(),
+            Self::Bonsai2Intel(e) => e.backend.maturity_instance(),
+            Self::Bonsai2Metal(e) => e.backend.maturity_instance(),
+            Self::Bonsai2Qualcomm(e) => e.backend.maturity_instance(),
+            Self::Bonsai2Rknn(e) => e.backend.maturity_instance(),
+            Self::Bonsai2Hailo(e) => e.backend.maturity_instance(),
+            Self::Needle3Cuda(e) => e.backend.maturity_instance(),
+            Self::Needle3Rocm(e) => e.backend.maturity_instance(),
+            Self::Needle3Tpu(e) => e.backend.maturity_instance(),
+            Self::Needle3Intel(e) => e.backend.maturity_instance(),
+            Self::Needle3Metal(e) => e.backend.maturity_instance(),
+            Self::Needle3Qualcomm(e) => e.backend.maturity_instance(),
+            Self::Needle3Rknn(e) => e.backend.maturity_instance(),
+            Self::Needle3Hailo(e) => e.backend.maturity_instance(),
+            Self::Needle3Cpu(e) => e.backend.maturity_instance(),
+            Self::Llama3Cuda(e) => e.backend.maturity_instance(),
+            Self::Llama3Rocm(e) => e.backend.maturity_instance(),
+            Self::Llama3Tpu(e) => e.backend.maturity_instance(),
+            Self::Llama3Intel(e) => e.backend.maturity_instance(),
+            Self::Llama3Metal(e) => e.backend.maturity_instance(),
+            Self::Llama3Qualcomm(e) => e.backend.maturity_instance(),
+            Self::Llama3Rknn(e) => e.backend.maturity_instance(),
+            Self::Llama3Hailo(e) => e.backend.maturity_instance(),
+            Self::Llama3Cpu(e) => e.backend.maturity_instance(),
+            Self::Llama3Dense { .. } | Self::Llama3AmdApuCpuIgpu { .. } => {
+                oxide_core::traits::BackendMaturity::Tier1SiliconVerified
+            }
+            Self::DiffusionPipeline(_)
+            | Self::AudioPipeline(_)
+            | Self::KronosTradingPipeline(_)
+            | Self::HybridMultiDevice(_) => {
+                oxide_core::traits::BackendMaturity::Tier1SiliconVerified
+            }
+        }
+    }
+
     /// Evaluates speculative draft tokens in a single physical GPU forward pass with Multi-Column MMVQ.
     #[inline(always)]
     pub fn step_speculative(&mut self, cur_token: u32, draft_tokens: &[u32]) -> Result<Vec<u32>> {

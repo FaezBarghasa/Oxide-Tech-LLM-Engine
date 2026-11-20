@@ -5791,8 +5791,4 @@ impl HardwareBackend for CudaBackend {
         }
         Ok(())
     }
-
-    fn maturity(&self) -> BackendMaturity {
-        BackendMaturity::Tier1SiliconVerified
-    }
 }
