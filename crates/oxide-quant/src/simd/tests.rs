@@ -363,3 +363,14 @@ use super::*;
             assert!(val.is_finite());
         }
     }
+
+
+#[test]
+fn test_zero_alloc_guard_counting() {
+    use oxide_core::zero_alloc_guard::CountingAlloc;
+    let alloc = CountingAlloc::new();
+    assert_eq!(alloc.allocations(), 0);
+    assert_eq!(alloc.deallocations(), 0);
+    alloc.reset();
+    assert_eq!(alloc.allocations(), 0);
+}
