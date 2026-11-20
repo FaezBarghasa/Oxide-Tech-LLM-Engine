@@ -12,7 +12,6 @@
 )]
 
 use super::*;
-use rayon::prelude::*;
 
 pub fn gemv_qkv_q4_k_prequantized(
     q_matrix: &[crate::gguf_quants::BlockQ4_K],

@@ -46,11 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("  - Autoregressive Decode (Batch=1, INT4, ~4 FLOPs/B) -> 100% MEMORY BANDWIDTH BOUND");
     println!("  - Prompt Prefill (Batch=128+, INT8/FP16, >100 FLOPs/B) -> 100% COMPUTE BOUND");
 
-    // Roofline receipt validation
+    // Roofline receipt validation test (simulating 10 tok/s on an 8B model at Q4 ~ 4GB)
     let receipt = RooflineReceipt::new(
         10.0,
-        5_000_000_000,
-        8_000_000_000,
+        1,
+        1_000_000_000,
         measured_bw_gbps,
         peak_compute_tflops,
         false,
