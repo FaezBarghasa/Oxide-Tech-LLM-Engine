@@ -33,6 +33,10 @@ path = "src/bin/oxide_verify.rs"
 name = "oxide-roofline"
 path = "src/bin/oxide_roofline.rs"
 
+[[bin]]
+name = "oxide-bench"
+path = "src/bin/oxide_bench.rs"
+
 
 [lib]
 path = "src/lib.rs"
