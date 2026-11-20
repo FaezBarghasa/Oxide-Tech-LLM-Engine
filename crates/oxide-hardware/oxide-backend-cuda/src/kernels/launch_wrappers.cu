@@ -28,6 +28,37 @@ int launch_cuda_fused_rmsnorm_q8_1(float *output, void *y_q8_1,
   return cudaGetLastError();
 }
 
+int launch_cuda_fused_residual_rmsnorm_q8_1(
+    float *residual, float *output_norm, void *y_q8_1, const float *input,
+    const float *weight, int num_tokens, int hidden_dim, float eps,
+    float weight_offset, cudaStream_t stream) {
+  if (hidden_dim <= 0 || num_tokens <= 0)
+    return 0;
+  int block_size = 256;
+  if (hidden_dim >= 512 && hidden_dim % 512 == 0) {
+    block_size = 512;
+  }
+  fused_residual_rmsnorm_q8_1_cuda_kernel<<<num_tokens, block_size, 0,
+                                            stream>>>(
+      residual, output_norm, (BlockQ8_1_Gpu *)y_q8_1, input, weight, hidden_dim,
+      eps, weight_offset);
+  return cudaGetLastError();
+}
+
+int launch_cuda_fused_paged_kv_write_fp16(
+    void *k_paged_pool, void *v_paged_pool, const float *k_src,
+    const float *v_src, const int32_t *block_table, int token_pos,
+    int page_size, int kv_dim, cudaStream_t stream) {
+  if (kv_dim <= 0)
+    return 0;
+  int block_size = 256;
+  int grid_size = (kv_dim + block_size - 1) / block_size;
+  fused_paged_kv_write_fp16_kernel<<<grid_size, block_size, 0, stream>>>(
+      (__half *)k_paged_pool, (__half *)v_paged_pool, k_src, v_src,
+      block_table, token_pos, page_size, kv_dim);
+  return cudaGetLastError();
+}
+
 int launch_cuda_rope(float *q, float *k, const float *cos_table,
                      const float *sin_table, int seq_len, int num_heads,
                      int head_dim, cudaStream_t stream) {

@@ -3261,8 +3261,7 @@ impl CudaBackend {
             }
         }
 
-        let can_capture = self.cuda_graph_enabled
-            && self.d_token_embd.is_some();
+        let can_capture = self.cuda_graph_enabled && self.d_token_embd.is_some();
 
         if can_capture {
             if let Some(&handle) = self.batch_decode_graphs.get(&bucket) {
@@ -4064,51 +4063,121 @@ impl HardwareBackend for CudaBackend {
                     } else {
                         1.0f32
                     };
-                    let d_sp_ptr = self.d_seq_pos.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_seq_pos buffer not allocated".to_string())
-                    })?.as_typed_ptr::<i32>();
-                    let d_in_tok_ptr = self.d_input_token.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_input_token buffer not allocated".to_string())
-                    })?.as_typed_ptr::<i32>();
-                    let d_emb_ptr = self.d_token_embd.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_token_embd buffer not allocated".to_string())
-                    })?.as_raw_ptr();
-                    let d_hid_ptr = self.d_hidden.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_hidden buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
-                    let d_norm_ptr = self.d_scratch_norm.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_scratch_norm buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
-                    let d_q_ptr = self.d_scratch_q.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_scratch_q buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
-                    let d_k_ptr = self.d_scratch_k.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_scratch_k buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
-                    let d_v_ptr = self.d_scratch_v.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_scratch_v buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
+                    let d_sp_ptr = self
+                        .d_seq_pos
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_seq_pos buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<i32>();
+                    let d_in_tok_ptr = self
+                        .d_input_token
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_input_token buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<i32>();
+                    let d_emb_ptr = self
+                        .d_token_embd
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_token_embd buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_raw_ptr();
+                    let d_hid_ptr = self
+                        .d_hidden
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_hidden buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
+                    let d_norm_ptr = self
+                        .d_scratch_norm
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_scratch_norm buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
+                    let d_q_ptr = self
+                        .d_scratch_q
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_scratch_q buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
+                    let d_k_ptr = self
+                        .d_scratch_k
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_scratch_k buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
+                    let d_v_ptr = self
+                        .d_scratch_v
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_scratch_v buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
                     let d_out_ptr = self
                         .d_scratch_attn_out
                         .as_ref()
                         .ok_or_else(|| {
-                            EngineError::BackendError("CUDA d_scratch_attn_out buffer not allocated".to_string())
+                            EngineError::BackendError(
+                                "CUDA d_scratch_attn_out buffer not allocated".to_string(),
+                            )
                         })?
                         .as_typed_ptr::<f32>();
-                    let d_gate_ptr = self.d_scratch_gate.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_scratch_gate buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
-                    let d_up_ptr = self.d_scratch_up.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_scratch_up buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
-                    let d_logits_ptr = self.d_logits.as_ref().ok_or_else(|| {
-                        EngineError::BackendError("CUDA d_logits buffer not allocated".to_string())
-                    })?.as_typed_ptr::<f32>();
+                    let d_gate_ptr = self
+                        .d_scratch_gate
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_scratch_gate buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
+                    let d_up_ptr = self
+                        .d_scratch_up
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_scratch_up buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
+                    let d_logits_ptr = self
+                        .d_logits
+                        .as_ref()
+                        .ok_or_else(|| {
+                            EngineError::BackendError(
+                                "CUDA d_logits buffer not allocated".to_string(),
+                            )
+                        })?
+                        .as_typed_ptr::<f32>();
                     let d_sampled_ptr = self
                         .d_sampled_token
                         .as_ref()
                         .ok_or_else(|| {
-                            EngineError::BackendError("CUDA d_sampled_token buffer not allocated".to_string())
+                            EngineError::BackendError(
+                                "CUDA d_sampled_token buffer not allocated".to_string(),
+                            )
                         })?
                         .as_raw_ptr() as *mut u32;
                     let d_val_ptr = unsafe { d_sampled_ptr.add(1) as *mut f32 };
@@ -5008,16 +5077,16 @@ impl HardwareBackend for CudaBackend {
                         let slot_base_bytes = slot * slot_stride * tok_bytes;
                         let v_cache_ptr = if layer_idx < self.kv_v.len() {
                             unsafe {
-                                (self.kv_v[layer_idx].as_raw_ptr() as *mut u8)
-                                    .add(slot_base_bytes) as *mut std::ffi::c_void
+                                (self.kv_v[layer_idx].as_raw_ptr() as *mut u8).add(slot_base_bytes)
+                                    as *mut std::ffi::c_void
                             }
                         } else {
                             std::ptr::null_mut()
                         };
                         let k_cache_ptr = if layer_idx < self.kv_k.len() {
                             unsafe {
-                                (self.kv_k[layer_idx].as_raw_ptr() as *mut u8)
-                                    .add(slot_base_bytes) as *mut std::ffi::c_void
+                                (self.kv_k[layer_idx].as_raw_ptr() as *mut u8).add(slot_base_bytes)
+                                    as *mut std::ffi::c_void
                             }
                         } else {
                             std::ptr::null_mut()

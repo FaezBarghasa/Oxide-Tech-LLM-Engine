@@ -115,6 +115,31 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_fused_residual_rmsnorm_q8_1(
+        residual: *mut f32,
+        output_norm: *mut f32,
+        y_q8_1: *mut std::ffi::c_void,
+        input: *const f32,
+        weight: *const f32,
+        num_tokens: i32,
+        hidden_dim: i32,
+        eps: f32,
+        weight_offset: f32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_fused_paged_kv_write_fp16(
+        k_paged_pool: *mut std::ffi::c_void,
+        v_paged_pool: *mut std::ffi::c_void,
+        k_src: *const f32,
+        v_src: *const f32,
+        block_table: *const i32,
+        token_pos: i32,
+        page_size: i32,
+        kv_dim: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_rope(
         q: *mut f32,
         k: *mut f32,

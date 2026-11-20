@@ -182,6 +182,104 @@ __global__ void fused_rmsnorm_q8_1_cuda_kernel(
 }
 
 /**
+ * Custom CUDA Kernel: Fused Residual Add + RMSNorm + Dynamic Q8_1 Activation Quantization.
+ * Adds residual in-place: residual[i] += input[i], then normalizes residual and emits
+ * both normalized float (optional) and quantized BlockQ8_1_Gpu.
+ * Saves 2 global memory roundtrips per transformer layer.
+ */
+__global__ void fused_residual_rmsnorm_q8_1_cuda_kernel(
+    float *__restrict__ residual, float *__restrict__ output_norm,
+    BlockQ8_1_Gpu *__restrict__ y_q8_1, const float *__restrict__ input,
+    const float *__restrict__ weight, int hidden_dim, float eps,
+    float weight_offset) {
+  int tid = threadIdx.x;
+  int bid = blockIdx.x;
+  int warp_id = tid / 32;
+  int lane_id = tid % 32;
+
+  float *res_row = residual + bid * hidden_dim;
+  const float *in_row = input ? (input + bid * hidden_dim) : nullptr;
+  float *out_row = output_norm ? (output_norm + bid * hidden_dim) : nullptr;
+  BlockQ8_1_Gpu *out_q8_1 =
+      y_q8_1 ? (y_q8_1 + bid * (hidden_dim / 32)) : nullptr;
+
+  float sum_sq = 0.0f;
+  int blocks_total = hidden_dim / 32;
+  int warps_total = blockDim.x / 32;
+
+  float val[16];
+  int block_count = 0;
+  for (int b = warp_id; b < blocks_total && block_count < 16;
+       b += warps_total, block_count++) {
+    int idx = b * 32 + lane_id;
+    float r = res_row[idx];
+    if (in_row != nullptr) {
+      r += in_row[idx];
+      res_row[idx] = r;
+    }
+    val[block_count] = r;
+    sum_sq += r * r;
+  }
+
+  // Warp reduction using shuffle down
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
+  }
+
+  __shared__ float s_mean;
+  __shared__ float warp_sums[32];
+
+  if (lane_id == 0) {
+    warp_sums[warp_id] = sum_sq;
+  }
+  __syncthreads();
+
+  if (warp_id == 0) {
+    float b_sum = (lane_id < warps_total) ? warp_sums[lane_id] : 0.0f;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      b_sum += __shfl_down_sync(0xFFFFFFFF, b_sum, offset);
+    }
+    if (lane_id == 0) {
+      s_mean = rsqrtf((b_sum / (float)hidden_dim) + eps);
+    }
+  }
+  __syncthreads();
+
+  float inv_rms = s_mean;
+
+  int b_idx = 0;
+  for (int b = warp_id; b < blocks_total && b_idx < block_count;
+       b += warps_total, b_idx++) {
+    int idx = b * 32 + lane_id;
+    float w = weight != nullptr ? (weight[idx] + weight_offset) : 1.0f;
+    float norm_val = val[b_idx] * inv_rms * w;
+    if (out_row != nullptr) {
+      out_row[idx] = norm_val;
+    }
+
+    if (out_q8_1 != nullptr) {
+      float amax = fabsf(norm_val);
+      float sum = norm_val;
+
+#pragma unroll
+      for (int offset = 16; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset));
+        sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset);
+      }
+
+      float d = amax / 127.0f;
+      float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+      int8_t q = (int8_t)roundf(norm_val * id);
+      out_q8_1[b].qs[lane_id] = q;
+
+      if (lane_id == 0) {
+        out_q8_1[b].ds = make_half2(__float2half(d), __float2half(sum));
+      }
+    }
+  }
+}
+
+/**
  * Custom CUDA Kernel: Rotary Position Embedding (RoPE)
  * Applies rotary frequency phase rotation to Query and Key projections.
  */

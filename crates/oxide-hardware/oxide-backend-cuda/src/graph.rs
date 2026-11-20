@@ -232,6 +232,111 @@ impl CudaGraphManager {
     }
 }
 
+/// Bucket sizes for discrete power-of-two batched CUDA Graph execution.
+pub const CUDA_GRAPH_BUCKET_SIZES: [usize; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+
+/// Power-of-Two Multi-Batch CUDA Graph Bucket Pool (`B ∈ {1, 2, 4, 8, 16, 32, 64, 128}`).
+/// Eliminates per-kernel CPU launch overhead ($15-40\ \mu\text{s}$ per node) across varying
+/// batch sizes by selecting pre-captured, pre-instantiated CUDA Graph execution instances.
+pub struct CudaGraphBucketPool {
+    buckets: [Option<CapturedCudaGraph>; 8],
+    total_launches: u64,
+}
+
+impl Default for CudaGraphBucketPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for CudaGraphBucketPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaGraphBucketPool")
+            .field("total_launches", &self.total_launches)
+            .field("active_buckets", &self.active_bucket_mask())
+            .finish()
+    }
+}
+
+impl CudaGraphBucketPool {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            buckets: [None, None, None, None, None, None, None, None],
+            total_launches: 0,
+        }
+    }
+
+    /// Maps batch size $B$ to corresponding bucket index $[0..7]$.
+    #[must_use]
+    pub fn bucket_index_for_batch(batch_size: usize) -> usize {
+        for (idx, &size) in CUDA_GRAPH_BUCKET_SIZES.iter().enumerate() {
+            if batch_size <= size {
+                return idx;
+            }
+        }
+        7
+    }
+
+    /// Returns bitmask of populated graph buckets.
+    #[must_use]
+    pub fn active_bucket_mask(&self) -> u8 {
+        let mut mask = 0u8;
+        for (i, b) in self.buckets.iter().enumerate() {
+            if b.is_some() {
+                mask |= 1 << i;
+            }
+        }
+        mask
+    }
+
+    /// Inserts a captured CUDA graph for a specific batch bucket.
+    pub fn insert_graph(&mut self, bucket_idx: usize, graph: CapturedCudaGraph) {
+        if bucket_idx < 8 {
+            self.buckets[bucket_idx] = Some(graph);
+        }
+    }
+
+    /// Retrieves bucketed graph for a given batch size.
+    #[must_use]
+    pub fn get_bucket(&self, batch_size: usize) -> Option<&CapturedCudaGraph> {
+        let idx = Self::bucket_index_for_batch(batch_size);
+        self.buckets[idx].as_ref()
+    }
+
+    /// Launches the appropriate bucketed CUDA graph on the given stream.
+    ///
+    /// # Safety
+    /// Caller must ensure `stream` is an active, valid CUDA stream pointer on the device.
+    pub unsafe fn launch_for_batch(
+        &mut self,
+        batch_size: usize,
+        stream: driver::cudaStream_t,
+    ) -> Result<bool> {
+        let idx = Self::bucket_index_for_batch(batch_size);
+        if let Some(graph) = self.buckets[idx].as_mut() {
+            if !graph.raw_exec.is_null() {
+                let err = unsafe { driver::cudaGraphLaunch(graph.raw_exec, stream) };
+                if err != 0 {
+                    return Err(EngineError::BackendError(format!(
+                        "cudaGraphLaunch failed in bucket {idx} with error {err}"
+                    )));
+                }
+            }
+            graph.execution_count += 1;
+            self.total_launches += 1;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[must_use]
+    pub fn total_launches(&self) -> u64 {
+        self.total_launches
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +355,20 @@ mod tests {
         assert_eq!(manager.total_replays(), 2);
         let graph = manager.get_graph(handle.graph_id).unwrap();
         assert_eq!(graph.execution_count, 2);
+    }
+
+    #[test]
+    fn test_cuda_graph_bucket_pool_mapping() {
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(1), 0);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(2), 1);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(3), 2);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(4), 2);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(5), 3);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(8), 3);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(16), 4);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(32), 5);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(64), 6);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(128), 7);
+        assert_eq!(CudaGraphBucketPool::bucket_index_for_batch(256), 7);
     }
 }

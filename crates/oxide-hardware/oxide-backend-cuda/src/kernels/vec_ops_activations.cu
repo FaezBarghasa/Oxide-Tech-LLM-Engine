@@ -172,3 +172,31 @@ __global__ void convert_f32_to_v_cache_fp16_kernel(
   }
 }
 
+/**
+ * Custom CUDA Kernel: Fused Paged KV Cache Quantized Write.
+ * Writes Key and Value activations directly into paged KV slots in FP16 or FP8.
+ * Given page_table mapping logical token_pos to physical block and offset:
+ * physical_offset = page_table[token_pos / page_size] * page_size + (token_pos % page_size)
+ */
+__global__ void fused_paged_kv_write_fp16_kernel(
+    __half *__restrict__ k_paged_pool, __half *__restrict__ v_paged_pool,
+    const float *__restrict__ k_src, const float *__restrict__ v_src,
+    const int32_t *__restrict__ block_table, int token_pos, int page_size,
+    int kv_dim) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= kv_dim)
+    return;
+
+  int logical_page = token_pos / page_size;
+  int page_offset = token_pos % page_size;
+  int physical_block = block_table[logical_page];
+  size_t slot_idx = ((size_t)physical_block * page_size + page_offset) * kv_dim + idx;
+
+  if (k_paged_pool != nullptr && k_src != nullptr) {
+    k_paged_pool[slot_idx] = __float2half(k_src[idx]);
+  }
+  if (v_paged_pool != nullptr && v_src != nullptr) {
+    v_paged_pool[slot_idx] = __float2half(v_src[idx]);
+  }
+}
+
