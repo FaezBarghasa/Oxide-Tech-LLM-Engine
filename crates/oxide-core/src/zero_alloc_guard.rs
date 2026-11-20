@@ -37,24 +37,29 @@ impl CountingAlloc {
     }
 }
 
+// SAFETY: Forwarding to system allocator while tracking counts via atomics.
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         self.alloc_count.fetch_add(1, SeqCst);
+        // SAFETY: Delegating to inner GlobalAlloc.
         unsafe { self.inner.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.dealloc_count.fetch_add(1, SeqCst);
+        // SAFETY: Delegating to inner GlobalAlloc.
         unsafe { self.inner.dealloc(ptr, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         self.alloc_count.fetch_add(1, SeqCst);
+        // SAFETY: Delegating to inner GlobalAlloc.
         unsafe { self.inner.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         self.alloc_count.fetch_add(1, SeqCst);
+        // SAFETY: Delegating to inner GlobalAlloc.
         unsafe { self.inner.realloc(ptr, layout, new_size) }
     }
 }

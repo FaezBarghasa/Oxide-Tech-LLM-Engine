@@ -3,7 +3,10 @@
 //! Enforces epistemic honesty in benchmarks:
 //! - MBU = (Bytes_model_and_kv * tok/s) / BW_measured
 //! - MFU = (2 * P_active * tok/s) / F_peak
+//!
 //! Aborts with `BenchmarkIntegrityViolation` if measured exceeds physical ceiling (> 1.05).
+
+#![allow(clippy::similar_names)]
 
 use crate::error::{EngineError, Result};
 

@@ -50,8 +50,6 @@ pub unsafe fn dot_f32_avx(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 pub unsafe fn dot_f32_avx2(a: &[f32], b: &[f32]) -> f32 {
@@ -102,7 +100,6 @@ pub unsafe fn dot_f32_avx2(a: &[f32], b: &[f32]) -> f32 {
 
 /// Compute dot product between a Q8_0 block (32 int8 weights) and 32 f32 activations.
 
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 pub unsafe fn dot_q8_0_avx2(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
@@ -149,7 +146,6 @@ pub unsafe fn dot_q8_0_avx2(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
 }
 
 /// Compute dot product between a Q5_0 block (22 bytes = 32 weights) and 32 f32 activations.
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
@@ -200,8 +196,6 @@ pub unsafe fn dot_q5_0_avx2(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale:
         sum * scale
     }
 }
-
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
@@ -276,8 +270,6 @@ pub unsafe fn dot_q5_0_q8_0_row_avx2(
     }
 }
 
-
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 pub unsafe fn dot_q8_0_q8_0_row_avx2(
@@ -321,7 +313,6 @@ pub unsafe fn dot_q8_0_q8_0_row_avx2(
 }
 
 /// Compute dot product between a Q4_0 block (16 bytes = 32 nibbles) and 32 f32 activations.
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
@@ -373,7 +364,6 @@ pub unsafe fn dot_q4_0_avx2(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
 }
 
 /// Compute dot product between a Q4_K super-block (128 bytes = 256 weights) and 256 f32 activations.
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
@@ -436,7 +426,6 @@ pub unsafe fn dot_q4_k_avx2(
 }
 
 /// Compute dot product between a Q6_K super-block (210 bytes = 256 weights) and 256 f32 activations.
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
@@ -538,7 +527,6 @@ pub unsafe fn dot_q6_k_avx2(
         (buf[0] + buf[1] + buf[2] + buf[3]) + (buf[4] + buf[5] + buf[6] + buf[7])
     }
 }
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]

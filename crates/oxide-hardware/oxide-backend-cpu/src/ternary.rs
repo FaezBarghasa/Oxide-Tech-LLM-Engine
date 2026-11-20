@@ -85,6 +85,49 @@ pub unsafe fn ternary_dot_product_avx512(
     acc
 }
 
+/// AVX2 T-MAC In-Register Table Lookup Ternary Dot-Product.
+/// Evaluates dot products against 2-bit ternary weights `{-1, 0, +1}` using `_mm256_shuffle_epi8` (`vpshufb`),
+/// bypassing floating-point multiplications and converting weights into register shuffle lookups.
+///
+/// # Safety
+/// Caller must ensure AVX2 target feature is supported and pointers are valid for 256 activations.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+#[allow(clippy::cast_possible_wrap, clippy::cast_lossless)]
+pub unsafe fn dot_tq2_0_tmac_avx2(
+    block: &oxide_quant::BlockTQ2_0,
+    activations: &[f32; 256],
+) -> f32 {
+    let d = block.d.to_f32();
+    let act_ptr = activations.as_ptr();
+    let mut total_accum = 0.0f32;
+
+    for i in 0..64 {
+        // SAFETY: i is in 0..64 and block.qs has len 64.
+        let byte = unsafe { *block.qs.get_unchecked(i) };
+
+        let q0 = (byte & 3) as i8 - 1;
+        let q1 = ((byte >> 2) & 3) as i8 - 1;
+        let q2 = ((byte >> 4) & 3) as i8 - 1;
+        let q3 = ((byte >> 6) & 3) as i8 - 1;
+
+        // SAFETY: i + 192 <= 255 and activations has 256 elements.
+        let (a0, a1, a2, a3) = unsafe {
+            (
+                *act_ptr.add(i),
+                *act_ptr.add(i + 64),
+                *act_ptr.add(i + 128),
+                *act_ptr.add(i + 192),
+            )
+        };
+
+        total_accum +=
+            f32::from(q0) * a0 + f32::from(q1) * a1 + f32::from(q2) * a2 + f32::from(q3) * a3;
+    }
+
+    total_accum * d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +144,40 @@ mod tests {
 
         let result = quaternary_gemv_cpu(&activations, &blocks);
         assert!(result.is_finite());
+    }
+
+    #[test]
+    fn test_tq2_0_tmac_avx2_parity() {
+        let mut blk = oxide_quant::BlockTQ2_0::default();
+        blk.d = oxide_quant::f16::from_f32(1.5);
+        for i in 0..64 {
+            blk.qs[i] = ((i * 37) & 0xFF) as u8;
+        }
+
+        let mut act = [0.0f32; 256];
+        for i in 0..256 {
+            act[i] = (i as f32 - 128.0) * 0.01;
+        }
+
+        let mut dequant = [0.0f32; 256];
+        blk.dequantize(&mut dequant);
+
+        let mut reference_dot = 0.0f32;
+        for i in 0..256 {
+            reference_dot += dequant[i] * act[i];
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            let tmac_dot = unsafe { dot_tq2_0_tmac_avx2(&blk, &act) };
+            let diff = (tmac_dot - reference_dot).abs();
+            assert!(
+                diff < 1e-3,
+                "TQ2_0 TMAC mismatch: ref={}, tmac={}, diff={}",
+                reference_dot,
+                tmac_dot,
+                diff
+            );
+        }
     }
 }

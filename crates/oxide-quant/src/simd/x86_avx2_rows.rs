@@ -133,8 +133,6 @@ pub unsafe fn dot_q6_k_q8_k_row_avx2(
     }
 }
 
-
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 pub unsafe fn dot_q6_k_q8_k_2rows_avx2(
@@ -355,8 +353,6 @@ pub unsafe fn dot_q6_k_q8_k_2rows_avx2(
     }
 }
 
-
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 pub unsafe fn dot_q4_k_q8_k_row_avx2(
@@ -473,8 +469,6 @@ pub unsafe fn dot_q4_k_q8_k_row_avx2(
         sum_acc + sum_m
     }
 }
-
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
@@ -652,8 +646,6 @@ pub unsafe fn dot_q4_k_q8_k_2rows_avx2(
         (sum_acc0 + sum_m0, sum_acc1 + sum_m1)
     }
 }
-
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
@@ -928,6 +920,3 @@ pub unsafe fn dot_q4_k_q8_k_4rows_avx2(
         )
     }
 }
-
-
-

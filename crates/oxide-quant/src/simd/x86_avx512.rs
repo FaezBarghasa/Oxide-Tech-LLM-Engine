@@ -61,8 +61,6 @@ pub unsafe fn dot_f32_avx512(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn dot_q8_0_avx512(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
@@ -104,7 +102,6 @@ pub unsafe fn dot_q8_0_avx512(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32
 
 /// Compute quantized INT8 x INT8 dot product using AVX-512 VNNI (`vpdpbusd`) hardware instructions.
 /// Provides peak INT8 arithmetic throughput (3x speedup over standard AVX2 integer emulation).
-
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
@@ -148,8 +145,6 @@ pub unsafe fn dot_q4_0_avx512(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32
         total * scale
     }
 }
-
-
 
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
 #[allow(dead_code)]
@@ -373,8 +368,6 @@ pub unsafe fn dot_q4_k_avx512_legacy(qs: &[u8; 128], act: &[f32; 256], d: f32, d
     }
 }
 
-
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
 #[allow(dead_code)]
@@ -432,4 +425,3 @@ pub unsafe fn dot_q6_k_avx512(ql: &[u8; 128], qh: &[u8; 64], act: &[f32; 256], d
         total * d
     }
 }
-

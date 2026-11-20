@@ -20,16 +20,16 @@ pub mod x86_amx;
 pub mod x86_avx2;
 pub mod x86_avx2_rows;
 pub use x86_avx2_rows::*;
+pub mod fused_gemv;
 pub mod x86_avx512;
 pub mod x86_vnni;
-pub mod fused_gemv;
 pub use fused_gemv::*;
 
 pub use scalar::*;
+pub use x86_amx as amx;
 pub use x86_avx2::*;
 pub use x86_avx512::*;
 pub use x86_vnni::*;
-pub use x86_amx as amx;
 
 /// Continuous F32 dot product with dynamic microarchitecture feature detection (AVX-512, AVX2/FMA, AVX, or 8-way unrolled portable).
 #[inline(always)]
@@ -60,8 +60,6 @@ pub fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     dot_f32_portable(a, b)
 }
 
-
-
 #[must_use]
 pub fn dot_q8_0(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
@@ -84,8 +82,6 @@ pub fn dot_q8_0(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
 }
 
 #[inline(always)]
-
-
 #[must_use]
 pub fn dot_q8_0_vnni(u_act: &[u8; 32], s_wt: &[i8; 32], scale_product: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
@@ -106,8 +102,6 @@ pub fn dot_q8_0_vnni(u_act: &[u8; 32], s_wt: &[i8; 32], scale_product: f32) -> f
     accum as f32 * scale_product
 }
 
-
-
 #[must_use]
 pub fn dot_q5_0(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
@@ -124,8 +118,6 @@ pub fn dot_q5_0(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32) -> f32
 }
 
 #[inline(always)]
-
-
 #[must_use]
 pub fn dot_q4_0(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
@@ -148,8 +140,6 @@ pub fn dot_q4_0(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
 }
 
 #[inline(always)]
-
-
 #[must_use]
 pub fn dot_q4_k(qs: &[u8; 128], scales: &[u8; 12], act: &[f32; 256], d: f32, dmin: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
@@ -166,8 +156,6 @@ pub fn dot_q4_k(qs: &[u8; 128], scales: &[u8; 12], act: &[f32; 256], d: f32, dmi
 }
 
 #[inline(always)]
-
-
 #[must_use]
 pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], scales: &[i8; 16], act: &[f32; 256], d: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
@@ -182,8 +170,6 @@ pub fn dot_q6_k(ql: &[u8; 128], qh: &[u8; 64], scales: &[i8; 16], act: &[f32; 25
 
     dot_q6_k_portable(ql, qh, scales, act, d)
 }
-
-
 
 #[inline]
 fn get_team_threads() -> usize {
@@ -439,7 +425,6 @@ pub fn gemv_q5_0(
 /// AMX (Advanced Matrix Extensions) Tile Configuration and Compute Engine.
 /// Provides architectural abstractions for Intel Xeon / Sapphire Rapids AMX tile registers (`TMM0`..`TMM7`).
 
-
 /// Parallel Cache-Blocked Matrix-Vector Multiplication (GEMV) for CPU inference.
 /// Computes `y = A * x` where `A` is of shape `[m, n]`.
 /// Blocks row computation across multiple CPU threads to maximize L1/L2 cache locality and saturate AVX2/AVX-512 FMA pipelines.
@@ -630,9 +615,6 @@ pub fn gemv_q4_0(
     }
 }
 
-
-
-
 /// Multithreaded Q4_K Matrix-Vector Multiplication using pre-quantized BlockQ8_K activations.
 pub fn gemv_q4_k_prequantized(
     matrix: &[crate::gguf_quants::BlockQ4_K],
@@ -643,16 +625,34 @@ pub fn gemv_q4_k_prequantized(
 ) {
     let blocks_per_row = n / 256;
     #[cfg(target_arch = "x86_64")]
+    let has_vnni512 = is_x86_feature_detected!("avx512vnni")
+        && is_x86_feature_detected!("avx512bw")
+        && is_x86_feature_detected!("avx512f");
+    #[cfg(target_arch = "x86_64")]
     let has_vnni = is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
     #[cfg(target_arch = "x86_64")]
     let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
     #[cfg(not(target_arch = "x86_64"))]
-    let (has_vnni, has_avx2) = (false, false);
+    let (has_vnni512, has_vnni, has_avx2) = (false, false, false);
 
     if m <= 8 {
         let mut row = 0;
         #[cfg(target_arch = "x86_64")]
-        if has_vnni {
+        if has_vnni512 {
+            while row + 3 < m {
+                let r0 = &matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let r1 = &matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                let r2 = &matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                let r3 = &matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                let (v0, v1, v2, v3) =
+                    unsafe { dot_q4_k_q8_k_4rows_avx512vnni512(r0, r1, r2, r3, q8_k_act) };
+                output[row] = v0;
+                output[row + 1] = v1;
+                output[row + 2] = v2;
+                output[row + 3] = v3;
+                row += 4;
+            }
+        } else if has_vnni {
             while row + 3 < m {
                 let r0 = &matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
                 let r1 = &matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
@@ -721,7 +721,22 @@ pub fn gemv_q4_k_prequantized(
         let mut row = start;
         let mut i = 0;
         #[cfg(target_arch = "x86_64")]
-        if has_vnni {
+        if has_vnni512 {
+            while row + 3 < end {
+                let r0 = &matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
+                let r1 = &matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
+                let r2 = &matrix[(row + 2) * blocks_per_row..(row + 3) * blocks_per_row];
+                let r3 = &matrix[(row + 3) * blocks_per_row..(row + 4) * blocks_per_row];
+                let (v0, v1, v2, v3) =
+                    unsafe { dot_q4_k_q8_k_4rows_avx512vnni512(r0, r1, r2, r3, q8_k_act) };
+                local_out[i] = v0;
+                local_out[i + 1] = v1;
+                local_out[i + 2] = v2;
+                local_out[i + 3] = v3;
+                row += 4;
+                i += 4;
+            }
+        } else if has_vnni {
             while row + 3 < end {
                 let r0 = &matrix[row * blocks_per_row..(row + 1) * blocks_per_row];
                 let r1 = &matrix[(row + 1) * blocks_per_row..(row + 2) * blocks_per_row];
@@ -907,8 +922,6 @@ pub fn swiglu_f32(gate: &[f32], up: &[f32], output: &mut [f32]) {
         output[i] = silu_g * up[i];
     }
 }
-
-
 
 /// Vectorized Rotary Position Embedding (RoPE) kernel.
 pub fn rope_f32(x: &mut [f32], head_dim: usize, position: usize, theta: f32) {
@@ -1101,7 +1114,6 @@ pub fn gemv_pq2_0(
         });
     }
 }
-
 
 #[cfg(test)]
 mod tests;

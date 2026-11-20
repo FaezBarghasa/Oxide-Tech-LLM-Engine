@@ -48,8 +48,6 @@ pub fn dot_f32_portable(a: &[f32], b: &[f32]) -> f32 {
     sum
 }
 
-
-
 pub fn dot_q8_0_portable(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
     let mut acc0 = 0.0f32;
     let mut acc1 = 0.0f32;
@@ -67,8 +65,6 @@ pub fn dot_q8_0_portable(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
     (acc0 + acc1 + acc2 + acc3) * scale
 }
 
-
-
 pub fn dot_q5_0_portable(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f32) -> f32 {
     let mut acc = 0.0f32;
     let qh_u32 = u32::from_le_bytes(*qh);
@@ -84,8 +80,6 @@ pub fn dot_q5_0_portable(qs: &[u8; 16], qh: &[u8; 4], act: &[f32; 32], scale: f3
     }
     acc * scale
 }
-
-
 
 pub fn dot_q4_0_portable(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
     let mut acc0 = 0.0f32;
@@ -110,8 +104,6 @@ pub fn dot_q4_0_portable(qs: &[u8; 16], act: &[f32; 32], scale: f32) -> f32 {
 
     (acc0 + acc1 + acc2 + acc3) * scale
 }
-
-
 
 pub fn dot_q4_k_portable(
     qs: &[u8; 128],
@@ -151,7 +143,6 @@ pub fn dot_q4_k_portable(
 
 #[cfg(target_arch = "x86_64")]
 
-
 pub fn dot_q6_k_portable(
     ql: &[u8; 128],
     qh: &[u8; 64],
@@ -190,8 +181,6 @@ pub fn dot_q6_k_portable(
     }
     sum * d
 }
-
-
 
 pub fn dot_q6_k_q8_k_row_portable(
     row_weights: &[crate::int_quant::BlockQ6_K],
@@ -233,7 +222,6 @@ pub fn dot_q6_k_q8_k_row_portable(
     }
     sum
 }
-
 
 pub fn dot_q4_k_q8_k_row_portable(
     row_weights: &[crate::gguf_quants::BlockQ4_K],
@@ -278,7 +266,6 @@ pub fn dot_q4_k_q8_k_row_portable(
     sum
 }
 
-
 pub fn dot_pq2_0(qs: &[u8; 32], act: &[f32; 128], scale: f32) -> f32 {
     let mut acc0 = 0.0f32;
     let mut acc1 = 0.0f32;
@@ -300,4 +287,3 @@ pub fn dot_pq2_0(qs: &[u8; 32], act: &[f32; 128], scale: f32) -> f32 {
 
     (acc0 + acc1 + acc2 + acc3) * scale
 }
-

@@ -8,7 +8,9 @@
     clippy::too_many_lines,
     clippy::many_single_char_names,
     clippy::undocumented_unsafe_blocks,
-    clippy::collapsible_if
+    clippy::collapsible_if,
+    clippy::wildcard_imports,
+    clippy::too_many_arguments
 )]
 
 use super::*;
@@ -37,7 +39,8 @@ pub fn gemv_qkv_q4_k_prequantized(
     team.dispatch_rows(m_total, |start, end| {
         let mut row = start;
         #[cfg(target_arch = "x86_64")]
-        let has_vnni = is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
+        let has_vnni =
+            is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
         #[cfg(target_arch = "x86_64")]
         let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
         #[cfg(not(target_arch = "x86_64"))]
@@ -221,7 +224,8 @@ pub fn gemv_qkv_q4_k_q6_k_prequantized(
     team.dispatch_rows(m_total, |start, end| {
         let mut row = start;
         #[cfg(target_arch = "x86_64")]
-        let has_vnni = is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
+        let has_vnni =
+            is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
         #[cfg(target_arch = "x86_64")]
         let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
         #[cfg(not(target_arch = "x86_64"))]
@@ -393,7 +397,8 @@ pub fn gemv_gate_up_swiglu_q4_k_prequantized(
     team.dispatch_rows(m, |start, end| {
         let mut row = start;
         #[cfg(target_arch = "x86_64")]
-        let has_vnni = is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
+        let has_vnni =
+            is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
         #[cfg(target_arch = "x86_64")]
         let has_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
         #[cfg(not(target_arch = "x86_64"))]

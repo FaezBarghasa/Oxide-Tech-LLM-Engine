@@ -81,3 +81,89 @@ pub unsafe fn dot_q8_0_neon(qs: &[i8; 32], act: &[f32; 32], scale: f32) -> f32 {
         sum * scale
     }
 }
+
+/// Compute `Q4_K` by `Q8_K` block dot-product using ARM64 NEON `dotprod` (`vdotq_s32`).
+/// Processes a 256-element block.
+#[inline(always)]
+pub unsafe fn dot_q4_k_q8_k_block_neon(
+    w: &crate::gguf_quants::BlockQ4_K,
+    y: &crate::int_quant::BlockQ8_K,
+) -> f32 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use core::arch::aarch64::*;
+        unsafe {
+            let d0 = y.d * w.d.to_f32();
+            let dmin0 = -y.d * w.dmin.to_f32();
+
+            let mut sum_acc = vdupq_n_s32(0);
+            let mut min_acc = 0i32;
+
+            let act_ptr = y.qs.as_ptr();
+            let q_ptr = w.qs.as_ptr();
+
+            for chunk in 0..4 {
+                let is = chunk * 2;
+                let (sc1, m1) = crate::gguf_quants::get_scale_min_k4(is, &w.scales);
+                let (sc2, m2) = crate::gguf_quants::get_scale_min_k4(is + 1, &w.scales);
+
+                let sum_a1 = (y.bsums[chunk * 4] as i32) + (y.bsums[chunk * 4 + 1] as i32);
+                let sum_a2 = (y.bsums[chunk * 4 + 2] as i32) + (y.bsums[chunk * 4 + 3] as i32);
+                min_acc += (m1 as i32) * sum_a1 + (m2 as i32) * sum_a2;
+
+                let act_base = chunk * 64;
+                let q_base = chunk * 32;
+
+                // Load 32 bytes of packed weights
+                let q_bytes = vld1q_u8(q_ptr.add(q_base));
+                let m4 = vdupq_n_u8(0x0F);
+                let q1 = vandq_u8(q_bytes, m4);
+                let q2 = vandq_u8(vshrq_n_u8(q_bytes, 4), m4);
+
+                let a1_0 = vld1q_s8(act_ptr.add(act_base).cast());
+                let a1_1 = vld1q_s8(act_ptr.add(act_base + 16).cast());
+                let a2_0 = vld1q_s8(act_ptr.add(act_base + 32).cast());
+                let a2_1 = vld1q_s8(act_ptr.add(act_base + 48).cast());
+
+                let mut p1 = vdupq_n_s32(0);
+                p1 = vdotq_s32(
+                    p1,
+                    vreinterpretq_s8_u8(vcombine_u8(vget_low_u8(q1), vget_low_u8(q1))),
+                    a1_0,
+                );
+                p1 = vdotq_s32(
+                    p1,
+                    vreinterpretq_s8_u8(vcombine_u8(vget_high_u8(q1), vget_high_u8(q1))),
+                    a1_1,
+                );
+
+                let mut p2 = vdupq_n_s32(0);
+                p2 = vdotq_s32(
+                    p2,
+                    vreinterpretq_s8_u8(vcombine_u8(vget_low_u8(q2), vget_low_u8(q2))),
+                    a2_0,
+                );
+                p2 = vdotq_s32(
+                    p2,
+                    vreinterpretq_s8_u8(vcombine_u8(vget_high_u8(q2), vget_high_u8(q2))),
+                    a2_1,
+                );
+
+                let sc1_v = vdupq_n_s32(sc1 as i32);
+                let sc2_v = vdupq_n_s32(sc2 as i32);
+                sum_acc = vmlaq_s32(sum_acc, p1, sc1_v);
+                sum_acc = vmlaq_s32(sum_acc, p2, sc2_v);
+            }
+
+            let bsum = vaddvq_s32(sum_acc);
+            d0 * (bsum as f32) + dmin0 * (min_acc as f32)
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        crate::simd::scalar::dot_q4_k_q8_k_row_portable(
+            std::slice::from_ref(w),
+            std::slice::from_ref(y),
+        )
+    }
+}
