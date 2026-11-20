@@ -1517,6 +1517,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-tech-llm-engine"
+version = "0.5.0"
+dependencies = [
+ "oxide-alloc",
+ "oxide-backend-cpu",
+ "oxide-backend-cuda",
+ "oxide-core",
+ "oxide-engine",
+ "oxide-models",
+ "oxide-quant",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "page_size"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

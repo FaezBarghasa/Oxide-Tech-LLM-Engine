@@ -22,10 +22,9 @@ pub use oxide_models::audio_encoders::{
 };
 pub use oxide_models::hybrid_embeds::{HybridEmbeddingSequence, InputSpan};
 
-use std::sync::Arc;
-
 /// Supported Hardware Quantization Profiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum QuantMode {
     /// 8 GB GPU Profile (Q4_K_M weights with FP8 E4M3 Paged KV-Cache).
     Q4_K_M_Fp8Kv,
@@ -131,7 +130,10 @@ impl OxideEngine {
     }
 
     /// Initializes engine borrowing an existing CUDA driver context pointer (zero FFI duplication).
-    pub fn from_shared_cuda_context(cu_context_ptr: usize, vram_budget_bytes: usize) -> OxideEngineBuilder {
+    pub fn from_shared_cuda_context(
+        cu_context_ptr: usize,
+        vram_budget_bytes: usize,
+    ) -> OxideEngineBuilder {
         let handle = SharedDeviceHandle::new(cu_context_ptr, vram_budget_bytes);
         OxideEngineBuilder::new().shared_device_handle(handle)
     }
@@ -150,12 +152,18 @@ impl OxideEngine {
     }
 
     /// Encodes input audio into continuous latents (with Blake3 prefix caching).
-    pub fn encode_audio(&mut self, blake3_hash: [u8; 32], mel_16k_frames: &[f32]) -> Result<Vec<f32>> {
-        if self.builder.enable_blake3_audio_kv_cache {
-            if let Some(_cached_pages) = self.audio_cache.lookup(&self.builder.model_path, None, &blake3_hash) {
-                // Cache hit: return early
-                return Ok(vec![0.0f32; 128]);
-            }
+    pub fn encode_audio(
+        &mut self,
+        blake3_hash: [u8; 32],
+        mel_16k_frames: &[f32],
+    ) -> Result<Vec<f32>> {
+        if self.builder.enable_blake3_audio_kv_cache
+            && let Some(_cached_pages) =
+                self.audio_cache
+                    .lookup(&self.builder.model_path, None, &blake3_hash)
+        {
+            // Cache hit: return early
+            return Ok(vec![0.0f32; 128]);
         }
 
         // Simulate AF-Whisper / MOSS feature projection
