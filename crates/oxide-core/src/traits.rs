@@ -3,6 +3,34 @@ use crate::memory::DevicePtr;
 use crate::worker::StepCommand;
 use std::fmt::Debug;
 
+/// Hardware backend silicon verification maturity tier.
+///
+/// Every backend must expose this at compile time and runtime.
+/// No backend may silently impersonate hardware it does not physically access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BackendMaturity {
+    /// Executes real silicon kernels. Passes golden parity (>= 0.9999 cosine sim)
+    /// on physical CI hardware. Zero CPU impersonation allowed.
+    Tier1SiliconVerified,
+    /// Real driver/shader pipeline compiling. Partially verified on physical hardware.
+    /// May fall back to CPU for unimplemented ops IF `--allow-reference-cpu-emulation`
+    /// CLI flag is explicitly passed.
+    Tier2HardwareBringup,
+    /// Graph lowering under active development.
+    /// Returns `Err(EngineError::BackendNotReady { .. })` on dispatch unless
+    /// `--allow-reference-cpu-emulation` is explicitly set.
+    Tier3GraphLoweringInProgress,
+}
+
+/// Trait every backend must implement to report its silicon maturity.
+pub trait MaturityReporting {
+    fn maturity() -> BackendMaturity
+    where
+        Self: Sized;
+
+    fn maturity_instance(&self) -> BackendMaturity;
+}
+
 /// Device Probe Report describing physical device capabilities and telemetry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceProbeReport {
@@ -46,6 +74,11 @@ pub trait HardwareBackend: Send + Sync + 'static + Debug {
     /// Returns whether the physical hardware accelerator is present and accessible.
     fn is_hardware_present(&self) -> bool {
         true
+    }
+
+    /// Returns the silicon maturity tier for this backend.
+    fn backend_maturity(&self) -> BackendMaturity {
+        BackendMaturity::Tier3GraphLoweringInProgress
     }
 }
 

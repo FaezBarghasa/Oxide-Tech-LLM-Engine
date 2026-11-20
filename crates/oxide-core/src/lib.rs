@@ -34,6 +34,7 @@ pub mod thread_team;
 pub mod traits;
 pub mod typestate;
 pub mod worker;
+pub mod zero_alloc_guard;
 
 pub use cskv::{
     CSKV_MAGIC, CskvBufferKind, CskvFileRange, CskvHeader, CskvLayout, CskvVariant, KvDtype,
@@ -53,8 +54,9 @@ pub use sampler::{
 };
 pub use thread_team::{ParallelTask, ThreadTeam, global_thread_team};
 pub use traits::{
-    DeviceProbeReport, HardwareBackend, HardwareSupports, ModelConfig, OpticalComputeFabric,
-    QuantScheme,
+    BackendMaturity, DeviceProbeReport, HardwareBackend, HardwareSupports, MaturityReporting,
+    ModelConfig, OpticalComputeFabric, QuantScheme,
 };
 pub use typestate::{Allocated, Decoding, Prefilling, SequenceRequest, Terminal, Unallocated};
 pub use worker::{ExecutionWorker, StepCommand, StepCompletion};
+pub use zero_alloc_guard::CountingAlloc;

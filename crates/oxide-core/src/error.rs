@@ -75,6 +75,29 @@ pub enum EngineError {
         diff: f32,
         tolerance: f32,
     },
+
+    #[error("Uninitialized execution stream for backend '{backend}'")]
+    UninitializedStream { backend: &'static str },
+
+    #[error("Backend '{backend}' is not ready: {missing_artifact}")]
+    BackendNotReady {
+        backend: &'static str,
+        missing_artifact: &'static str,
+    },
+
+    #[error(
+        "Benchmark integrity violation: measured MBU/MFU {measured} exceeds physical ceiling {ceiling}"
+    )]
+    BenchmarkIntegrityViolation { measured: f32, ceiling: f32 },
+
+    #[error(
+        "Golden parity failure at layer {layer}: cosine similarity {cosine_sim} below threshold {threshold}"
+    )]
+    GoldenParityFailure {
+        layer: usize,
+        cosine_sim: f32,
+        threshold: f32,
+    },
 }
 
 pub type OxideError = EngineError;

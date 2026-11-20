@@ -30,13 +30,23 @@ pub use kernels::RocmLlmKernels;
 
 use oxide_core::error::Result;
 use oxide_core::hardware::GpuDeviceProfile;
-use oxide_core::traits::HardwareBackend;
+use oxide_core::traits::{BackendMaturity, HardwareBackend, MaturityReporting};
 use oxide_core::worker::StepCommand;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HipEventHandle {
     pub event_id: u64,
+}
+
+impl MaturityReporting for RocmBackend {
+    fn maturity() -> BackendMaturity {
+        BackendMaturity::Tier2HardwareBringup
+    }
+
+    fn maturity_instance(&self) -> BackendMaturity {
+        Self::maturity()
+    }
 }
 
 pub struct RocmBackend {

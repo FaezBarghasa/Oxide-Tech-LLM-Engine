@@ -305,7 +305,7 @@ The benchmark measures real microsecond Time-To-First-Token (TTFT) and decode to
 | **Raw iGPU** | AMD RDNA 2 / Unified Coherent DDR5 | Heterogeneous compute | Zero PCIe copy | vs llama.cpp Vulkan/OpenCL |
 | **Hybrid Collaborative** | CPU + AMD iGPU + NVIDIA dGPU | Multi-vendor pipeline | Zero staging | vs homogeneous GPU runtimes |
 
-For comprehensive empirical hardware measurements, memory bus ceiling physics, and root cause analysis of the CPU throughput profile, see [docs/benchmarks_and_performance.md](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/docs/benchmarks_and_performance.md).
+For comprehensive empirical hardware measurements, memory bus ceiling physics, and root cause analysis of the CPU throughput profile, see [docs/benchmarks_and_performance.md](benchmarks_and_performance.md).
 
 
 

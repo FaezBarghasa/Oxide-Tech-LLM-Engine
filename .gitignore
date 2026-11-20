@@ -3,3 +3,14 @@
 .venv/
 *.sqlite
 *.nsys-rep
+
+# Compiled and binary artifacts
+librust_out.rlib
+*.rlib
+
+# Generated index cache (regenerated on demand)
+.oxide/anatomy_index.json
+
+# IDE and tooling
+.idea/
+.evolver/workspace-id

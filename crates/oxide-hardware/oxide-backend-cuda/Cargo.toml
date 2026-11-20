@@ -15,3 +15,7 @@ thiserror.workspace = true
 tracing.workspace = true
 libc.workspace = true
 memmap2.workspace = true
+
+[features]
+default = []
+unsafe-pci-unlock = []

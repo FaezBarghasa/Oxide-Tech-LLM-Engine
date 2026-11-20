@@ -45,7 +45,7 @@ All benchmarks were evaluated under isolated system states (CPU governor pinned 
 
 ## 3. Real-World Empirical Benchmarks & Hardware Measurements
 
-The following benchmarks were measured on the physical workstation test bed (**AMD Ryzen 7 7745HX Zen 4**, 8C/16T, 32 GB dual-channel DDR5-5200, **NVIDIA GeForce RTX 4060 Laptop GPU 8GB**) running the exact same model weights file: [`DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf`](file:///home/jrad/models/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf) (**4.68 GiB / 8.19B parameters**).
+The following benchmarks were measured on the physical workstation test bed (**AMD Ryzen 7 7745HX Zen 4**, 8C/16T, 32 GB dual-channel DDR5-5200, **NVIDIA GeForce RTX 4060 Laptop GPU 8GB**) running the exact same model weights file: `DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf` (**4.68 GiB / 8.19B parameters**).
 
 ### A. Raw CPU + DDR5 RAM (Batch Size = 1, Generation Length = 16 tokens)
 

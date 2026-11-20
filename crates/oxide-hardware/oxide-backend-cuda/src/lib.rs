@@ -37,6 +37,7 @@ pub mod arch;
 pub mod cuda_oxide;
 pub mod driver;
 pub mod energy;
+#[cfg(feature = "unsafe-pci-unlock")]
 pub mod gpu_unlock;
 pub mod graph;
 pub mod kernels;
@@ -46,6 +47,7 @@ pub mod nccl;
 pub use arch::KernelExecutionPlan;
 pub use driver::{CudaDeviceBuffer, CudaStream};
 pub use energy::{DynamicNvml, EnergyMeasurement, EnergyMethod, EnergySampler};
+#[cfg(feature = "unsafe-pci-unlock")]
 pub use gpu_unlock::{
     EffectiveSpeedReadout, GpuThroughputProjection, GpuUnlockCapability, HardwareGpuUnlockEngine,
     LiveMmioRegisters, MmioAccessStatus, PciBarRegion, PhysicalPciGpu, UnlockResult,
@@ -61,13 +63,23 @@ pub use nccl::{CudaDeviceClusterArray, NcclCommunicator};
 
 use oxide_core::error::{EngineError, Result};
 use oxide_core::hardware::GpuDeviceProfile;
-use oxide_core::traits::HardwareBackend;
+use oxide_core::traits::{BackendMaturity, HardwareBackend, MaturityReporting};
 use oxide_core::worker::StepCommand;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CudaEventHandle {
     pub event_id: u64,
+}
+
+impl MaturityReporting for CudaBackend {
+    fn maturity() -> BackendMaturity {
+        BackendMaturity::Tier1SiliconVerified
+    }
+
+    fn maturity_instance(&self) -> BackendMaturity {
+        Self::maturity()
+    }
 }
 
 pub struct CudaLayerWeights {
@@ -5778,5 +5790,9 @@ impl HardwareBackend for CudaBackend {
             let _ = stream.synchronize();
         }
         Ok(())
+    }
+
+    fn maturity(&self) -> BackendMaturity {
+        BackendMaturity::Tier1SiliconVerified
     }
 }

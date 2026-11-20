@@ -254,7 +254,7 @@ Maintaining native hand-tuned SIMD/assembly and hardware accelerators across 10+
 - **GitHub Sponsors**: [github.com/sponsors/FaezBarghasa](https://github.com/sponsors/FaezBarghasa)
 - **Commercial & Silicon Inquiries**: `faez.barghasa.org@gmail.com`
 
-For complete tier descriptions, governance rules, and custom silicon co-development, refer to [SPONSORS.md](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/SPONSORS.md) and [docs/sponsorship_and_governance.md](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/docs/sponsorship_and_governance.md).
+For complete tier descriptions, governance rules, and custom silicon co-development, refer to [SPONSORS.md](SPONSORS.md) and [docs/sponsorship_and_governance.md](docs/sponsorship_and_governance.md).
 
 ---
 
@@ -274,5 +274,5 @@ oxide-embed index --device auto
 
 This project is licensed under the **Apache License, Version 2.0**.
 
-- See [LICENSE](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/LICENSE) and [LICENSE-APACHE](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/LICENSE-APACHE) for the full license text.
-- See [NOTICE](file:///home/jrad/RustroverProjects/Oxide-Tech-LLM-Engine/NOTICE) for copyright attribution and third-party notices.
+- See [LICENSE](LICENSE) for the full license text.
+- See [NOTICE](NOTICE) for copyright attribution and third-party notices.

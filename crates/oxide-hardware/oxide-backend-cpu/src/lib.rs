@@ -25,13 +25,23 @@ pub mod ternary;
 pub use kernels::{CpuLlmKernels, CpuThreadPool};
 
 use oxide_core::error::Result;
-use oxide_core::traits::HardwareBackend;
+use oxide_core::traits::{BackendMaturity, HardwareBackend, MaturityReporting};
 use oxide_core::worker::StepCommand;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CpuEventHandle {
     pub step_id: u64,
+}
+
+impl MaturityReporting for CpuBackend {
+    fn maturity() -> BackendMaturity {
+        BackendMaturity::Tier1SiliconVerified
+    }
+
+    fn maturity_instance(&self) -> BackendMaturity {
+        Self::maturity()
+    }
 }
 
 pub struct CpuBackend {
@@ -96,5 +106,9 @@ impl HardwareBackend for CpuBackend {
 
     fn synchronize(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn maturity(&self) -> BackendMaturity {
+        BackendMaturity::Tier1SiliconVerified
     }
 }
