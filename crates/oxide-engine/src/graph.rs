@@ -63,11 +63,33 @@ pub struct GraphNode {
     pub params: NodeParams,
 }
 
+/// Static Subgraph definition for offloading to fixed-topology NPU/TPU accelerators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticSubgraph {
+    pub subgraph_id: usize,
+    pub target_device: &'static str,
+    pub start_node_idx: usize,
+    pub node_count: usize,
+    pub input_tensor_ids: Vec<TensorId>,
+    pub output_tensor_ids: Vec<TensorId>,
+}
+
+/// Host control-plane operations (tokenization, sampling, KV eviction, DFA bitmasks).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostOp {
+    RadixPrefixLookup,
+    DfaBitmaskFilter,
+    SampleTopK,
+    KvPageReclaim,
+}
+
 /// Dynamic Compute Graph representing the execution plan.
 #[derive(Debug, Clone, Default)]
 pub struct ComputeGraph {
     pub nodes: Vec<GraphNode>,
     pub tensor_count: usize,
+    pub static_subgraphs: Vec<StaticSubgraph>,
+    pub host_ops: Vec<HostOp>,
 }
 
 impl ComputeGraph {
@@ -404,6 +426,20 @@ pub fn build_transformer_graph(meta: &ModelMetadata, _batch_size: usize) -> Comp
         Some("output.weight".to_string()),
         lm_head_params,
     );
+
+    // Identify static subgraphs (e.g. layers for TPU/QNN/RKNN/Hailo offload)
+    if !graph.nodes.is_empty() {
+        graph.static_subgraphs.push(StaticSubgraph {
+            subgraph_id: 0,
+            target_device: "npu_accelerator",
+            start_node_idx: 0,
+            node_count: graph.nodes.len(),
+            input_tensor_ids: vec![0],
+            output_tensor_ids: vec![graph.nodes.last().map_or(0, |n| n.dst)],
+        });
+        graph.host_ops.push(HostOp::SampleTopK);
+        graph.host_ops.push(HostOp::DfaBitmaskFilter);
+    }
 
     graph
 }
