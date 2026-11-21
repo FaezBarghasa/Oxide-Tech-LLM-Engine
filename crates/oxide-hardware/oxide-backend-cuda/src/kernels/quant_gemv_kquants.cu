@@ -190,44 +190,17 @@ __global__ __launch_bounds__(256, 4) void mmvq_gate_up_q5_0_2warp_kernel(
                 : nullptr;
   const BlockQ8_1_Gpu *x_q8_1 = (const BlockQ8_1_Gpu *)x_q8_1_raw;
 
-  int i = lane_id & 15;
   float dot_gate = 0.0f;
   float dot_up = 0.0f;
 
   if (valid_row) {
-    for (int b = b_start; b < b_end; b++) {
-      // 1. Load x_q8_1 once for both gate and up
+    for (int b = b_start + lane_id; b < b_end; b += 32) {
       const BlockQ8_1_Gpu *bq8_1 = &x_q8_1[b];
-      float d8 = __low2float(bq8_1->ds);
-      int8_t u = bq8_1->qs[lane_id];
-
-      // 2. Gate (w1)
       const BlockQ5_0_Gpu *blk1 = &row_w1[b];
-      float d1 = __half2float(*((const half *)&blk1->d));
-      uint32_t qh1 = (uint32_t)blk1->qh[0] | ((uint32_t)blk1->qh[1] << 8) |
-                     ((uint32_t)blk1->qh[2] << 16) |
-                     ((uint32_t)blk1->qh[3] << 24);
-      uint8_t byte1 = blk1->qs[i];
-      uint8_t h1 = (qh1 >> lane_id) & 1;
-      int8_t q1 =
-          (lane_id < 16)
-              ? (int8_t)(((int)(byte1 & 0x0F) | ((int)h1 << 4)) - 16)
-              : (int8_t)(((int)((byte1 >> 4) & 0x0F) | ((int)h1 << 4)) - 16);
-      dot_gate += (d1 * d8) * (float)((int)q1 * (int)u);
-
-      // 3. Up (w3)
       const BlockQ5_0_Gpu *blk3 = &row_w3[b];
-      float d3 = __half2float(*((const half *)&blk3->d));
-      uint32_t qh3 = (uint32_t)blk3->qh[0] | ((uint32_t)blk3->qh[1] << 8) |
-                     ((uint32_t)blk3->qh[2] << 16) |
-                     ((uint32_t)blk3->qh[3] << 24);
-      uint8_t byte3 = blk3->qs[i];
-      uint8_t h3 = (qh3 >> lane_id) & 1;
-      int8_t q3 =
-          (lane_id < 16)
-              ? (int8_t)(((int)(byte3 & 0x0F) | ((int)h3 << 4)) - 16)
-              : (int8_t)(((int)((byte3 >> 4) & 0x0F) | ((int)h3 << 4)) - 16);
-      dot_up += (d3 * d8) * (float)((int)q3 * (int)u);
+
+      dot_gate += compute_q5_0_q8_1_dot(blk1, bq8_1);
+      dot_up += compute_q5_0_q8_1_dot(blk3, bq8_1);
     }
   }
 
@@ -657,39 +630,28 @@ __global__ __launch_bounds__(256, 4) void gemv_qkv_q5_0_splitk_cuda_kernel(
       const BlockQ5_0_Gpu *row_blocks =
           (const BlockQ5_0_Gpu *)((const uint8_t *)raw_blocks +
                                   (size_t)row * num_blocks_per_row * 22);
-      int i = lane_id & 15;
-      for (int b = b_start; b < b_end; b++) {
+      for (int b = b_start + lane_id; b < b_end; b += 32) {
         const BlockQ8_1_Gpu *bq8_1 = &x_q8_1[b];
-        float d8 = __low2float(bq8_1->ds);
-        int8_t u = bq8_1->qs[lane_id];
-
         const BlockQ5_0_Gpu *blk = &row_blocks[b];
-        float d = __half2float(*((const half *)&blk->d));
-        uint32_t qh = (uint32_t)blk->qh[0] | ((uint32_t)blk->qh[1] << 8) |
-                      ((uint32_t)blk->qh[2] << 16) |
-                      ((uint32_t)blk->qh[3] << 24);
-        uint8_t byte_val = blk->qs[i];
-        uint8_t h_bit = (qh >> lane_id) & 1;
-        int8_t q =
-            (lane_id < 16)
-                ? (int8_t)(((int)(byte_val & 0x0F) | ((int)h_bit << 4)) - 16)
-                : (int8_t)(((int)((byte_val >> 4) & 0x0F) | ((int)h_bit << 4)) -
-                           16);
-        thread_dot += (d * d8) * (float)((int)q * (int)u);
+        thread_dot += compute_q5_0_q8_1_dot(blk, bq8_1);
       }
     } else if (V_QUANT == 3) {
       const BlockQ8_0_Gpu *row_blocks =
           (const BlockQ8_0_Gpu *)((const uint8_t *)raw_blocks +
                                   (size_t)row * num_blocks_per_row * 34);
-      for (int b = b_start; b < b_end; b++) {
-        const BlockQ8_1_Gpu *bq8_1 = &x_q8_1[b];
-        float d8 = __low2float(bq8_1->ds);
-        int8_t u = bq8_1->qs[lane_id];
-
+      for (int b = b_start + lane_id; b < b_end; b += 32) {
         const BlockQ8_0_Gpu *blk = &row_blocks[b];
+        const BlockQ8_1_Gpu *bq8_1 = &x_q8_1[b];
+        int sumi = 0;
+#pragma unroll
+        for (int g = 0; g < 8; ++g) {
+          int q4 = get_int_b2(blk->qs, g);
+          int u4 = get_int_b4(bq8_1->qs, g);
+          sumi = __dp4a(q4, u4, sumi);
+        }
         float d = __half2float(*((const half *)&blk->scale));
-        int8_t q = blk->qs[lane_id];
-        thread_dot += (d * d8) * (float)((int)q * (int)u);
+        float d8 = __low2float(bq8_1->ds);
+        thread_dot += (d * d8) * (float)sumi;
       }
     }
   }

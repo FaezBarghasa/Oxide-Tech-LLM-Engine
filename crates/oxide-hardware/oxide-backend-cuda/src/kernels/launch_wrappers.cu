@@ -276,7 +276,7 @@ int launch_cuda_mmvq_q6_k(float *y, const void *raw_blocks, const void *x_q8_1,
   if (batch_size == 1) {
     return launch_cuda_gemv_q6_k(y, raw_blocks, x_q8_1, m, k, stream);
   }
-  if (false && batch_size >= 16 && (k % 256 == 0)) {
+  if (batch_size >= 16 && (k % 256 == 0)) {
     dim3 grid((m + 63) / 64, (batch_size + 15) / 16);
     dim3 block(32, 8);
     mmq_mma_q6_k_cuda_kernel<0>
@@ -309,7 +309,7 @@ int launch_cuda_mmvq_q6_k_fused_add(float *y, const void *raw_blocks,
   if (batch_size == 1) {
     return launch_cuda_gemv_q6_k_fused_add(y, raw_blocks, x_q8_1, m, k, stream);
   }
-  if (false && batch_size >= 16 && (k % 256 == 0)) {
+  if (batch_size >= 16 && (k % 256 == 0)) {
     dim3 grid((m + 63) / 64, (batch_size + 15) / 16);
     dim3 block(32, 8);
     mmq_mma_q6_k_cuda_kernel<1>
@@ -376,7 +376,7 @@ int launch_cuda_mmvq_q4_k(float *y, const void *raw_blocks, const void *x_q8_1,
   if (batch_size == 1) {
     return launch_cuda_gemv_q4_k(y, raw_blocks, x_q8_1, m, k, stream);
   }
-  if (false && batch_size >= 16 && (k % 256 == 0)) {
+  if (batch_size >= 16 && (k % 256 == 0)) {
     dim3 grid((m + 63) / 64, (batch_size + 63) / 64);
     dim3 block(32, 8);
     mmq_q4_k_cuda_kernel<0>
@@ -409,7 +409,7 @@ int launch_cuda_mmvq_q4_k_fused_add(float *y, const void *raw_blocks,
   if (batch_size == 1) {
     return launch_cuda_gemv_q4_k_fused_add(y, raw_blocks, x_q8_1, m, k, stream);
   }
-  if (false && batch_size >= 16 && (k % 256 == 0)) {
+  if (batch_size >= 16 && (k % 256 == 0)) {
     dim3 grid((m + 63) / 64, (batch_size + 63) / 64);
     dim3 block(32, 8);
     mmq_q4_k_cuda_kernel<1>
@@ -481,7 +481,7 @@ int launch_cuda_mmvq_gate_up_q4_k(float *y_gate, float *y_up,
         y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k);
     return cudaGetLastError();
   }
-  if (false && batch_size >= 16 && (k % 256 == 0)) {
+  if (batch_size >= 16 && (k % 256 == 0)) {
     dim3 grid((inter_m + 63) / 64, (batch_size + 63) / 64);
     dim3 block(32, 8);
     mmq_q4_k_cuda_kernel<0><<<grid, block, 0, stream>>>(y_gate, raw_w1, x_q8_1,
@@ -557,7 +557,7 @@ int launch_cuda_mmvq_qkv_mixed(float *y_q, float *y_k, float *y_v,
     return cudaGetLastError();
   }
 
-  if (false && batch_size >= 16 && (k % 256 == 0)) {
+  if (batch_size >= 16 && (k % 256 == 0)) {
     dim3 grid_q((q_m + 63) / 64, (batch_size + 63) / 64);
     dim3 grid_k((kv_m + 63) / 64, (batch_size + 63) / 64);
     dim3 block(32, 8);

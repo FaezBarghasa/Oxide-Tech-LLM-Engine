@@ -324,6 +324,27 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_dequantize_q5_0_f16(
+        dst_f16: *mut std::ffi::c_void,
+        src_q5_0: *const std::ffi::c_void,
+        num_elements: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_dequantize_q8_0_f16(
+        dst_f16: *mut std::ffi::c_void,
+        src_q8_0: *const std::ffi::c_void,
+        num_elements: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_cast_fp32_to_fp16(
+        dst_f16: *mut std::ffi::c_void,
+        src_f32: *const f32,
+        num_elements: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_cublas_gemm_fp16_f32(
         d_y: *mut f32,
         d_w_f16: *const std::ffi::c_void,

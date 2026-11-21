@@ -138,6 +138,107 @@ extern "C" int launch_cuda_dequantize_q6_k_f16(void *dst_f16,
   return cudaGetLastError();
 }
 
+__global__ void
+dequantize_q5_0_to_f16_cuda_kernel(half *__restrict__ dst,
+                                   const void *__restrict__ raw_blocks,
+                                   int num_blocks) {
+  int warp_id = threadIdx.x / 32;
+  int lane_id = threadIdx.x % 32;
+  int sub_block = lane_id / 16;
+  int ib = (blockIdx.x * (blockDim.x / 32) + warp_id) * 2 + sub_block;
+  if (ib >= num_blocks)
+    return;
+
+  int sub = lane_id % 16;
+  const BlockQ5_0_Gpu *blk = &((const BlockQ5_0_Gpu *)raw_blocks)[ib];
+  float d = __half2float(*((const half *)&blk->d));
+  uint32_t qh = (uint32_t)blk->qh[0] | ((uint32_t)blk->qh[1] << 8) |
+                ((uint32_t)blk->qh[2] << 16) | ((uint32_t)blk->qh[3] << 24);
+
+  uint8_t byte = blk->qs[sub];
+  uint8_t h0 = (qh >> sub) & 1;
+  uint8_t h1 = (qh >> (sub + 16)) & 1;
+  float q0 = (float)((int8_t)((byte & 0x0F) | (h0 << 4)) - 16);
+  float q1 = (float)((int8_t)(((byte >> 4) & 0x0F) | (h1 << 4)) - 16);
+
+  dst[(size_t)ib * 32 + sub] = __float2half(d * q0);
+  dst[(size_t)ib * 32 + sub + 16] = __float2half(d * q1);
+}
+
+extern "C" int launch_cuda_dequantize_q5_0_f16(void *dst_f16,
+                                               const void *src_q5_0,
+                                               int num_elements,
+                                               cudaStream_t stream) {
+  if (!dst_f16 || !src_q5_0 || num_elements <= 0)
+    return 0;
+  int num_blocks = num_elements / 32;
+  if (num_blocks <= 0)
+    return 0;
+  int block_dim = 256;
+  int warps_per_block = block_dim / 32;
+  int blocks_per_block = warps_per_block * 2;
+  int grid_dim = (num_blocks + blocks_per_block - 1) / blocks_per_block;
+  dequantize_q5_0_to_f16_cuda_kernel<<<grid_dim, block_dim, 0, stream>>>(
+      (half *)dst_f16, src_q5_0, num_blocks);
+  return cudaGetLastError();
+}
+
+__global__ void
+dequantize_q8_0_to_f16_cuda_kernel(half *__restrict__ dst,
+                                   const void *__restrict__ raw_blocks,
+                                   int num_blocks) {
+  int warp_id = threadIdx.x / 32;
+  int lane_id = threadIdx.x % 32;
+  int ib = blockIdx.x * (blockDim.x / 32) + warp_id;
+  if (ib >= num_blocks)
+    return;
+
+  const BlockQ8_0_Gpu *blk = &((const BlockQ8_0_Gpu *)raw_blocks)[ib];
+  float d = __half2float(*((const half *)&blk->scale));
+  int8_t q = blk->qs[lane_id];
+  dst[(size_t)ib * 32 + lane_id] = __float2half(d * (float)q);
+}
+
+extern "C" int launch_cuda_dequantize_q8_0_f16(void *dst_f16,
+                                               const void *src_q8_0,
+                                               int num_elements,
+                                               cudaStream_t stream) {
+  if (!dst_f16 || !src_q8_0 || num_elements <= 0)
+    return 0;
+  int num_blocks = num_elements / 32;
+  if (num_blocks <= 0)
+    return 0;
+  int block_dim = 256;
+  int warps_per_block = block_dim / 32;
+  int grid_dim = (num_blocks + warps_per_block - 1) / warps_per_block;
+  dequantize_q8_0_to_f16_cuda_kernel<<<grid_dim, block_dim, 0, stream>>>(
+      (half *)dst_f16, src_q8_0, num_blocks);
+  return cudaGetLastError();
+}
+
+__global__ void
+cast_fp32_to_fp16_cuda_kernel(half *__restrict__ dst,
+                              const float *__restrict__ src,
+                              int num_elements) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < num_elements) {
+    dst[idx] = __float2half(src[idx]);
+  }
+}
+
+extern "C" int launch_cuda_cast_fp32_to_fp16(void *dst_f16,
+                                             const float *src_f32,
+                                             int num_elements,
+                                             cudaStream_t stream) {
+  if (!dst_f16 || !src_f32 || num_elements <= 0)
+    return 0;
+  int block_dim = 256;
+  int grid_dim = (num_elements + block_dim - 1) / block_dim;
+  cast_fp32_to_fp16_cuda_kernel<<<grid_dim, block_dim, 0, stream>>>(
+      (half *)dst_f16, src_f32, num_elements);
+  return cudaGetLastError();
+}
+
 extern "C" int launch_cuda_cublas_gemm_fp16_f32(float *d_y, const void *d_w_f16,
                                                 const void *d_x_f16, int m,
                                                 int k, int batch_size,

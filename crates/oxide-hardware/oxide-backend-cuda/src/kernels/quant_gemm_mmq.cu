@@ -604,11 +604,6 @@ __global__ __launch_bounds__(256, 1) void mmq_gate_up_q4_k_cuda_kernel(
   }
 }
 
-static __device__ __forceinline__ int get_int_b2(const void *x, int i32) {
-  const uint16_t *x16 = (const uint16_t *)x;
-  return (int)x16[2 * i32 + 0] | ((int)x16[2 * i32 + 1] << 16);
-}
-
 __device__ __forceinline__ int unpack_q6_k_signed_word(const BlockQ6_K_Gpu *blk,
                                                        int half_idx, int g,
                                                        int idx) {

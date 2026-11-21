@@ -89,6 +89,12 @@ int launch_cuda_flash_decode(float *output, void *out_q8_1, const float *q,
         num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale, nullptr);
     return cudaGetLastError();
   }
+  if (head_dim == 64 && is_fp16) {
+    flash_decode_vectorized_dim64_unroll2_kernel<<<num_heads, 32, 0, stream>>>(
+        output, (BlockQ8_1_Gpu *)out_q8_1, q, k_cache, v_cache, num_heads,
+        num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale, nullptr);
+    return cudaGetLastError();
+  }
   const int block_size = 32; // 1 warp per block = maximum SM distribution
   int grid = num_heads;
   flash_decode_paged_kernel<<<grid, block_size, 0, stream>>>(

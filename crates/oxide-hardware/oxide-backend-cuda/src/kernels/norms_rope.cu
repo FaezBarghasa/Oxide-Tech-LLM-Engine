@@ -320,11 +320,6 @@ __global__ void rope_embedding_kernel(float *__restrict__ q,
  * Packed GGUF Quantization Super-Block Structures for physical GPU
  * memory-mapping.
  */
-struct __attribute__((packed)) BlockQ8_0_Gpu {
-  uint16_t scale;
-  int8_t qs[32];
-};
-
 struct __attribute__((packed)) BlockQ6_K_Gpu {
   uint8_t ql[128];
   uint8_t qh[64];
@@ -354,12 +349,6 @@ struct __attribute__((packed)) BlockQ3_K_Gpu {
 
 struct __attribute__((packed)) BlockQ4_0_Gpu {
   uint16_t d;
-  uint8_t qs[16];
-};
-
-struct __attribute__((packed)) BlockQ5_0_Gpu {
-  uint16_t d;
-  uint8_t qh[4];
   uint8_t qs[16];
 };
 

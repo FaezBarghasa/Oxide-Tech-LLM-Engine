@@ -384,6 +384,150 @@ __global__ void flash_decode_vectorized_unroll2_kernel(
 }
 
 /**
+ * Vectorized Unroll-2 Flash Decode Kernel for FP16 KV cache (head_dim = 64)
+ * 2 elements per thread, 2 tokens per loop iteration, warp-synchronous online
+ * softmax, and direct GPU register Q8_1 quantization.
+ */
+__global__ void flash_decode_vectorized_dim64_unroll2_kernel(
+    float *__restrict__ output, BlockQ8_1_Gpu *__restrict__ out_q8_1,
+    const float *__restrict__ q, const void *__restrict__ k_cache,
+    const void *__restrict__ v_cache, int num_heads, int num_kv_heads,
+    int head_dim, int num_kv_tokens, int start_token, float sm_scale,
+    const int *__restrict__ d_num_kv_tokens = nullptr) {
+
+  int actual_tokens =
+      (d_num_kv_tokens != nullptr) ? (*d_num_kv_tokens + 1) : num_kv_tokens;
+  if (actual_tokens <= start_token)
+    return;
+  int head_idx = blockIdx.x;
+  if (head_idx >= num_heads)
+    return;
+  int lane_id = threadIdx.x;
+
+  int kv_heads = num_kv_heads > 0 ? num_kv_heads : num_heads;
+  int heads_per_kv = (num_heads / kv_heads) > 0 ? (num_heads / kv_heads) : 1;
+  int kv_head_idx = head_idx / heads_per_kv;
+  if (kv_head_idx >= kv_heads)
+    kv_head_idx = kv_heads - 1;
+
+  int d0 = lane_id;
+  int d1 = lane_id + 32;
+  float q0 = q[head_idx * 64 + d0];
+  float q1 = q[head_idx * 64 + d1];
+
+  float max_score = -1e20f;
+  float sum_exp = 0.0f;
+  float acc_v0 = 0.0f, acc_v1 = 0.0f;
+
+  int t = start_token;
+  for (; t + 1 < actual_tokens; t += 2) {
+    size_t off0 = (size_t)((t + 0) * kv_heads + kv_head_idx) * 64;
+    size_t off1 = (size_t)((t + 1) * kv_heads + kv_head_idx) * 64;
+
+    const __half *k_tok0 = (const __half *)k_cache + off0;
+    const __half *k_tok1 = (const __half *)k_cache + off1;
+
+    float score0 = q0 * __half2float(k_tok0[d0]) + q1 * __half2float(k_tok0[d1]);
+    float score1 = q0 * __half2float(k_tok1[d0]) + q1 * __half2float(k_tok1[d1]);
+
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      score0 += __shfl_down_sync(0xFFFFFFFF, score0, offset);
+      score1 += __shfl_down_sync(0xFFFFFFFF, score1, offset);
+    }
+
+    float cur_score0 = __shfl_sync(0xFFFFFFFF, score0, 0) * sm_scale;
+    float cur_score1 = __shfl_sync(0xFFFFFFFF, score1, 0) * sm_scale;
+
+    // Token 0
+    float new_max0 = fmaxf(max_score, cur_score0);
+    float alpha0 =
+        (t == start_token)
+            ? 0.0f
+            : ((new_max0 == max_score) ? 1.0f : expf(max_score - new_max0));
+    float beta0 = expf(cur_score0 - new_max0);
+    max_score = new_max0;
+    sum_exp = sum_exp * alpha0 + beta0;
+
+    const __half *v_tok0 = (const __half *)v_cache + off0;
+    acc_v0 = acc_v0 * alpha0 + beta0 * __half2float(v_tok0[d0]);
+    acc_v1 = acc_v1 * alpha0 + beta0 * __half2float(v_tok0[d1]);
+
+    // Token 1
+    float new_max1 = fmaxf(max_score, cur_score1);
+    float alpha1 = (new_max1 == max_score) ? 1.0f : expf(max_score - new_max1);
+    float beta1 = expf(cur_score1 - new_max1);
+    max_score = new_max1;
+    sum_exp = sum_exp * alpha1 + beta1;
+
+    const __half *v_tok1 = (const __half *)v_cache + off1;
+    acc_v0 = acc_v0 * alpha1 + beta1 * __half2float(v_tok1[d0]);
+    acc_v1 = acc_v1 * alpha1 + beta1 * __half2float(v_tok1[d1]);
+  }
+
+  for (; t < actual_tokens; ++t) {
+    size_t off = (size_t)(t * kv_heads + kv_head_idx) * 64;
+    const __half *k_tok = (const __half *)k_cache + off;
+    float score = q0 * __half2float(k_tok[d0]) + q1 * __half2float(k_tok[d1]);
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      score += __shfl_down_sync(0xFFFFFFFF, score, offset);
+    }
+    float cur_score = __shfl_sync(0xFFFFFFFF, score, 0) * sm_scale;
+    float new_max = fmaxf(max_score, cur_score);
+    float alpha =
+        (t == start_token)
+            ? 0.0f
+            : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
+    float beta = expf(cur_score - new_max);
+    max_score = new_max;
+    sum_exp = sum_exp * alpha + beta;
+    const __half *v_tok = (const __half *)v_cache + off;
+    acc_v0 = acc_v0 * alpha + beta * __half2float(v_tok[d0]);
+    acc_v1 = acc_v1 * alpha + beta * __half2float(v_tok[d1]);
+  }
+
+  float inv_sum = sum_exp > 0.0f ? (1.0f / sum_exp) : 0.0f;
+  float v0 = acc_v0 * inv_sum;
+  float v1 = acc_v1 * inv_sum;
+
+  if (output != nullptr) {
+    output[head_idx * 64 + d0] = v0;
+    output[head_idx * 64 + d1] = v1;
+  }
+
+  if (out_q8_1 != nullptr) {
+    float amax0 = fabsf(v0);
+    float sum0 = v0;
+    float amax1 = fabsf(v1);
+    float sum1 = v1;
+
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      amax0 = fmaxf(amax0, __shfl_xor_sync(0xFFFFFFFF, amax0, offset));
+      sum0 += __shfl_xor_sync(0xFFFFFFFF, sum0, offset);
+      amax1 = fmaxf(amax1, __shfl_xor_sync(0xFFFFFFFF, amax1, offset));
+      sum1 += __shfl_xor_sync(0xFFFFFFFF, sum1, offset);
+    }
+
+    float scale0 = amax0 / 127.0f;
+    float scale1 = amax1 / 127.0f;
+    float iscale0 = (scale0 > 0.0f) ? (1.0f / scale0) : 0.0f;
+    float iscale1 = (scale1 > 0.0f) ? (1.0f / scale1) : 0.0f;
+
+    int b0 = head_idx * 2 + 0;
+    int b1 = head_idx * 2 + 1;
+    out_q8_1[b0].qs[lane_id] = (int8_t)roundf(v0 * iscale0);
+    out_q8_1[b1].qs[lane_id] = (int8_t)roundf(v1 * iscale1);
+
+    if (lane_id == 0) {
+      out_q8_1[b0].ds = make_half2(__float2half(scale0), __float2half(sum0));
+      out_q8_1[b1].ds = make_half2(__float2half(scale1), __float2half(sum1));
+    }
+  }
+}
+
+/**
  * Custom CUDA Kernel: Batched Causal FlashAttention Prefill Kernel
  * Evaluates causal attention for all B tokens in prompt chunk across past KV
  * cache in single pass. Grid: dim3 grid((num_heads + 7) / 8, batch_size) Block:

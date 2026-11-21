@@ -914,6 +914,123 @@ impl CudaBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    unsafe fn dispatch_linear_prefill(
+        d_y: *mut f32,
+        d_w: &CudaDeviceBuffer,
+        d_x_norm: *const f32,
+        d_x_q8_1: *const std::ffi::c_void,
+        m: usize,
+        k: usize,
+        quant_type: u32,
+        batch_size: usize,
+        add_to_y: bool,
+        stream: driver::cudaStream_t,
+        d_dequant_w: *mut std::ffi::c_void,
+        d_act_f16: *mut std::ffi::c_void,
+        d_scratch_act: Option<&mut CudaDeviceBuffer>,
+    ) {
+        if d_w.size_bytes() == 0 || m == 0 || k == 0 || batch_size == 0 {
+            return;
+        }
+
+        if batch_size >= 16 && !d_dequant_w.is_null() && !d_act_f16.is_null() {
+            let w_elements = m * k;
+            let dequant_ok = unsafe {
+                match quant_type {
+                    1 => {
+                        driver::launch_cuda_dequantize_q4_k_f16(
+                            d_dequant_w,
+                            d_w.as_raw_ptr(),
+                            w_elements as i32,
+                            stream,
+                        ) == 0
+                    }
+                    2 => {
+                        driver::launch_cuda_dequantize_q6_k_f16(
+                            d_dequant_w,
+                            d_w.as_raw_ptr(),
+                            w_elements as i32,
+                            stream,
+                        ) == 0
+                    }
+                    0 | 3 => {
+                        driver::launch_cuda_dequantize_q8_0_f16(
+                            d_dequant_w,
+                            d_w.as_raw_ptr(),
+                            w_elements as i32,
+                            stream,
+                        ) == 0
+                    }
+                    9 => {
+                        driver::launch_cuda_dequantize_q5_0_f16(
+                            d_dequant_w,
+                            d_w.as_raw_ptr(),
+                            w_elements as i32,
+                            stream,
+                        ) == 0
+                    }
+                    _ => false,
+                }
+            };
+
+            if dequant_ok {
+                let act_elements = batch_size * k;
+                unsafe {
+                    driver::launch_cuda_cast_fp32_to_fp16(
+                        d_act_f16,
+                        d_x_norm,
+                        act_elements as i32,
+                        stream,
+                    );
+                    driver::launch_cuda_cublas_gemm_fp16_f32(
+                        d_y,
+                        d_dequant_w,
+                        d_act_f16,
+                        m as i32,
+                        k as i32,
+                        batch_size as i32,
+                        if add_to_y { 1 } else { 0 },
+                        stream,
+                    );
+                }
+                return;
+            }
+        }
+
+        unsafe {
+            if add_to_y {
+                if let Some(act) = d_scratch_act {
+                    Self::dispatch_mmvq_add(
+                        d_y,
+                        d_w,
+                        d_x_norm,
+                        d_x_q8_1,
+                        m,
+                        k,
+                        quant_type,
+                        batch_size,
+                        stream,
+                        act,
+                    );
+                }
+            } else {
+                Self::dispatch_mmvq(
+                    d_y,
+                    d_w,
+                    d_x_norm,
+                    d_x_q8_1,
+                    m,
+                    k,
+                    quant_type,
+                    batch_size,
+                    stream,
+                );
+            }
+        }
+    }
+
     #[inline(always)]
     unsafe fn dispatch_gemv(
         d_y: *mut f32,
@@ -1816,6 +1933,16 @@ impl CudaBackend {
         } else {
             std::ptr::null_mut()
         };
+        let d_dequant_w_ptr = if let Some(ref mut buf) = self.d_scratch_dequant_w {
+            buf.as_raw_ptr()
+        } else {
+            std::ptr::null_mut()
+        };
+        let d_act_f16_ptr = if let Some(ref mut buf) = self.d_scratch_act_f16 {
+            buf.as_raw_ptr()
+        } else {
+            std::ptr::null_mut()
+        };
 
         // 2. Multi-layer forward pass on physical GPU with Multi-Column MMVQ
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1883,39 +2010,43 @@ impl CudaBackend {
                     };
 
                     let mut v_written_to_cache = false;
-                    let qkv_grouped = if let (Some(d_q), Some(d_k), Some(d_v)) = (
-                        &mut self.d_scratch_q,
-                        &mut self.d_scratch_k,
-                        &mut self.d_scratch_v,
-                    ) {
-                        if layer.q_quant == 1
-                            && layer.k_quant == 1
-                            && (layer.v_quant == 1 || layer.v_quant == 2)
-                            && layer.q_k == layer.kv_k
-                            && !d_q8_1_ptr.is_null()
-                        {
-                            let y_v_ptr = d_v.as_typed_ptr::<f32>();
-                            unsafe {
-                                driver::launch_cuda_mmvq_qkv_mixed(
-                                    d_q.as_typed_ptr::<f32>(),
-                                    d_k.as_typed_ptr::<f32>(),
-                                    y_v_ptr,
-                                    v_cache_ptr,
-                                    pos as i32,
-                                    layer.d_wq.as_raw_ptr(),
-                                    layer.d_wk.as_raw_ptr(),
-                                    layer.d_wv.as_raw_ptr(),
-                                    d_q8_1_ptr,
-                                    layer.q_m as i32,
-                                    layer.kv_m as i32,
-                                    layer.q_k as i32,
-                                    layer.v_quant as i32,
-                                    batch_size as i32,
-                                    s,
-                                );
+                    let qkv_grouped = if batch_size < 16 {
+                        if let (Some(d_q), Some(d_k), Some(d_v)) = (
+                            &mut self.d_scratch_q,
+                            &mut self.d_scratch_k,
+                            &mut self.d_scratch_v,
+                        ) {
+                            if layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && (layer.v_quant == 1 || layer.v_quant == 2)
+                                && layer.q_k == layer.kv_k
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                let y_v_ptr = d_v.as_typed_ptr::<f32>();
+                                unsafe {
+                                    driver::launch_cuda_mmvq_qkv_mixed(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        d_k.as_typed_ptr::<f32>(),
+                                        y_v_ptr,
+                                        v_cache_ptr,
+                                        pos as i32,
+                                        layer.d_wq.as_raw_ptr(),
+                                        layer.d_wk.as_raw_ptr(),
+                                        layer.d_wv.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.q_m as i32,
+                                        layer.kv_m as i32,
+                                        layer.q_k as i32,
+                                        layer.v_quant as i32,
+                                        batch_size as i32,
+                                        s,
+                                    );
+                                }
+                                v_written_to_cache = !v_cache_ptr.is_null();
+                                true
+                            } else {
+                                false
                             }
-                            v_written_to_cache = !v_cache_ptr.is_null();
-                            true
                         } else {
                             false
                         }
@@ -1926,7 +2057,7 @@ impl CudaBackend {
                     if !qkv_grouped {
                         if let Some(d_q) = &mut self.d_scratch_q {
                             unsafe {
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_q.as_typed_ptr::<f32>(),
                                     &layer.d_wq,
                                     d_norm.as_typed_ptr::<f32>(),
@@ -1935,14 +2066,18 @@ impl CudaBackend {
                                     layer.q_k,
                                     layer.q_quant,
                                     batch_size,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
 
                         if let Some(d_k) = &mut self.d_scratch_k {
                             unsafe {
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_k.as_typed_ptr::<f32>(),
                                     &layer.d_wk,
                                     d_norm.as_typed_ptr::<f32>(),
@@ -1951,14 +2086,18 @@ impl CudaBackend {
                                     layer.kv_k,
                                     layer.k_quant,
                                     batch_size,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
 
                         if let Some(d_v) = &mut self.d_scratch_v {
                             unsafe {
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_v.as_typed_ptr::<f32>(),
                                     &layer.d_wv,
                                     d_norm.as_typed_ptr::<f32>(),
@@ -1967,7 +2106,11 @@ impl CudaBackend {
                                     layer.kv_k,
                                     layer.v_quant,
                                     batch_size,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
@@ -2132,7 +2275,7 @@ impl CudaBackend {
                         };
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            if !d_q8_1_ptr.is_null() {
+                            if tail_batch < 16 && !d_q8_1_ptr.is_null() {
                                 driver::launch_cuda_quantize_q8_1(
                                     d_out.as_typed_ptr::<f32>(),
                                     d_q8_1_ptr,
@@ -2140,7 +2283,7 @@ impl CudaBackend {
                                     s,
                                 );
                             }
-                            Self::dispatch_mmvq_add(
+                            Self::dispatch_linear_prefill(
                                 hid_dst_ptr,
                                 &layer.d_wo,
                                 d_out.as_typed_ptr::<f32>(),
@@ -2149,8 +2292,11 @@ impl CudaBackend {
                                 o_k,
                                 layer.o_quant,
                                 tail_batch,
+                                true,
                                 s,
-                                d_act,
+                                d_dequant_w_ptr,
+                                d_act_f16_ptr,
+                                Some(d_act),
                             );
                         }
                     }
@@ -2187,7 +2333,10 @@ impl CudaBackend {
                         (&mut self.d_scratch_gate, &mut self.d_scratch_up)
                     {
                         unsafe {
-                            if layer.gate_quant == 1 && layer.up_quant == 1 && !d_q8_1_ptr.is_null()
+                            if tail_batch < 16
+                                && layer.gate_quant == 1
+                                && layer.up_quant == 1
+                                && !d_q8_1_ptr.is_null()
                             {
                                 driver::launch_cuda_mmvq_gate_up_q4_k(
                                     d_gate.as_typed_ptr::<f32>(),
@@ -2201,27 +2350,36 @@ impl CudaBackend {
                                     s,
                                 );
                             } else {
-                                Self::dispatch_mmvq(
+                                let hid_src_norm = d_norm.as_typed_ptr::<f32>();
+                                Self::dispatch_linear_prefill(
                                     d_gate.as_typed_ptr::<f32>(),
                                     &layer.d_w1,
-                                    d_norm.as_typed_ptr::<f32>(),
+                                    hid_src_norm,
                                     d_q8_1_ptr,
                                     layer.inter_m,
                                     h,
                                     layer.gate_quant,
                                     tail_batch,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_up.as_typed_ptr::<f32>(),
                                     &layer.d_w3,
-                                    d_norm.as_typed_ptr::<f32>(),
+                                    hid_src_norm,
                                     d_q8_1_ptr,
                                     layer.inter_m,
                                     h,
                                     layer.up_quant,
                                     tail_batch,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
@@ -2247,7 +2405,7 @@ impl CudaBackend {
                     {
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            Self::dispatch_mmvq_add(
+                            Self::dispatch_linear_prefill(
                                 hid_dst_ptr,
                                 &layer.d_w2,
                                 d_gate.as_typed_ptr::<f32>(),
@@ -2256,8 +2414,11 @@ impl CudaBackend {
                                 layer.inter_m,
                                 layer.down_quant,
                                 tail_batch,
+                                true,
                                 s,
-                                d_act,
+                                d_dequant_w_ptr,
+                                d_act_f16_ptr,
+                                Some(d_act),
                             );
                         }
                     }
@@ -2534,6 +2695,16 @@ impl CudaBackend {
         } else {
             std::ptr::null_mut()
         };
+        let d_dequant_w_ptr = if let Some(ref mut buf) = self.d_scratch_dequant_w {
+            buf.as_raw_ptr()
+        } else {
+            std::ptr::null_mut()
+        };
+        let d_act_f16_ptr = if let Some(ref mut buf) = self.d_scratch_act_f16 {
+            buf.as_raw_ptr()
+        } else {
+            std::ptr::null_mut()
+        };
 
         let num_layers = self.layers.len();
         let t_before_layers = std::time::Instant::now();
@@ -2608,39 +2779,43 @@ impl CudaBackend {
                     };
 
                     let mut v_written_to_cache = false;
-                    let qkv_grouped = if let (Some(d_q), Some(d_k), Some(d_v)) = (
-                        &mut self.d_scratch_q,
-                        &mut self.d_scratch_k,
-                        &mut self.d_scratch_v,
-                    ) {
-                        if layer.q_quant == 1
-                            && layer.k_quant == 1
-                            && (layer.v_quant == 1 || layer.v_quant == 2)
-                            && layer.q_k == layer.kv_k
-                            && !d_q8_1_ptr.is_null()
-                        {
-                            let y_v_ptr = d_v.as_typed_ptr::<f32>();
-                            unsafe {
-                                driver::launch_cuda_mmvq_qkv_mixed(
-                                    d_q.as_typed_ptr::<f32>(),
-                                    d_k.as_typed_ptr::<f32>(),
-                                    y_v_ptr,
-                                    v_cache_ptr,
-                                    pos as i32,
-                                    layer.d_wq.as_raw_ptr(),
-                                    layer.d_wk.as_raw_ptr(),
-                                    layer.d_wv.as_raw_ptr(),
-                                    d_q8_1_ptr,
-                                    layer.q_m as i32,
-                                    layer.kv_m as i32,
-                                    layer.q_k as i32,
-                                    layer.v_quant as i32,
-                                    batch_size as i32,
-                                    s,
-                                );
+                    let qkv_grouped = if batch_size < 16 {
+                        if let (Some(d_q), Some(d_k), Some(d_v)) = (
+                            &mut self.d_scratch_q,
+                            &mut self.d_scratch_k,
+                            &mut self.d_scratch_v,
+                        ) {
+                            if layer.q_quant == 1
+                                && layer.k_quant == 1
+                                && (layer.v_quant == 1 || layer.v_quant == 2)
+                                && layer.q_k == layer.kv_k
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                let y_v_ptr = d_v.as_typed_ptr::<f32>();
+                                unsafe {
+                                    driver::launch_cuda_mmvq_qkv_mixed(
+                                        d_q.as_typed_ptr::<f32>(),
+                                        d_k.as_typed_ptr::<f32>(),
+                                        y_v_ptr,
+                                        v_cache_ptr,
+                                        pos as i32,
+                                        layer.d_wq.as_raw_ptr(),
+                                        layer.d_wk.as_raw_ptr(),
+                                        layer.d_wv.as_raw_ptr(),
+                                        d_q8_1_ptr,
+                                        layer.q_m as i32,
+                                        layer.kv_m as i32,
+                                        layer.q_k as i32,
+                                        layer.v_quant as i32,
+                                        batch_size as i32,
+                                        s,
+                                    );
+                                }
+                                v_written_to_cache = !v_cache_ptr.is_null();
+                                true
+                            } else {
+                                false
                             }
-                            v_written_to_cache = !v_cache_ptr.is_null();
-                            true
                         } else {
                             false
                         }
@@ -2651,7 +2826,7 @@ impl CudaBackend {
                     if !qkv_grouped {
                         if let Some(d_q) = &mut self.d_scratch_q {
                             unsafe {
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_q.as_typed_ptr::<f32>(),
                                     &layer.d_wq,
                                     d_norm.as_typed_ptr::<f32>(),
@@ -2660,14 +2835,18 @@ impl CudaBackend {
                                     layer.q_k,
                                     layer.q_quant,
                                     batch_size,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
 
                         if let Some(d_k) = &mut self.d_scratch_k {
                             unsafe {
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_k.as_typed_ptr::<f32>(),
                                     &layer.d_wk,
                                     d_norm.as_typed_ptr::<f32>(),
@@ -2676,14 +2855,18 @@ impl CudaBackend {
                                     layer.kv_k,
                                     layer.k_quant,
                                     batch_size,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
 
                         if let Some(d_v) = &mut self.d_scratch_v {
                             unsafe {
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_v.as_typed_ptr::<f32>(),
                                     &layer.d_wv,
                                     d_norm.as_typed_ptr::<f32>(),
@@ -2692,7 +2875,11 @@ impl CudaBackend {
                                     layer.kv_k,
                                     layer.v_quant,
                                     batch_size,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
@@ -2857,7 +3044,7 @@ impl CudaBackend {
                         };
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            if !d_q8_1_ptr.is_null() {
+                            if tail_batch < 16 && !d_q8_1_ptr.is_null() {
                                 driver::launch_cuda_quantize_q8_1(
                                     d_out.as_typed_ptr::<f32>(),
                                     d_q8_1_ptr,
@@ -2865,7 +3052,7 @@ impl CudaBackend {
                                     s,
                                 );
                             }
-                            Self::dispatch_mmvq_add(
+                            Self::dispatch_linear_prefill(
                                 hid_dst_ptr,
                                 &layer.d_wo,
                                 d_out.as_typed_ptr::<f32>(),
@@ -2874,8 +3061,11 @@ impl CudaBackend {
                                 o_k,
                                 layer.o_quant,
                                 tail_batch,
+                                true,
                                 s,
-                                d_act,
+                                d_dequant_w_ptr,
+                                d_act_f16_ptr,
+                                Some(d_act),
                             );
                         }
                     }
@@ -2912,7 +3102,10 @@ impl CudaBackend {
                         (&mut self.d_scratch_gate, &mut self.d_scratch_up)
                     {
                         unsafe {
-                            if layer.gate_quant == 1 && layer.up_quant == 1 && !d_q8_1_ptr.is_null()
+                            if tail_batch < 16
+                                && layer.gate_quant == 1
+                                && layer.up_quant == 1
+                                && !d_q8_1_ptr.is_null()
                             {
                                 driver::launch_cuda_mmvq_gate_up_q4_k(
                                     d_gate.as_typed_ptr::<f32>(),
@@ -2926,27 +3119,36 @@ impl CudaBackend {
                                     s,
                                 );
                             } else {
-                                Self::dispatch_mmvq(
+                                let hid_src_norm = d_norm.as_typed_ptr::<f32>();
+                                Self::dispatch_linear_prefill(
                                     d_gate.as_typed_ptr::<f32>(),
                                     &layer.d_w1,
-                                    d_norm.as_typed_ptr::<f32>(),
+                                    hid_src_norm,
                                     d_q8_1_ptr,
                                     layer.inter_m,
                                     h,
                                     layer.gate_quant,
                                     tail_batch,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
-                                Self::dispatch_mmvq(
+                                Self::dispatch_linear_prefill(
                                     d_up.as_typed_ptr::<f32>(),
                                     &layer.d_w3,
-                                    d_norm.as_typed_ptr::<f32>(),
+                                    hid_src_norm,
                                     d_q8_1_ptr,
                                     layer.inter_m,
                                     h,
                                     layer.up_quant,
                                     tail_batch,
+                                    false,
                                     s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
                                 );
                             }
                         }
@@ -2972,7 +3174,7 @@ impl CudaBackend {
                     {
                         unsafe {
                             let hid_dst_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_offset * h);
-                            Self::dispatch_mmvq_add(
+                            Self::dispatch_linear_prefill(
                                 hid_dst_ptr,
                                 &layer.d_w2,
                                 d_gate.as_typed_ptr::<f32>(),
@@ -2981,8 +3183,11 @@ impl CudaBackend {
                                 layer.inter_m,
                                 layer.down_quant,
                                 tail_batch,
+                                true,
                                 s,
-                                d_act,
+                                d_dequant_w_ptr,
+                                d_act_f16_ptr,
+                                Some(d_act),
                             );
                         }
                     }
@@ -5366,9 +5571,8 @@ impl HardwareBackend for CudaBackend {
                                 } else {
                                     0
                                 };
-                                let num_tokens = (pos + 1).min(kv_cap) as i32;
                                 unsafe {
-                                    driver::launch_cuda_flash_decode(
+                                    driver::launch_cuda_flash_decode_ptr(
                                         d_out.as_typed_ptr::<f32>(),
                                         d_q8_1_ptr,
                                         d_q.as_typed_ptr::<f32>(),
@@ -5377,7 +5581,10 @@ impl HardwareBackend for CudaBackend {
                                         cur_num_heads as i32,
                                         cur_num_kv_heads as i32,
                                         cur_head_dim as i32,
-                                        num_tokens,
+                                        self.d_seq_pos
+                                            .as_ref()
+                                            .map(|b| b.as_typed_ptr::<i32>())
+                                            .unwrap_or(core::ptr::null_mut()),
                                         start_token,
                                         sm_scale,
                                         1, // is_fp16

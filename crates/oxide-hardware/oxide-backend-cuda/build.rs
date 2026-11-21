@@ -32,6 +32,7 @@ fn find_nvcc() -> Option<PathBuf> {
 }
 
 fn main() {
+    println!("cargo:rerun-if-changed=src/kernels");
     println!("cargo:rerun-if-changed=src/kernels/llm_kernels.cu");
     println!("cargo:rerun-if-changed=src/kernels/fwht.cu");
 
