@@ -678,6 +678,9 @@ mod tests {
         for i in 0..128 {
             blk.qs[i] = (i as u8) % 255;
         }
+        for i in 0..12 {
+            blk.scales[i] = ((i as u8) * 17) % 63;
+        }
 
         let mut b0 = vec![BlockQ8_K::default()];
         let mut b1 = vec![BlockQ8_K::default()];
@@ -688,6 +691,13 @@ mod tests {
         b1[0].d = 0.08;
         b2[0].d = 0.12;
         b3[0].d = 0.02;
+
+        for i in 0..16 {
+            b0[0].bsums[i] = ((i as i16) * 5) - 30;
+            b1[0].bsums[i] = ((i as i16) * 7) - 40;
+            b2[0].bsums[i] = ((i as i16) * 9) - 50;
+            b3[0].bsums[i] = ((i as i16) * 11) - 60;
+        }
 
         for i in 0..256 {
             b0[0].qs[i] = (i as i8).wrapping_mul(3);

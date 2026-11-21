@@ -57,6 +57,14 @@ fn test_lfm3_real_model_inference() {
 
     let prompt = "Liquid foundation models are";
     let prompt_tokens = tok.encode(prompt);
+    println!(
+        "LFM3 config: dim={}, num_heads={}, num_kv_heads={}, head_dim={}, vocab_size={}",
+        model.config.hidden_dim,
+        model.config.num_heads,
+        model.config.num_kv_heads,
+        model.config.head_dim,
+        model.config.vocab_size
+    );
     println!("Prompt '{}' -> {:?}", prompt, prompt_tokens);
 
     // Test with 1 token first
