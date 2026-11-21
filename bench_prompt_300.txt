@@ -1,0 +1,5 @@
+You are an expert systems engineer specializing in GPU kernel optimization and parallel architectures.
+Please provide a detailed, rigorous technical comparison between:
+1. Matrix-Vector Quantized (MMVQ) custom CUDA kernels with register-level dequantization and warp-level reduction.
+2. Tensor Core FP16 GEMM with on-the-fly scratch dequantization using cuBLASLt / cuBLAS.
+Explain the arithmetic intensity, memory bandwidth saturation points on an NVIDIA Ada Lovelace RTX 4060 GPU, L2 cache hit rates, and the crossover batch size where Tensor Core throughput exceeds fused memory-bound GEMV. Conclude with an architectural dispatch recommendation.

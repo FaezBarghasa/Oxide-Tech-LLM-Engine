@@ -1,0 +1,26 @@
+You are an expert systems engineer and kernel architect specializing in low-level high-performance computing, lock-free concurrency, and hardware-accelerated GPU inference.
+Below is the technical specification and source implementation for a high-throughput memory-mapped vector GEMV engine running on NVIDIA Ada Lovelace SMs.
+
+1. ARCHITECTURAL INVARIANTS:
+The target microarchitecture utilizes 24 Streaming Multiprocessors (SMs) with 128 FP32 CUDA cores each, giving 3072 FP32 cores, 96 fourth-generation Tensor Cores, and 32MB of L2 cache on an RTX 4060 Laptop GPU.
+The memory subsystem interfaces over a 128-bit wide GDDR6 bus delivering up to 256 GB/s peak theoretical bandwidth.
+To overcome DRAM bus saturation during low-batch autoregressive generation, weights are stored in quantized formats (Q4_K, Q8_0, Q5_0) and dequantized directly in register files or shared memory tiles.
+
+2. QUANTIZATION GEOMETRY:
+In the Q4_K block quantization scheme, superblocks of 256 weights are divided into 8 sub-blocks of 32 weights each.
+Each superblock comprises two FP16 scales (d and dmin), 12 6-bit scales and biases, and 128 bytes containing packed 4-bit nibbles.
+Dequantization to FP16 in CUDA registers is achieved using 32-thread warps where each thread loads 8 weights, computes the effective scale and offset, unpacks the low and high nibbles, and applies fused multiply-add:
+    w = (x * scale) - dmin;
+When batch sizes exceed 16 during the prefill phase, computing dot products through warp-reduction MMVQ suffers from register pressure and underutilizes fourth-generation Tensor Cores.
+Therefore, on-the-fly dequantization to intermediate FP16 scratch buffers followed by cuBLAS Tensor Core GEMM (cublasGemmEx with CUBLAS_COMPUTE_32F_FAST_16F) achieves linear scaling and saturates the 70+ TFLOPS half-precision matrix multiplication compute capacity.
+
+3. CACHE CONCURRENCY AND CONTINUOUS BATCHING:
+During autoregressive generation, attention values are accumulated using FlashDecode algorithms.
+Each attention head is partitioned into chunks of 256 tokens along the sequence dimension.
+Partial softmax reductions (m_i, l_i, and accumulated output vectors O_i) are computed by independent thread blocks and subsequently merged via an epilogue reduction kernel.
+For head dimensions of 64, cooperative groups load 4-way float2 vectors, leveraging half2 arithmetic and register packing.
+Continuous batching is facilitated by lock-free single-producer single-consumer queues with static slot KV-cache blocks, avoiding lock contention and minimizing host-to-device kernel launch latencies through captured CUDA graphs.
+
+4. TASK OBJECTIVE:
+Analyze the tradeoffs between on-the-fly dequantization Tensor Core GEMM versus fused dequantization MMVQ across batch sizes from 1 to 512.
+Detail the exact memory bandwidth utilization, compute saturation points, register usage, and L2 cache hit rates. Provide clear recommendations for hybrid dispatch.

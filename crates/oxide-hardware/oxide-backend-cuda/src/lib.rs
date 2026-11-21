@@ -1370,8 +1370,8 @@ impl CudaBackend {
             lm_head_bytes.len()
         );
 
-        let max_batch = 512usize;
-        let max_logits_batch = 128usize;
+        let max_batch = 1024usize;
+        let max_logits_batch = 16usize;
         let mut d_hidden =
             CudaDeviceBuffer::allocate(max_batch * hidden_dim * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?;
@@ -1421,7 +1421,7 @@ impl CudaBackend {
                 .map_err(EngineError::BackendError)?,
         );
         let max_inter_m = hidden_dim * 4;
-        let dequant_w_bytes = (hidden_dim * max_inter_m * 2).max(104_857_600);
+        let dequant_w_bytes = (hidden_dim * max_inter_m * 2).max(16 * 1024 * 1024);
         self.d_scratch_dequant_w =
             Some(CudaDeviceBuffer::allocate(dequant_w_bytes).map_err(EngineError::BackendError)?);
         let act_f16_bytes = max_batch * max_inter_m * 2;
@@ -1463,7 +1463,7 @@ impl CudaBackend {
                 .map_err(EngineError::BackendError)?,
         );
 
-        let q8_1_bytes = max_batch * ((max_dim * 4).max(65536) / 32 + 1) * 36;
+        let q8_1_bytes = max_batch * ((max_dim * 4).max(8192) / 32 + 1) * 36;
         let mut d_q8_1_a =
             CudaDeviceBuffer::allocate(q8_1_bytes).map_err(EngineError::BackendError)?;
         d_q8_1_a
@@ -1498,38 +1498,29 @@ impl CudaBackend {
             let q5_0_expected = vocab_size * (hidden_dim / 32) * 22;
             let q8_0_expected = vocab_size * (hidden_dim / 32) * 34;
             let fp32_expected = vocab_size * hidden_dim * std::mem::size_of::<f32>();
-            if token_embd_bytes.len() == q4_k_expected && hidden_dim.is_multiple_of(256) {
-                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
-                    .map_err(EngineError::BackendError)?;
-                d_emb
-                    .copy_from_host_async(token_embd_bytes, s)
-                    .map_err(EngineError::BackendError)?;
-                self.d_token_embd = Some(d_emb);
-                self.token_embd_quant_type = 1;
-            } else if token_embd_bytes.len() == q5_0_expected && hidden_dim.is_multiple_of(32) {
-                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
-                    .map_err(EngineError::BackendError)?;
-                d_emb
-                    .copy_from_host_async(token_embd_bytes, s)
-                    .map_err(EngineError::BackendError)?;
-                self.d_token_embd = Some(d_emb);
-                self.token_embd_quant_type = 2;
-            } else if token_embd_bytes.len() == q8_0_expected && hidden_dim.is_multiple_of(32) {
-                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
-                    .map_err(EngineError::BackendError)?;
-                d_emb
-                    .copy_from_host_async(token_embd_bytes, s)
-                    .map_err(EngineError::BackendError)?;
-                self.d_token_embd = Some(d_emb);
-                self.token_embd_quant_type = 3;
-            } else if token_embd_bytes.len() == fp32_expected {
-                let mut d_emb = CudaDeviceBuffer::allocate(token_embd_bytes.len())
-                    .map_err(EngineError::BackendError)?;
-                d_emb
-                    .copy_from_host_async(token_embd_bytes, s)
-                    .map_err(EngineError::BackendError)?;
-                self.d_token_embd = Some(d_emb);
-                self.token_embd_quant_type = 0;
+            let mut try_alloc_emb = |expected: usize, qtype: u32| -> bool {
+                if token_embd_bytes.len() == expected {
+                    if let Ok(mut d_emb) = CudaDeviceBuffer::allocate(token_embd_bytes.len()) {
+                        if d_emb.copy_from_host_async(token_embd_bytes, s).is_ok() {
+                            self.d_token_embd = Some(d_emb);
+                            self.token_embd_quant_type = qtype;
+                            return true;
+                        }
+                    }
+                    tracing::warn!("CUDA: Insufficient VRAM to pin token embeddings on device; falling back to host zero-copy mmap");
+                    self.d_token_embd = None;
+                    self.token_embd_quant_type = 0;
+                    return true;
+                }
+                false
+            };
+
+            if (hidden_dim.is_multiple_of(256) && try_alloc_emb(q4_k_expected, 1))
+                || (hidden_dim.is_multiple_of(32) && try_alloc_emb(q5_0_expected, 2))
+                || (hidden_dim.is_multiple_of(32) && try_alloc_emb(q8_0_expected, 3))
+                || try_alloc_emb(fp32_expected, 0)
+            {
+                // Allocated or fallen back cleanly
             } else {
                 // Non-supported quantized embedding where no GPU dequant kernel is present.
                 // Leave d_token_embd as None so that embedding_lookup executes on host with zero-copy mmap.

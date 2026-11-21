@@ -367,7 +367,7 @@ impl SpecializedPipeline {
     /// Streams layer weights ONCE for all tokens in each chunk and skips the 510MB LM Head on intermediate chunks.
     pub fn prefill_prompt(&mut self, prompt_tokens: &[u32]) -> Result<u32> {
         if let Self::Llama3Cuda(engine) = self {
-            let chunk_size = 512usize;
+            let chunk_size = 1024usize;
             let mut last_tok = None;
             let chunks: Vec<&[u32]> = prompt_tokens.chunks(chunk_size).collect();
             let total_chunks = chunks.len();
@@ -805,7 +805,7 @@ impl SpecializedPipeline {
     /// Prefills prompt tokens into the sequence KV cache before autoregressive token generation.
     pub fn prefill(&mut self, sequence_id: u64, tokens: &[u32], slot_idx: u16) -> Result<()> {
         if let Self::Llama3Cuda(engine) = self {
-            let chunk_size = 512usize;
+            let chunk_size = 1024usize;
             let chunks: Vec<&[u32]> = tokens.chunks(chunk_size).collect();
             let total_chunks = chunks.len();
             for (idx, chunk) in chunks.into_iter().enumerate() {
