@@ -3642,6 +3642,13 @@ impl Llama3Model {
                 for i in 0..h {
                     scratch.hidden[i] += scratch.o_proj_out[i];
                 }
+                if position == 1 && layer_idx == 2 {
+                    eprintln!("[DECODE L2] norm[0..4]: {:?}", &scratch.norm_hidden[..4]);
+                    eprintln!("[DECODE L2] q[0..4]: {:?}", &scratch.q[..4]);
+                    eprintln!("[DECODE L2] k[0..4]: {:?}", &scratch.k[..4]);
+                    eprintln!("[DECODE L2] attn_out[0..4]: {:?}", &scratch.attn_out[..4]);
+                    eprintln!("[DECODE L2] o_proj_out[0..4]: {:?}", &scratch.o_proj_out[..4]);
+                }
                 if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
                     eprintln!("[CPU L0] hid_after_attn: {:?}", &scratch.hidden[..4]);
                 }
@@ -3726,6 +3733,10 @@ impl Llama3Model {
             for x in &mut scratch.hidden[..h] {
                 *x *= scale;
             }
+        }
+
+        if position == 1 && layer_idx < 4 {
+            eprintln!("[DECODE L{layer_idx}] pos 1 hid[0..4]: {:?}", &scratch.hidden[..4]);
         }
     }
 
@@ -3870,6 +3881,10 @@ impl Llama3Model {
             for x in &mut scratch.hidden[..h] {
                 *x *= scale;
             }
+        }
+
+        if position == 1 && layer_idx < 4 {
+            eprintln!("[DECODE L{layer_idx}] pos 1 hid[0..4]: {:?}", &scratch.hidden[..4]);
         }
     }
 
@@ -4327,6 +4342,14 @@ impl Llama3Model {
                         .o_proj
                         .gemm_batch(&batch_attn_q8, &attn_slices, &mut batch_o_out);
 
+                    if b == 2 && layer_idx == 2 {
+                        let mut test_out = vec![0.0f32; h];
+                        layer.o_proj.gemv_with_q8_k_act(&batch_attn_q8[1], &attn_slices[1], &mut test_out);
+                        eprintln!("[TEST L2] gemv_with_q8_k_act for tok 1: {:?}", &test_out[..4]);
+                        eprintln!("[PREFILL L2] o_out for tok 0: {:?}", &batch_o_out[..4]);
+                        eprintln!("[PREFILL L2] o_out for tok 1: {:?}", &batch_o_out[h..h + 4]);
+                    }
+
                     // Post-attention norm (Gemma 2 / Nemotron)
                     if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
                         let mut tmp = [0.0f32; 4096];
@@ -4458,6 +4481,10 @@ impl Llama3Model {
                         *x *= scale;
                     }
                 }
+            }
+
+            if b == 2 && layer_idx < 4 {
+                eprintln!("[PREFILL L{layer_idx}] tok 1 hid[0..4]: {:?}", &batch_hidden[1 * h..1 * h + 4]);
             }
         }
 

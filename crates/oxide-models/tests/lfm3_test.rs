@@ -59,6 +59,25 @@ fn test_lfm3_real_model_inference() {
     let prompt_tokens = tok.encode(prompt);
     println!("Prompt '{}' -> {:?}", prompt, prompt_tokens);
 
+    // Test with 1 token first
+    let one_token = &prompt_tokens[0..1];
+    let mut decode_cache_1 = model.create_kv_cache();
+    let mut scratch_1 = model.create_scratch();
+    model
+        .forward_step_with_scratch(one_token[0], 0, &mut decode_cache_1, &mut scratch_1)
+        .expect("forward_step");
+    let mut prefill_cache_1 = model.create_kv_cache();
+    let prefill_logits_1 = model
+        .forward_batch(one_token, 0, &mut prefill_cache_1)
+        .expect("forward_batch");
+    let diff_1 = scratch_1
+        .logits
+        .iter()
+        .zip(&prefill_logits_1)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    println!("Max logit difference for 1 token: {diff_1:.6}");
+
     // Test with 2 tokens first
     let two_tokens = &prompt_tokens[0..2];
     let mut decode_cache_2 = model.create_kv_cache();

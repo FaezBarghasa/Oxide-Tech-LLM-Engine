@@ -1424,6 +1424,7 @@ dependencies = [
  "core_affinity",
  "crossbeam",
  "crossbeam-utils",
+ "memmap2",
  "oxide-alloc",
  "oxide-backend-cpu",
  "oxide-backend-cuda",
@@ -1439,6 +1440,7 @@ dependencies = [
  "oxide-quant",
  "rayon",
  "rtrb",
+ "safetensors",
  "serde",
  "thiserror",
  "tokio",
@@ -1473,6 +1475,7 @@ dependencies = [
  "oxide-core",
  "oxide-quant",
  "rayon",
+ "safetensors",
  "serde",
  "serde_json",
  "thiserror",
@@ -1771,6 +1774,16 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "safetensors"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc0cdb7198d738a111f6df8fef42cb175412c311d0c4ac9126ff4e550ad1a0e8"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "same-file"

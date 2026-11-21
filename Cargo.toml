@@ -96,6 +96,7 @@ half = { version = "2.4", default-features = false, features = [
 criterion = { version = "0.8.2", features = ["html_reports"] }
 axum-test = "21.1.0"
 rayon = "1.10"
+safetensors = "0.5"
 
 [profile.release]
 opt-level = 3
