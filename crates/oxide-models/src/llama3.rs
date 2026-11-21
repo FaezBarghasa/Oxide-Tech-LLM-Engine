@@ -3443,11 +3443,6 @@ impl Llama3Model {
             for i in 0..h {
                 scratch.hidden[i] += scratch.o_proj_out[i];
             }
-            if position == 1 && layer_idx == 0 {
-                let norm = oxide_quant::simd::dot_f32(&scratch.hidden[..h], &scratch.hidden[..h]).sqrt();
-                let sum: f32 = scratch.hidden[..h].iter().sum();
-                eprintln!("[DECODE L0] after shortconv: norm={norm:.6}, sum={sum:.6}, [0..4]: {:?}", &scratch.hidden[..4]);
-            }
         } else {
             let cur_q_dim = layer.q_proj.rows();
             let cur_k_dim = layer.k_proj.rows();
@@ -3653,18 +3648,6 @@ impl Llama3Model {
                 for i in 0..h {
                     scratch.hidden[i] += scratch.o_proj_out[i];
                 }
-                if position == 1 && layer_idx == 2 {
-                    let norm_attn = oxide_quant::simd::dot_f32(&scratch.attn_out[..o_in_dim], &scratch.attn_out[..o_in_dim]).sqrt();
-                    let norm_o = oxide_quant::simd::dot_f32(&scratch.o_proj_out[..h], &scratch.o_proj_out[..h]).sqrt();
-                    let sum_attn: f32 = scratch.attn_out[..o_in_dim].iter().sum();
-                    let sum_o: f32 = scratch.o_proj_out[..h].iter().sum();
-                    eprintln!("[DECODE L2] norm(attn_out)={norm_attn:.6}, sum(attn_out)={sum_attn:.6}, norm(o_proj_out)={norm_o:.6}, sum(o_proj_out)={sum_o:.6}");
-                    eprintln!("[DECODE L2] q8_k_act: d={:?}", scratch.q8_k_act.iter().map(|b| b.d).collect::<Vec<_>>());
-                    eprintln!("[DECODE L2] o_proj_out[0..4]: {:?}", &scratch.o_proj_out[..4]);
-                }
-                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                    eprintln!("[CPU L0] hid_after_attn: {:?}", &scratch.hidden[..4]);
-                }
             }
         }
 
@@ -3719,13 +3702,6 @@ impl Llama3Model {
                 &scratch.activated[..d_cols],
                 &mut scratch.mlp_out[..h],
             );
-            if position == 1 && layer_idx == 0 {
-                eprintln!("[DECODE L0] ffn_norm tok 1: {:?}", &scratch.ffn_norm_hidden[..4]);
-                eprintln!("[DECODE L0] gate[0..4]: {:?}", &scratch.gate[..4]);
-                eprintln!("[DECODE L0] up[0..4]: {:?}", &scratch.up[..4]);
-                eprintln!("[DECODE L0] act[0..4]: {:?}", &scratch.activated[..4]);
-                eprintln!("[DECODE L0] mlp_out[0..4]: {:?}", &scratch.mlp_out[..4]);
-            }
 
             // Post-FFN norm (Gemma 2 / Gemma 4 / Nemotron)
             if !layer.post_ffn_norm.is_empty() && layer.post_ffn_norm.len() >= h {
@@ -3753,10 +3729,6 @@ impl Llama3Model {
             for x in &mut scratch.hidden[..h] {
                 *x *= scale;
             }
-        }
-
-        if position == 1 && layer_idx < 4 {
-            eprintln!("[DECODE L{layer_idx}] pos 1 hid[0..4]: {:?}", &scratch.hidden[..4]);
         }
     }
 
@@ -3901,10 +3873,6 @@ impl Llama3Model {
             for x in &mut scratch.hidden[..h] {
                 *x *= scale;
             }
-        }
-
-        if position == 1 && layer_idx < 4 {
-            eprintln!("[DECODE L{layer_idx}] pos 1 hid[0..4]: {:?}", &scratch.hidden[..4]);
         }
     }
 
@@ -4159,12 +4127,6 @@ impl Llama3Model {
                         hid_t[i] += o_t[i];
                     }
                 }
-                if b == 2 && layer_idx == 0 {
-                    let hid_1 = &batch_hidden[h..2 * h];
-                    let norm = oxide_quant::simd::dot_f32(hid_1, hid_1).sqrt();
-                    let sum: f32 = hid_1.iter().sum();
-                    eprintln!("[PREFILL L0] after shortconv: norm={norm:.6}, sum={sum:.6}, [0..4]: {:?}", &hid_1[..4]);
-                }
             } else {
                 let cur_q_dim = layer.q_proj.rows();
                 let cur_k_dim = layer.k_proj.rows();
@@ -4366,7 +4328,9 @@ impl Llama3Model {
                         let attn_t = &batch_attn_out[t * cur_q_dim..t * cur_q_dim + o_in_dim];
                         oxide_quant::simd::quantize_row_q8_k(attn_t, &mut batch_attn_q8[t]);
                         let o_t = &mut batch_o_out[t * h..(t + 1) * h];
-                        layer.o_proj.gemv_with_q8_k_act(&batch_attn_q8[t], attn_t, o_t);
+                        layer
+                            .o_proj
+                            .gemv_with_q8_k_act(&batch_attn_q8[t], attn_t, o_t);
                     }
 
                     // Post-attention norm (Gemma 2 / Nemotron)
@@ -4398,9 +4362,10 @@ impl Llama3Model {
                 }
             }
 
-            // E. Batched FFN Projections (loading W_gate, W_up, W_down ONCE for all B tokens)
+            // E. FFN Projections
             let cur_inter = layer.gate_proj.rows();
             if cur_inter > 0 && layer.up_proj.rows() > 0 && layer.down_proj.rows() > 0 {
+                let d_cols = layer.down_proj.cols().min(cur_inter);
                 for t in 0..b {
                     let hid_t = &batch_hidden[t * h..(t + 1) * h];
                     let ffn_norm_t = &mut batch_ffn_norm[t * h..(t + 1) * h];
@@ -4411,67 +4376,40 @@ impl Llama3Model {
                         eps,
                         self.config.is_gemma,
                     );
-                    oxide_quant::simd::quantize_row_q8_k(ffn_norm_t, &mut batch_q8[t]);
-                }
 
-                let ffn_norm_slices: Vec<&[f32]> = (0..b)
-                    .map(|t| &batch_ffn_norm[t * h..(t + 1) * h])
-                    .collect();
-                layer.gate_proj.gemm_batch(
-                    &batch_q8,
-                    &ffn_norm_slices,
-                    &mut batch_gate[..b * cur_inter],
-                );
-                layer.up_proj.gemm_batch(
-                    &batch_q8,
-                    &ffn_norm_slices,
-                    &mut batch_up[..b * cur_inter],
-                );
+                    let gate_t = &mut batch_gate[t * cur_inter..(t + 1) * cur_inter];
+                    let up_t = &mut batch_up[t * cur_inter..(t + 1) * cur_inter];
+                    let act_t = &mut batch_act[t * cur_inter..(t + 1) * cur_inter];
 
-                // Activation function (SwiGLU / GeLU)
-                if self.config.is_gemma {
-                    const SQRT_2_OVER_PI: f32 = 0.797_884_6;
-                    for t in 0..b {
-                        let gate_t = &batch_gate[t * cur_inter..(t + 1) * cur_inter];
-                        let up_t = &batch_up[t * cur_inter..(t + 1) * cur_inter];
-                        let act_t = &mut batch_act[t * cur_inter..(t + 1) * cur_inter];
-                        for i in 0..cur_inter {
-                            let g = gate_t[i];
-                            let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
-                            let gelu_g = 0.5 * g * (1.0 + inner.tanh());
-                            act_t[i] = gelu_g * up_t[i];
+                    let swiglu_fused = QuantizedTensor::fused_gemv_2way(
+                        &layer.gate_proj,
+                        gate_t,
+                        &layer.up_proj,
+                        up_t,
+                        ffn_norm_t,
+                        &mut batch_q8[t],
+                        Some((act_t, self.config.is_gemma)),
+                    );
+
+                    if !swiglu_fused {
+                        if self.config.is_gemma {
+                            const SQRT_2_OVER_PI: f32 = 0.797_884_6;
+                            for i in 0..cur_inter {
+                                let g = gate_t[i];
+                                let inner = SQRT_2_OVER_PI * (g + 0.044_715 * g * g * g);
+                                let gelu_g = 0.5 * g * (1.0 + inner.tanh());
+                                act_t[i] = gelu_g * up_t[i];
+                            }
+                        } else {
+                            oxide_quant::simd::swiglu_f32(gate_t, up_t, act_t);
                         }
                     }
-                } else {
-                    for t in 0..b {
-                        let gate_t = &batch_gate[t * cur_inter..(t + 1) * cur_inter];
-                        let up_t = &batch_up[t * cur_inter..(t + 1) * cur_inter];
-                        let act_t = &mut batch_act[t * cur_inter..(t + 1) * cur_inter];
-                        oxide_quant::simd::swiglu_f32(gate_t, up_t, act_t);
-                    }
-                }
 
-                // Down projection
-                let d_cols = layer.down_proj.cols().min(cur_inter);
-                for t in 0..b {
-                    let act_t = &batch_act[t * cur_inter..t * cur_inter + d_cols];
-                    oxide_quant::simd::quantize_row_q8_k(act_t, &mut batch_act_q8[t]);
-                }
-                let act_slices: Vec<&[f32]> = (0..b)
-                    .map(|t| &batch_act[t * cur_inter..t * cur_inter + d_cols])
-                    .collect();
-                layer
-                    .down_proj
-                    .gemm_batch(&batch_act_q8, &act_slices, &mut batch_mlp_out);
-
-                if b == 2 && layer_idx == 0 {
-                    eprintln!("[PREFILL L0] ffn_norm tok 0: {:?}", &batch_ffn_norm[..4]);
-                    eprintln!("[PREFILL L0] ffn_norm tok 1: {:?}", &batch_ffn_norm[h..h + 4]);
-                    eprintln!("[PREFILL L0] gate tok 0[0..4]: {:?}", &batch_gate[..4]);
-                    eprintln!("[PREFILL L0] gate tok 1[0..4]: {:?}", &batch_gate[cur_inter..cur_inter + 4]);
-                    eprintln!("[PREFILL L0] up tok 1[0..4]: {:?}", &batch_up[cur_inter..cur_inter + 4]);
-                    eprintln!("[PREFILL L0] act tok 1[0..4]: {:?}", &batch_act[cur_inter..cur_inter + 4]);
-                    eprintln!("[PREFILL L0] mlp_out tok 1[0..4]: {:?}", &batch_mlp_out[h..h + 4]);
+                    oxide_quant::simd::quantize_row_q8_k(&act_t[..d_cols], &mut batch_act_q8[t]);
+                    let mlp_t = &mut batch_mlp_out[t * h..(t + 1) * h];
+                    layer
+                        .down_proj
+                        .gemv_with_q8_k_act(&batch_act_q8[t], &act_t[..d_cols], mlp_t);
                 }
 
                 // Post-FFN norm (Gemma 2 / Nemotron)
@@ -4510,10 +4448,6 @@ impl Llama3Model {
                         *x *= scale;
                     }
                 }
-            }
-
-            if b == 2 && layer_idx < 4 {
-                eprintln!("[PREFILL L{layer_idx}] tok 1 hid[0..4]: {:?}", &batch_hidden[1 * h..1 * h + 4]);
             }
         }
 

@@ -31,3 +31,4 @@ tracing.workspace = true
 rayon.workspace = true
 safetensors.workspace = true
 memmap2.workspace = true
+half.workspace = true

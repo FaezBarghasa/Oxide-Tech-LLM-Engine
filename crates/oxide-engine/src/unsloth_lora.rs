@@ -3,8 +3,10 @@
 //! Directly loads Unsloth training checkpoints without Python merge scripts,
 //! supporting zero-overhead weight fusion and sub-millisecond S-LoRA multi-persona hot-swapping.
 
+use oxide_core::error::EngineError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 
 /// Unsloth `adapter_config.json` representation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,6 +127,104 @@ impl UnslothAdapter {
 
     pub fn add_module(&mut self, module_name: impl Into<String>, pair: UnslothTensorPair) {
         self.modules.insert(module_name.into(), pair);
+    }
+
+    /// Loads an Unsloth LoRA adapter from raw SafeTensors bytes.
+    pub fn from_safetensors(
+        name: impl Into<String>,
+        bytes: &[u8],
+        config: UnslothAdapterConfig,
+    ) -> Result<Self, EngineError> {
+        let tensors = safetensors::SafeTensors::deserialize(bytes)
+            .map_err(|e| EngineError::BackendError(format!("Failed to parse SafeTensors: {e}")))?;
+
+        let mut adapter = Self::new(name, config);
+        let mut a_map: HashMap<String, (Vec<f32>, Vec<usize>)> = HashMap::new();
+        let mut b_map: HashMap<String, (Vec<f32>, Vec<usize>)> = HashMap::new();
+
+        for (t_name, view) in tensors.tensors() {
+            let f32_data: Vec<f32> = match view.dtype() {
+                safetensors::Dtype::F32 => {
+                    let u8_slice = view.data();
+                    let (chunks, _) = u8_slice.as_chunks::<4>();
+                    chunks
+                        .iter()
+                        .map(|chunk| f32::from_le_bytes(*chunk))
+                        .collect()
+                }
+                safetensors::Dtype::F16 => {
+                    let u8_slice = view.data();
+                    let (chunks, _) = u8_slice.as_chunks::<2>();
+                    chunks
+                        .iter()
+                        .map(|chunk| half::f16::from_bits(u16::from_le_bytes(*chunk)).to_f32())
+                        .collect()
+                }
+                safetensors::Dtype::BF16 => {
+                    let u8_slice = view.data();
+                    let (chunks, _) = u8_slice.as_chunks::<2>();
+                    chunks
+                        .iter()
+                        .map(|chunk| half::bf16::from_bits(u16::from_le_bytes(*chunk)).to_f32())
+                        .collect()
+                }
+                _ => continue,
+            };
+
+            let shape = view.shape().to_vec();
+
+            if t_name.contains("lora_A") || t_name.contains("lora_a") {
+                let key = t_name
+                    .replace(".lora_A.weight", "")
+                    .replace(".lora_a.weight", "");
+                a_map.insert(key, (f32_data, shape));
+            } else if t_name.contains("lora_B") || t_name.contains("lora_b") {
+                let key = t_name
+                    .replace(".lora_B.weight", "")
+                    .replace(".lora_b.weight", "");
+                b_map.insert(key, (f32_data, shape));
+            }
+        }
+
+        for (key, (a_data, a_shape)) in a_map {
+            if let Some((b_data, b_shape)) = b_map.remove(&key) {
+                if a_shape.len() == 2 && b_shape.len() == 2 {
+                    let rank = a_shape[0];
+                    let in_dim = a_shape[1];
+                    let out_dim = b_shape[0];
+                    let pair = UnslothTensorPair {
+                        lora_a: a_data,
+                        lora_b: b_data,
+                        in_dim,
+                        out_dim,
+                        rank,
+                        scaling: adapter.config.lora_alpha / rank.max(1) as f32,
+                    };
+                    adapter.add_module(key, pair);
+                }
+            }
+        }
+
+        Ok(adapter)
+    }
+
+    /// Loads an Unsloth LoRA adapter from a file on disk (SafeTensors).
+    pub fn from_safetensors_file(
+        name: impl Into<String>,
+        path: impl AsRef<Path>,
+        config: UnslothAdapterConfig,
+    ) -> Result<Self, EngineError> {
+        let p = path.as_ref();
+        if !p.exists() {
+            return Err(EngineError::ModelNotFound(format!(
+                "SafeTensors file not found at {}",
+                p.display()
+            )));
+        }
+        let bytes = std::fs::read(p).map_err(|e| {
+            EngineError::BackendError(format!("Read SafeTensors at {}: {e}", p.display()))
+        })?;
+        Self::from_safetensors(name, &bytes, config)
     }
 }
 

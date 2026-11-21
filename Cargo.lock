@@ -1424,6 +1424,7 @@ dependencies = [
  "core_affinity",
  "crossbeam",
  "crossbeam-utils",
+ "half",
  "memmap2",
  "oxide-alloc",
  "oxide-backend-cpu",
@@ -1523,6 +1524,7 @@ dependencies = [
 name = "oxide-tech-llm-engine"
 version = "0.5.0"
 dependencies = [
+ "memmap2",
  "oxide-alloc",
  "oxide-backend-cpu",
  "oxide-backend-cuda",

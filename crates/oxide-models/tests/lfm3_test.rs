@@ -166,8 +166,8 @@ fn test_lfm3_real_model_inference() {
     }
 
     assert!(
-        cos_sim > 0.95,
-        "Cosine similarity must be > 0.95, got {cos_sim}"
+        cos_sim > 0.9995,
+        "Cosine similarity must be > 0.9995, got {cos_sim}"
     );
 
     let top3_dec: Vec<_> = indexed_dec.iter().take(3).map(|(id, _)| *id).collect();
