@@ -220,7 +220,7 @@ impl SleepMemoryConsolidator {
                 // Generate synthetic dream probe vector from experience tokens
                 let mut dream_x = vec![0.0f32; model_dim];
                 for (i, &tok) in exp.tokens.iter().take(model_dim).enumerate() {
-                    let phase = (tok as f32 * 0.017) + (cycle as f32 * 0.1);
+                    let phase = (tok as f32 * 0.017) + (exp.id as f32 * 0.25);
                     dream_x[i] = (phase.sin() * exp.importance_score).clamp(-1.0, 1.0);
                 }
 

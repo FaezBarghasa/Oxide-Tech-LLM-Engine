@@ -32,6 +32,7 @@ unsafe extern "C" {
     pub fn cudaGetDevice(device: *mut i32) -> cudaError_t;
     pub fn cudaGetDeviceCount(count: *mut i32) -> cudaError_t;
     pub fn cudaMalloc(dev_ptr: *mut *mut c_void, size: usize) -> cudaError_t;
+    pub fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_t;
     pub fn cudaFree(dev_ptr: *mut c_void) -> cudaError_t;
     pub fn cudaHostAlloc(pHost: *mut *mut c_void, size: usize, flags: u32) -> cudaError_t;
     pub fn cudaFreeHost(pHost: *mut c_void) -> cudaError_t;
@@ -999,6 +1000,19 @@ impl CudaDeviceBuffer {
             ptr: d_ptr,
             size_bytes,
         })
+    }
+
+    /// Returns (free_bytes, total_bytes) of physical device VRAM.
+    pub fn get_device_memory_info() -> Option<(usize, usize)> {
+        let mut free = 0usize;
+        let mut total = 0usize;
+        // SAFETY: Calling cudaMemGetInfo with valid stack pointers.
+        let status = unsafe { cudaMemGetInfo(&raw mut free, &raw mut total) };
+        if status == CUDA_SUCCESS {
+            Some((free, total))
+        } else {
+            None
+        }
     }
 
     /// Asynchronously copies memory from host slice into device memory.
