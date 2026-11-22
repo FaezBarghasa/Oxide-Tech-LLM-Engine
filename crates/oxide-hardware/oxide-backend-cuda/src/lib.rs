@@ -3481,6 +3481,9 @@ impl CudaBackend {
                         if slot < self.host_token_buffer.len() {
                             self.host_token_buffer[slot] = self.host_batch_sampled[i];
                         }
+                        if slot < self.slot_positions.len() {
+                            self.slot_positions[slot] = batch_positions[i] + 1;
+                        }
                     }
                     return Ok(self.host_batch_sampled[..b].to_vec());
                 }
@@ -4079,10 +4082,21 @@ impl CudaBackend {
                             bucket,
                         )
                     };
-                    if let Ok(handle) = end_res {
-                        self.batch_decode_graphs.insert(bucket, handle);
-                        unsafe {
-                            self.graph_manager.launch_graph(handle, s)?;
+                    match end_res {
+                        Ok(handle) => {
+                            tracing::info!(
+                                "CUDA batch decode graph captured successfully (bucket={}, id={}, nodes={})",
+                                bucket,
+                                handle.graph_id,
+                                handle.node_count
+                            );
+                            self.batch_decode_graphs.insert(bucket, handle);
+                            unsafe {
+                                self.graph_manager.launch_graph(handle, s)?;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("CUDA batch graph capture failed for bucket {}: {}", bucket, e);
                         }
                     }
                 }
@@ -4102,6 +4116,9 @@ impl CudaBackend {
                     let slot = slot_indices[i];
                     if slot < self.host_token_buffer.len() {
                         self.host_token_buffer[slot] = self.host_batch_sampled[i];
+                    }
+                    if slot < self.slot_positions.len() {
+                        self.slot_positions[slot] = batch_positions[i] + 1;
                     }
                 }
                 return Ok(self.host_batch_sampled[..b].to_vec());

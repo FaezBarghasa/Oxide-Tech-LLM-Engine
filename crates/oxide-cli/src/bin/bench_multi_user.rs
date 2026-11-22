@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let _ = tracing_subscriber::fmt::try_init();
     let prompt_file = "bench_large_prompt.txt";
     let base_prompt = std::fs::read_to_string(prompt_file)?;
 
@@ -68,21 +69,20 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         total_prompt_tokens as f64 / t_prefill.as_secs_f64()
     );
 
-    // 2. Decode Loop across all 4 slots
+    // 2. Continuous Batched Decode Loop across all active slots in a single GPU forward pass
     let t_decode_start = Instant::now();
     let mut active_tokens: Vec<u32> = tokenized_prompts.iter().map(|p| *p.last().unwrap_or(&1)).collect();
+    let mut batch_positions: Vec<usize> = (0..users)
+        .map(|slot_idx| pipe.get_seq_pos((slot_idx + 1) as u64))
+        .collect();
+    let slot_indices: Vec<usize> = (0..users).collect();
 
     for _step in 0..gen_tokens {
+        let sampled = pipe.step_continuous_batch(&active_tokens, &batch_positions, &slot_indices)?;
         for slot_idx in 0..users {
-            let cmd = oxide_core::StepCommand::new(
-                slot_idx as u64 + 1,
-                active_tokens[slot_idx],
-                slot_idx as u16,
-                false,
-            );
-            let completion = pipe.step(&cmd)?;
-            active_tokens[slot_idx] = completion.sampled_token;
-            user_completions[slot_idx].push(completion.sampled_token);
+            active_tokens[slot_idx] = sampled[slot_idx];
+            user_completions[slot_idx].push(sampled[slot_idx]);
+            batch_positions[slot_idx] += 1;
         }
     }
     let t_total = t_start.elapsed();
