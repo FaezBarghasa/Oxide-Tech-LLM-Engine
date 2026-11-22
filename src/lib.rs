@@ -14,9 +14,6 @@ pub use oxide_alloc::audio_prefix_cache::{AudioKvCacheKey, Blake3AudioPrefixCach
 pub use oxide_core::error::{EngineError, OxideError, Result};
 pub use oxide_core::grammar_mask::{GrammarLogitMasker, StemFxToolCall, ToolSchemaSpec};
 pub use oxide_core::shared_device::{SharedDeviceHandle, UnifiedCachingArena};
-pub use oxide_engine::unsloth_lora::{
-    UnslothAdapter, UnslothAdapterConfig, UnslothLoraManager, UnslothTensorPair,
-};
 pub use oxide_models::audio_encoders::{
     AfWhisperMlpProjector, AudioEncoderKind, MossAudioEncoder, TmRopeGrid,
 };
@@ -34,7 +31,8 @@ pub use oxide_eda::{
 };
 pub use oxide_lora::{
     EpisodicExperience, LoraId, NF4_BLOCK_SIZE, NF4_VALUES, QloraLinearLayer, QloraTrainingConfig,
-    SleepConfig, SleepConsolidationReport, SleepMemoryConsolidator, SleepState, UnslothQloraTrainer,
+    SleepConfig, SleepConsolidationReport, SleepMemoryConsolidator, SleepState, UnslothAdapter,
+    UnslothAdapterConfig, UnslothLoraManager, UnslothQloraTrainer, UnslothTensorPair,
 };
 
 /// Supported Hardware Quantization Profiles.

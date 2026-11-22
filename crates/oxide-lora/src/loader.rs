@@ -145,4 +145,109 @@ impl UnslothAdapter {
 
         Ok(adapter)
     }
+
+    /// Loads an adapter from a standalone safetensors file with explicit config.
+    pub fn from_safetensors_file(
+        name: impl Into<String>,
+        file_path: impl AsRef<Path>,
+        config: UnslothAdapterConfig,
+    ) -> Result<Self> {
+        let path = file_path.as_ref();
+        if path.is_dir() {
+            return Self::from_directory(name, path);
+        }
+
+        let mut adapter = Self::new(name, config);
+        let file = std::fs::File::open(path)
+            .map_err(|e| EngineError::BackendError(format!("Open safetensors: {e}")))?;
+        let mmap = unsafe { memmap2::Mmap::map(&file) }
+            .map_err(|e| EngineError::BackendError(format!("Mmap safetensors: {e}")))?;
+        let tensors = safetensors::SafeTensors::deserialize(&mmap)
+            .map_err(|e| EngineError::BackendError(format!("Deserialize safetensors: {e}")))?;
+
+        for (tensor_name, view) in tensors.tensors() {
+            if tensor_name.ends_with(".lora_A.weight") {
+                let base_name = tensor_name.trim_end_matches(".lora_A.weight");
+                let b_name = format!("{base_name}.lora_B.weight");
+                if let Ok(b_view) = tensors.tensor(&b_name) {
+                    let rank = view.shape()[0];
+                    let in_dim = view.shape()[1];
+                    let out_dim = b_view.shape()[0];
+                    let mut pair = UnslothTensorPair::new(
+                        in_dim,
+                        out_dim,
+                        rank,
+                        adapter.config.lora_alpha,
+                    );
+                    let a_bytes = view.data();
+                    let b_bytes = b_view.data();
+                    if let Ok(slice) = bytemuck::try_cast_slice::<u8, f32>(a_bytes) {
+                        pair.lora_a.copy_from_slice(slice);
+                    } else {
+                        for (chunk, out) in a_bytes.chunks_exact(4).zip(pair.lora_a.iter_mut()) {
+                            *out = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                        }
+                    }
+                    if let Ok(slice) = bytemuck::try_cast_slice::<u8, f32>(b_bytes) {
+                        pair.lora_b.copy_from_slice(slice);
+                    } else {
+                        for (chunk, out) in b_bytes.chunks_exact(4).zip(pair.lora_b.iter_mut()) {
+                            *out = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                        }
+                    }
+                    adapter.layers.insert(base_name.to_string(), pair);
+                }
+            }
+        }
+
+        Ok(adapter)
+    }
+
+    /// Serializes adapter tensor pairs to aligned Safetensors binary format.
+    pub fn save_safetensors_bytes(&self) -> Result<Vec<u8>> {
+        let mut header_entries = Vec::new();
+        let mut data_buffer = Vec::new();
+
+        for (name, pair) in &self.layers {
+            let a_name = format!("{name}.lora_A.weight");
+            let a_bytes: &[u8] = bytemuck::cast_slice(&pair.lora_a);
+            let a_start = data_buffer.len();
+            data_buffer.extend_from_slice(a_bytes);
+            let a_end = data_buffer.len();
+
+            header_entries.push(format!(
+                r#""{}":{{"dtype":"F32","shape":[{},{}],"data_offsets":[{},{}]}}"#,
+                a_name, pair.rank, pair.in_dim, a_start, a_end
+            ));
+
+            let b_name = format!("{name}.lora_B.weight");
+            let b_bytes: &[u8] = bytemuck::cast_slice(&pair.lora_b);
+            let b_start = data_buffer.len();
+            data_buffer.extend_from_slice(b_bytes);
+            let b_end = data_buffer.len();
+
+            header_entries.push(format!(
+                r#""{}":{{"dtype":"F32","shape":[{},{}],"data_offsets":[{},{}]}}"#,
+                b_name, pair.out_dim, pair.rank, b_start, b_end
+            ));
+        }
+
+        let mut header_json = format!("{{{}}}", header_entries.join(","));
+        // Pad header so (8 + header_bytes.len()) % 8 == 0 for SafeTensors data alignment
+        let rem = (8 + header_json.len()) % 8;
+        if rem != 0 {
+            let pad = 8 - rem;
+            header_json.extend(std::iter::repeat(' ').take(pad));
+        }
+
+        let header_bytes = header_json.as_bytes();
+        let header_len = header_bytes.len() as u64;
+
+        let mut out = Vec::with_capacity(8 + header_bytes.len() + data_buffer.len());
+        out.extend_from_slice(&header_len.to_le_bytes());
+        out.extend_from_slice(header_bytes);
+        out.extend_from_slice(&data_buffer);
+
+        Ok(out)
+    }
 }

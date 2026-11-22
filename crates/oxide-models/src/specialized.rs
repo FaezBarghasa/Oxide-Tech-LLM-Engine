@@ -1118,9 +1118,15 @@ impl EdaPcbEngine {
             });
         }
 
-        let sexpr = format!(
-            "(kicad_pcb (version 20240108) (generator oxide_eda) (general (thickness 1.6)) (paper \"A4\") (title_block (title \"{board_name}\")))"
-        );
+        let eda_req = oxide_eda::EdaSynthesisRequest {
+            project_name: board_name.to_string(),
+            specification_prompt: format!("Synthesize layout for {board_name} with {component_count} components"),
+            board_width_mm: board_width,
+            board_height_mm: board_height,
+            layer_count: self.max_layers.max(2) as usize,
+        };
+        let eda_engine = oxide_eda::EdaEngine::new();
+        let artifact = eda_engine.synthesize_project(&eda_req)?;
 
         Ok(PcbNetlistSpecification {
             board_name: board_name.to_string(),
@@ -1128,9 +1134,9 @@ impl EdaPcbEngine {
             board_dimensions_mm: [board_width, board_height],
             components,
             trace_routes,
-            drc_clean: true,
-            kicad_pcb_sexpr: sexpr,
-            gerber_ready: true,
+            drc_clean: artifact.report.is_valid,
+            kicad_pcb_sexpr: artifact.pcb_kicad,
+            gerber_ready: artifact.report.is_valid,
         })
     }
 }
@@ -1187,8 +1193,16 @@ impl ParametricCadEngine {
         }
 
         let volume = dims_xyz[0] * dims_xyz[1] * dims_xyz[2];
-        let triangles = self.tessellation_density * 12;
-        let vertices = triangles / 2 + 2;
+        let cube_req = oxide_3d::MeshGenerationRequest {
+            engine: oxide_3d::Mesh3dEngineKind::Hunyuan3d21,
+            prompt_or_condition: format!("Parametric CAD bounding box {}x{}x{}", dims_xyz[0], dims_xyz[1], dims_xyz[2]),
+            input_images: Vec::new(),
+            export_glb: true,
+        };
+        let mesh_engine = oxide_3d::Mesh3dEngine::new();
+        let mesh = mesh_engine.generate(&cube_req)?;
+        let vertices = mesh.vertices.len();
+        let triangles = mesh.faces.len();
 
         let scad = format!(
             "cube([{}, {}, {}], center=true);",
@@ -2240,5 +2254,30 @@ impl DecisionMakingModelEngine {
             interventions: vec![format!("do({treatment_target} := 1.0)")],
             invariant_causal_mechanism: counterfactual_delta.abs() > 0.001,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_eda_pcb_engine_generation() {
+        let engine = EdaPcbEngine::new(0.25, 0.2, 4);
+        let nets = vec!["VCC".to_string(), "GND".to_string(), "NET_A".to_string()];
+        let res = engine.generate_pcb_layout("test_board", 6, &nets).unwrap();
+        assert_eq!(res.board_name, "test_board");
+        assert!(res.drc_clean);
+        assert!(res.kicad_pcb_sexpr.contains("(kicad_pcb"));
+    }
+
+    #[test]
+    fn test_parametric_cad_engine_generation() {
+        let engine = ParametricCadEngine::new(0.01, 10);
+        let cad = engine.generate_cad_model("cube_001", [10.0, 10.0, 10.0]).unwrap();
+        assert_eq!(cad.model_id, "cube_001");
+        assert!(cad.mesh_vertex_count > 0);
+        assert!(cad.mesh_triangle_count > 0);
+        assert!(cad.openscad_script.contains("cube"));
     }
 }
