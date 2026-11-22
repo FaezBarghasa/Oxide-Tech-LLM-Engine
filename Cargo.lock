@@ -1495,6 +1495,7 @@ dependencies = [
  "oxide-alloc",
  "oxide-core",
  "oxide-engine",
+ "oxide-lora",
  "oxide-models",
  "oxide-quant",
  "rayon",

@@ -47,3 +47,4 @@ pub use realtime_debug::{
 pub use training::{
     AdamWOptimizer, LoraFineTuner, LossComputer, LossType, LrScheduler, TrainingConfig,
 };
+pub use oxide_lora::{QloraLinearLayer, QloraTrainingConfig, UnslothQloraTrainer};

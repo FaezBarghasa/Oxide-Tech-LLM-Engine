@@ -549,12 +549,14 @@ impl UnslothQloraTrainer {
         }
 
         let header_json = format!("{{{}}}", header_entries.join(","));
-        let header_bytes = header_json.as_bytes();
+        let mut header_bytes = header_json.into_bytes();
+        let padding = (8 - ((8 + header_bytes.len()) % 8)) % 8;
+        header_bytes.extend(std::iter::repeat(b' ').take(padding));
         let header_len = header_bytes.len() as u64;
 
         let mut file_bytes = Vec::with_capacity(8 + header_bytes.len() + data_buffer.len());
         file_bytes.extend_from_slice(&header_len.to_le_bytes());
-        file_bytes.extend_from_slice(header_bytes);
+        file_bytes.extend_from_slice(&header_bytes);
         file_bytes.extend_from_slice(&data_buffer);
 
         std::fs::write(&safetensors_path, file_bytes)

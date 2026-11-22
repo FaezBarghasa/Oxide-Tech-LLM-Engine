@@ -121,11 +121,22 @@ impl UnslothAdapter {
                             rank,
                             adapter.config.lora_alpha,
                         );
-                        // Cast bytes to f32
-                        let a_data: &[f32] = bytemuck::cast_slice(view.data());
-                        let b_data: &[f32] = bytemuck::cast_slice(b_view.data());
-                        pair.lora_a.copy_from_slice(a_data);
-                        pair.lora_b.copy_from_slice(b_data);
+                        let a_bytes = view.data();
+                        let b_bytes = b_view.data();
+                        if let Ok(slice) = bytemuck::try_cast_slice::<u8, f32>(a_bytes) {
+                            pair.lora_a.copy_from_slice(slice);
+                        } else {
+                            for (chunk, out) in a_bytes.chunks_exact(4).zip(pair.lora_a.iter_mut()) {
+                                *out = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            }
+                        }
+                        if let Ok(slice) = bytemuck::try_cast_slice::<u8, f32>(b_bytes) {
+                            pair.lora_b.copy_from_slice(slice);
+                        } else {
+                            for (chunk, out) in b_bytes.chunks_exact(4).zip(pair.lora_b.iter_mut()) {
+                                *out = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                            }
+                        }
                         adapter.layers.insert(base_name.to_string(), pair);
                     }
                 }

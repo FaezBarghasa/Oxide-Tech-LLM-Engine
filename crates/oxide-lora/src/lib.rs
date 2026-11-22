@@ -23,6 +23,7 @@ pub struct LoraId(pub u32);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_unsloth_qlora_training_and_export_lifecycle() {
