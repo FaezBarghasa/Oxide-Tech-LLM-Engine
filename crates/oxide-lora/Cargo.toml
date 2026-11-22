@@ -1,0 +1,17 @@
+[package]
+name = "oxide-lora"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+safetensors = { workspace = true }
+memmap2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+half = { workspace = true }
+bytemuck = { workspace = true }

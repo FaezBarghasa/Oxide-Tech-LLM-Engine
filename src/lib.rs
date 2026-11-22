@@ -23,6 +23,17 @@ pub use oxide_models::audio_encoders::{
 pub use oxide_models::hybrid_embeds::{HybridEmbeddingSequence, InputSpan};
 pub use oxide_models::tokenizer::GgufTokenizer;
 
+pub use oxide_3d::{
+    Hi3dConfig, Hi3dEngine, Hunyuan3dConfig, Hunyuan3dEngine, LocalMeshEngine, Mesh3dEngine,
+    Mesh3dEngineKind, MeshGenerationRequest, MultiViewInput, TriangleFace, Vertex3d, WatertightMesh,
+};
+pub use oxide_eda::{
+    ComponentPlacement, ComponentSymbol, EdaBoardArtifact, EdaDrcVerifier, EdaEngine,
+    EdaSynthesisRequest, ElectricalNet, PcbBoardGraph, PcbRouter, PcbTrackSegment, PinEntry,
+    PinType, Point2d, RuleSeverity, RuleViolation, SchematicGraph, VerificationReport,
+};
+pub use oxide_lora::LoraId;
+
 /// Supported Hardware Quantization Profiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -132,6 +143,8 @@ impl OxideEngineBuilder {
             };
 
         let paged_arena = Some(oxide_alloc::paged_kv::PagedKvArena::new(1024, 24, 16, 128));
+        let mesh_engine = Mesh3dEngine::new();
+        let eda_engine = EdaEngine::new();
 
         Ok(OxideEngine {
             builder: self,
@@ -140,6 +153,8 @@ impl OxideEngineBuilder {
             grammar_masker,
             tokenizer,
             paged_arena,
+            mesh_engine,
+            eda_engine,
         })
     }
 }
@@ -153,6 +168,8 @@ pub struct OxideEngine {
     pub grammar_masker: GrammarLogitMasker,
     pub tokenizer: GgufTokenizer,
     pub paged_arena: Option<oxide_alloc::paged_kv::PagedKvArena>,
+    pub mesh_engine: Mesh3dEngine,
+    pub eda_engine: EdaEngine,
 }
 
 impl OxideEngine {
@@ -350,6 +367,18 @@ impl OxideEngine {
 
         serde_json::from_str::<T>(&json_template)
             .map_err(|e| EngineError::BackendError(format!("Schema serialization failed: {e}")))
+    }
+
+    /// Generates watertight 3D PBR asset (.glb binary buffer) from 1 or 4 images.
+    pub fn generate_glb_mesh(&self, req: MeshGenerationRequest) -> Result<Vec<u8>> {
+        let mesh = self.mesh_engine.generate(&req)?;
+        Ok(mesh.export_glb())
+    }
+
+    /// Synthesizes verified schematic & PCB project from prompt specification.
+    pub fn generate_eda_board(&self, req: EdaSynthesisRequest) -> Result<String> {
+        let artifact = self.eda_engine.synthesize_project(&req)?;
+        Ok(artifact.pcb_kicad)
     }
 }
 

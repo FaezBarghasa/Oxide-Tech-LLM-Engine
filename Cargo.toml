@@ -19,6 +19,10 @@ members = [
     "crates/oxide-engine",
     "crates/oxide-cli",
     "crates/oxide-lab",
+    "crates/oxide-audio-encoders",
+    "crates/oxide-lora",
+    "crates/oxide-3d",
+    "crates/oxide-eda",
 ]
 
 [package]
@@ -37,6 +41,10 @@ oxide-quant = { workspace = true }
 oxide-engine = { workspace = true }
 oxide-backend-cuda = { workspace = true }
 oxide-backend-cpu = { workspace = true }
+oxide-audio-encoders = { workspace = true }
+oxide-lora = { workspace = true }
+oxide-3d = { workspace = true }
+oxide-eda = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -67,6 +75,10 @@ oxide-quant = { path = "crates/oxide-quant" }
 oxide-server = { path = "crates/oxide-server" }
 oxide-engine = { path = "crates/oxide-engine" }
 oxide-lab = { path = "crates/oxide-lab" }
+oxide-audio-encoders = { path = "crates/oxide-audio-encoders" }
+oxide-lora = { path = "crates/oxide-lora" }
+oxide-3d = { path = "crates/oxide-3d" }
+oxide-eda = { path = "crates/oxide-eda" }
 
 crossbeam = "0.8"
 crossbeam-epoch = "0.9"
