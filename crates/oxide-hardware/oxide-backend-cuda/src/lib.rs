@@ -3664,6 +3664,25 @@ impl CudaBackend {
                                     bucket as i32,
                                     s,
                                 );
+                            } else if layer.q_quant == 9
+                                && layer.k_quant == 9
+                                && (layer.v_quant == 3 || layer.v_quant == 9)
+                            {
+                                driver::launch_cuda_mmvq_qkv_q5_0(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_k.as_typed_ptr::<f32>(),
+                                    y_v_ptr,
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    bucket as i32,
+                                    s,
+                                );
                             } else {
                                 Self::dispatch_mmvq(
                                     d_q.as_typed_ptr::<f32>(),
@@ -3702,45 +3721,36 @@ impl CudaBackend {
                         }
 
                         if let Some(ref d_qb) = layer.d_q_bias {
-                            for i in 0..bucket {
-                                let row_ptr =
-                                    unsafe { d_q.as_typed_ptr::<f32>().add(i * layer.q_m) };
-                                unsafe {
-                                    driver::launch_cuda_vector_add(
-                                        row_ptr,
-                                        d_qb.as_typed_ptr::<f32>(),
-                                        layer.q_m as i32,
-                                        s,
-                                    );
-                                }
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_qb.as_typed_ptr::<f32>(),
+                                    layer.q_m as i32,
+                                    bucket as i32,
+                                    s,
+                                );
                             }
                         }
                         if let Some(ref d_kb) = layer.d_k_bias {
-                            for i in 0..bucket {
-                                let row_ptr =
-                                    unsafe { d_k.as_typed_ptr::<f32>().add(i * layer.kv_m) };
-                                unsafe {
-                                    driver::launch_cuda_vector_add(
-                                        row_ptr,
-                                        d_kb.as_typed_ptr::<f32>(),
-                                        layer.kv_m as i32,
-                                        s,
-                                    );
-                                }
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    d_kb.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    bucket as i32,
+                                    s,
+                                );
                             }
                         }
                         if let Some(ref d_vb) = layer.d_v_bias {
-                            for i in 0..bucket {
-                                let row_ptr =
-                                    unsafe { d_v.as_typed_ptr::<f32>().add(i * layer.kv_m) };
-                                unsafe {
-                                    driver::launch_cuda_vector_add(
-                                        row_ptr,
-                                        d_vb.as_typed_ptr::<f32>(),
-                                        layer.kv_m as i32,
-                                        s,
-                                    );
-                                }
+                            unsafe {
+                                driver::launch_cuda_vector_bias_add_batch(
+                                    d_v.as_typed_ptr::<f32>(),
+                                    d_vb.as_typed_ptr::<f32>(),
+                                    layer.kv_m as i32,
+                                    bucket as i32,
+                                    s,
+                                );
                             }
                         }
 
@@ -3922,6 +3932,18 @@ impl CudaBackend {
                         unsafe {
                             if layer.gate_quant == 1 && layer.up_quant == 1 {
                                 driver::launch_cuda_mmvq_gate_up_q4_k(
+                                    d_gate.as_typed_ptr::<f32>(),
+                                    d_up.as_typed_ptr::<f32>(),
+                                    layer.d_w1.as_raw_ptr(),
+                                    layer.d_w3.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m as i32,
+                                    h as i32,
+                                    bucket as i32,
+                                    s,
+                                );
+                            } else if layer.gate_quant == 9 && layer.up_quant == 9 {
+                                driver::launch_cuda_mmvq_gate_up_q5_0(
                                     d_gate.as_typed_ptr::<f32>(),
                                     d_up.as_typed_ptr::<f32>(),
                                     layer.d_w1.as_raw_ptr(),

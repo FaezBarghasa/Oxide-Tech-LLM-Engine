@@ -17,6 +17,7 @@ fn find_nvcc() -> Option<PathBuf> {
     }
     // Check standard locations
     for p in &[
+        "/usr/local/cuda-13.5/bin/nvcc",
         "/usr/local/cuda-13.2/bin/nvcc",
         "/usr/local/cuda-13/bin/nvcc",
         "/usr/local/cuda-12/bin/nvcc",

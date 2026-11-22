@@ -528,6 +528,83 @@ int launch_cuda_gemv_gate_up_q5_0(float *y_gate, float *y_up,
   return cudaGetLastError();
 }
 
+int launch_cuda_mmvq_gate_up_q5_0(float *y_gate, float *y_up,
+                                  const void *raw_w1, const void *raw_w3,
+                                  const void *x_q8_1, int inter_m, int k,
+                                  int batch_size, cudaStream_t stream) {
+  if (inter_m <= 0 || k <= 0 || batch_size <= 0)
+    return 0;
+  if (batch_size == 1) {
+    return launch_cuda_gemv_gate_up_q5_0(y_gate, y_up, raw_w1, raw_w3, x_q8_1,
+                                         inter_m, k, stream);
+  }
+  int grid, block;
+  get_gemv_launch_dims(inter_m, grid, block);
+  if (batch_size <= 2) {
+    dim3 grid_2d(grid, (batch_size + 1) / 2);
+    mmvq_gate_up_q5_0_cuda_kernel<2><<<grid_2d, block, 0, stream>>>(
+        y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size);
+  } else if (batch_size <= 4) {
+    dim3 grid_2d(grid, (batch_size + 3) / 4);
+    mmvq_gate_up_q5_0_cuda_kernel<4><<<grid_2d, block, 0, stream>>>(
+        y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size);
+  } else {
+    dim3 grid_2d(grid, (batch_size + 7) / 8);
+    mmvq_gate_up_q5_0_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(
+        y_gate, y_up, raw_w1, raw_w3, x_q8_1, inter_m, k, batch_size);
+  }
+  return cudaGetLastError();
+}
+
+int launch_cuda_mmvq_qkv_q5_0(float *y_q, float *y_k, float *y_v,
+                              const void *raw_wq, const void *raw_wk,
+                              const void *raw_wv, const void *x_q8_1, int q_m,
+                              int kv_m, int k, int v_quant, int batch_size,
+                              cudaStream_t stream) {
+  if (q_m <= 0 || kv_m <= 0 || k <= 0 || batch_size <= 0)
+    return 0;
+  int total_m = q_m + 2 * kv_m;
+  int grid, block;
+  get_gemv_launch_dims(total_m, grid, block);
+
+  if (v_quant == 3) {
+    if (batch_size <= 2) {
+      dim3 grid_2d(grid, (batch_size + 1) / 2);
+      mmvq_qkv_q5_0_cuda_kernel<2, 3><<<grid_2d, block, 0, stream>>>(
+          y_q, y_k, y_v, nullptr, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m,
+          k, batch_size);
+    } else if (batch_size <= 4) {
+      dim3 grid_2d(grid, (batch_size + 3) / 4);
+      mmvq_qkv_q5_0_cuda_kernel<4, 3><<<grid_2d, block, 0, stream>>>(
+          y_q, y_k, y_v, nullptr, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m,
+          k, batch_size);
+    } else {
+      dim3 grid_2d(grid, (batch_size + 7) / 8);
+      mmvq_qkv_q5_0_cuda_kernel<8, 3><<<grid_2d, block, 0, stream>>>(
+          y_q, y_k, y_v, nullptr, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m,
+          k, batch_size);
+    }
+  } else {
+    if (batch_size <= 2) {
+      dim3 grid_2d(grid, (batch_size + 1) / 2);
+      mmvq_qkv_q5_0_cuda_kernel<2, 9><<<grid_2d, block, 0, stream>>>(
+          y_q, y_k, y_v, nullptr, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m,
+          k, batch_size);
+    } else if (batch_size <= 4) {
+      dim3 grid_2d(grid, (batch_size + 3) / 4);
+      mmvq_qkv_q5_0_cuda_kernel<4, 9><<<grid_2d, block, 0, stream>>>(
+          y_q, y_k, y_v, nullptr, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m,
+          k, batch_size);
+    } else {
+      dim3 grid_2d(grid, (batch_size + 7) / 8);
+      mmvq_qkv_q5_0_cuda_kernel<8, 9><<<grid_2d, block, 0, stream>>>(
+          y_q, y_k, y_v, nullptr, 0, raw_wq, raw_wk, raw_wv, x_q8_1, q_m, kv_m,
+          k, batch_size);
+    }
+  }
+  return cudaGetLastError();
+}
+
 int launch_cuda_convert_f32_to_f16(void *dst, const float *src, int n,
                                    cudaStream_t stream);
 

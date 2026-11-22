@@ -400,6 +400,34 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_mmvq_gate_up_q5_0(
+        y_gate: *mut f32,
+        y_up: *mut f32,
+        raw_w1: *const std::ffi::c_void,
+        raw_w3: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        inter_m: i32,
+        k: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
+    pub fn launch_cuda_mmvq_qkv_q5_0(
+        y_q: *mut f32,
+        y_k: *mut f32,
+        y_v: *mut f32,
+        raw_wq: *const std::ffi::c_void,
+        raw_wk: *const std::ffi::c_void,
+        raw_wv: *const std::ffi::c_void,
+        x_q8_1: *const std::ffi::c_void,
+        q_m: i32,
+        kv_m: i32,
+        k: i32,
+        v_quant: i32,
+        batch_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_mmvq_qkv_mixed(
         y_q: *mut f32,
         y_k: *mut f32,

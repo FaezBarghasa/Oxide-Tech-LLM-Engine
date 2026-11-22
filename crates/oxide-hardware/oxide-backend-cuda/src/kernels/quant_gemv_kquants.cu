@@ -1375,6 +1375,217 @@ __global__ void gemv_q5_k_cuda_kernel(float *__restrict__ y,
 }
 
 /**
- * Custom CUDA Kernel: FlashAttention-2 Paged Token Decode Kernel (Tiling +
- * Online Softmax)
+ * Custom CUDA Kernel: Fused Multi-Column MMVQ Q5_0 QKV Matrix-Vector GEMV.
+ * Computes Q, K, and V projections in a single pass over input activations.
  */
+template <int BATCH_N, int V_QUANT = 3, int WARPS_PER_ROW = 1>
+__global__
+__launch_bounds__(256, (BATCH_N > 32 ? 1 : (BATCH_N > 16 ? 3 : 4)))
+void mmvq_qkv_q5_0_cuda_kernel(
+    float *__restrict__ y_q, float *__restrict__ y_k, float *__restrict__ y_v,
+    void *__restrict__ v_cache_fp16, int start_pos,
+    const void *__restrict__ raw_wq, const void *__restrict__ raw_wk,
+    const void *__restrict__ raw_wv, const void *__restrict__ x_q8_1_raw,
+    int q_m, int kv_m, int k, int actual_batch = BATCH_N,
+    const int *__restrict__ d_start_pos = nullptr) {
+  int warp_id = threadIdx.x / 32;
+  int rows_per_block = (blockDim.x / 32) / WARPS_PER_ROW;
+  int total_row = blockIdx.x * rows_per_block + (warp_id / WARPS_PER_ROW);
+  int total_m = q_m + 2 * kv_m;
+  bool valid_row = (total_row < total_m);
+
+  int warp_col_group = warp_id % WARPS_PER_ROW;
+  int col_offset = (blockIdx.y * WARPS_PER_ROW + warp_col_group) * BATCH_N;
+  int num_cols = (BATCH_N == 1 && WARPS_PER_ROW == 1)
+                     ? 1
+                     : ((actual_batch > col_offset)
+                            ? ((actual_batch - col_offset < BATCH_N)
+                                   ? (actual_batch - col_offset)
+                                   : BATCH_N)
+                            : 0);
+
+  int row = 0;
+  int out_stride = 0;
+  const void *raw_blocks = nullptr;
+  float *y = nullptr;
+  bool is_v = false;
+
+  if (valid_row) {
+    if (total_row < q_m) {
+      row = total_row;
+      out_stride = q_m;
+      raw_blocks = raw_wq;
+      y = y_q;
+    } else if (total_row < q_m + kv_m) {
+      row = total_row - q_m;
+      out_stride = kv_m;
+      raw_blocks = raw_wk;
+      y = y_k;
+    } else {
+      row = total_row - q_m - kv_m;
+      out_stride = kv_m;
+      raw_blocks = raw_wv;
+      y = y_v;
+      is_v = true;
+    }
+  }
+
+  int lane_id = threadIdx.x % 32;
+  int num_blocks_per_row = k / 32;
+  const BlockQ8_1_Gpu *x_q8_1 = (const BlockQ8_1_Gpu *)x_q8_1_raw;
+
+  float thread_dot[BATCH_N];
+#pragma unroll
+  for (int col = 0; col < BATCH_N; ++col) {
+    thread_dot[col] = 0.0f;
+  }
+
+  if (valid_row) {
+    if (!is_v || V_QUANT == 9) {
+      const BlockQ5_0_Gpu *row_blocks =
+          (const BlockQ5_0_Gpu *)((const uint8_t *)raw_blocks +
+                                  (size_t)row * num_blocks_per_row * 22);
+      for (int b = lane_id; b < num_blocks_per_row; b += 32) {
+        const BlockQ5_0_Gpu *blk = &row_blocks[b];
+#pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+          if (BATCH_N == 1 || col < num_cols) {
+            const BlockQ8_1_Gpu *bq8_1 =
+                &x_q8_1[(col_offset + col) * num_blocks_per_row + b];
+            thread_dot[col] += compute_q5_0_q8_1_dot(blk, bq8_1);
+          }
+        }
+      }
+    } else if (V_QUANT == 3) {
+      const BlockQ8_0_Gpu *row_blocks =
+          (const BlockQ8_0_Gpu *)((const uint8_t *)raw_blocks +
+                                  (size_t)row * num_blocks_per_row * 34);
+      for (int b = lane_id; b < num_blocks_per_row; b += 32) {
+        const BlockQ8_0_Gpu *blk = &row_blocks[b];
+#pragma unroll
+        for (int col = 0; col < BATCH_N; ++col) {
+          if (BATCH_N == 1 || col < num_cols) {
+            const BlockQ8_1_Gpu *bq8_1 =
+                &x_q8_1[(col_offset + col) * num_blocks_per_row + b];
+            int sumi = 0;
+#pragma unroll
+            for (int g = 0; g < 8; ++g) {
+              int q4 = get_int_b2(blk->qs, g);
+              int u4 = get_int_b4(bq8_1->qs, g);
+              sumi = __dp4a(q4, u4, sumi);
+            }
+            float d = __half2float(*((const half *)&blk->scale));
+            float d8 = __low2float(bq8_1->ds);
+            thread_dot[col] += (d * d8) * (float)sumi;
+          }
+        }
+      }
+    }
+  }
+
+  if (valid_row) {
+#pragma unroll
+    for (int col = 0; col < BATCH_N; ++col) {
+      if (BATCH_N == 1 || col < num_cols) {
+        float val = thread_dot[col];
+#pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+          val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+        }
+
+        if (lane_id == 0) {
+          if (y != nullptr) {
+            y[(col_offset + col) * out_stride + row] = val;
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Custom CUDA Kernel: Fused Multi-Column MMVQ Q5_0 Gate + Up GEMV.
+ * Computes Gate (w1) and Up (w3) rows simultaneously for BATCH_N columns,
+ * streaming activations x_q8_1 exactly ONCE for both projections.
+ */
+template <int BATCH_N, int WARPS_PER_ROW = 1>
+__global__
+__launch_bounds__(256, (BATCH_N > 32 ? 1 : (BATCH_N > 16 ? 3 : 4)))
+void mmvq_gate_up_q5_0_cuda_kernel(
+    float *__restrict__ y_gate, float *__restrict__ y_up,
+    const void *__restrict__ raw_w1, const void *__restrict__ raw_w3,
+    const void *__restrict__ x_q8_1_raw, int inter_m, int k,
+    int actual_batch = BATCH_N) {
+  int warp_id = threadIdx.x / 32;
+  int rows_per_block = (blockDim.x / 32) / WARPS_PER_ROW;
+  int row = blockIdx.x * rows_per_block + (warp_id / WARPS_PER_ROW);
+  bool valid_row = (row < inter_m);
+
+  int warp_col_group = warp_id % WARPS_PER_ROW;
+  int col_offset = (blockIdx.y * WARPS_PER_ROW + warp_col_group) * BATCH_N;
+  int num_cols = (BATCH_N == 1 && WARPS_PER_ROW == 1)
+                     ? 1
+                     : ((actual_batch > col_offset)
+                            ? ((actual_batch - col_offset < BATCH_N)
+                                   ? (actual_batch - col_offset)
+                                   : BATCH_N)
+                            : 0);
+
+  int lane_id = threadIdx.x % 32;
+  int num_blocks_per_row = k / 32;
+  const BlockQ8_1_Gpu *x_q8_1 = (const BlockQ8_1_Gpu *)x_q8_1_raw;
+
+  const BlockQ5_0_Gpu *row_w1 =
+      valid_row ? (const BlockQ5_0_Gpu *)((const uint8_t *)raw_w1 +
+                                          (size_t)row * num_blocks_per_row * 22)
+                : nullptr;
+  const BlockQ5_0_Gpu *row_w3 =
+      valid_row ? (const BlockQ5_0_Gpu *)((const uint8_t *)raw_w3 +
+                                          (size_t)row * num_blocks_per_row * 22)
+                : nullptr;
+
+  float dot_gate[BATCH_N];
+  float dot_up[BATCH_N];
+#pragma unroll
+  for (int col = 0; col < BATCH_N; ++col) {
+    dot_gate[col] = 0.0f;
+    dot_up[col] = 0.0f;
+  }
+
+  if (valid_row) {
+    for (int b = lane_id; b < num_blocks_per_row; b += 32) {
+      const BlockQ5_0_Gpu *blk1 = &row_w1[b];
+      const BlockQ5_0_Gpu *blk3 = &row_w3[b];
+#pragma unroll
+      for (int col = 0; col < BATCH_N; ++col) {
+        if (BATCH_N == 1 || col < num_cols) {
+          const BlockQ8_1_Gpu *bq8_1 =
+              &x_q8_1[(col_offset + col) * num_blocks_per_row + b];
+          dot_gate[col] += compute_q5_0_q8_1_dot(blk1, bq8_1);
+          dot_up[col] += compute_q5_0_q8_1_dot(blk3, bq8_1);
+        }
+      }
+    }
+  }
+
+  if (valid_row) {
+#pragma unroll
+    for (int col = 0; col < BATCH_N; ++col) {
+      if (BATCH_N == 1 || col < num_cols) {
+        float g_val = dot_gate[col];
+        float u_val = dot_up[col];
+#pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+          g_val += __shfl_down_sync(0xFFFFFFFF, g_val, offset);
+          u_val += __shfl_down_sync(0xFFFFFFFF, u_val, offset);
+        }
+
+        if (lane_id == 0) {
+          y_gate[(col_offset + col) * inter_m + row] = g_val;
+          y_up[(col_offset + col) * inter_m + row] = u_val;
+        }
+      }
+    }
+  }
+}
+

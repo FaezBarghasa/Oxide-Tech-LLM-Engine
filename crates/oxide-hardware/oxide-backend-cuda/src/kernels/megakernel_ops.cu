@@ -747,6 +747,193 @@ int launch_cuda_write_v_cache_continuous_batch(
       kv_dim, slot_stride_tokens, is_fp16, stream);
 }
 
+__global__ void fused_split_k_flash_decode_continuous_batch_kernel(
+    float *__restrict__ final_out, const float *__restrict__ q,
+    const void *__restrict__ k_cache, const void *__restrict__ v_cache,
+    const int *__restrict__ d_seq_positions,
+    const int *__restrict__ d_slot_mapping,
+    const int *__restrict__ d_block_table, int max_blocks_per_seq,
+    int batch_size, int num_heads, int num_kv_heads, int head_dim,
+    int slot_stride_tokens, float sm_scale, int is_fp16,
+    float *__restrict__ d_block_scores) {
+  const int NUM_WARPS = 4;
+  int head_idx = blockIdx.x;
+  int b = blockIdx.y;
+  int warp_id = threadIdx.x / 32;
+  int lane_id = threadIdx.x % 32;
+
+  int actual_tokens = d_seq_positions[b] + 1;
+  if (actual_tokens <= 0 || head_dim <= 0)
+    return;
+
+  int tokens_per_split = (actual_tokens + NUM_WARPS - 1) / NUM_WARPS;
+  int t_start = warp_id * tokens_per_split;
+  int t_end = (warp_id + 1) * tokens_per_split;
+  if (t_end > actual_tokens) {
+    t_end = actual_tokens;
+  }
+
+  __shared__ float s_lse_max[NUM_WARPS];
+  __shared__ float s_lse_sum[NUM_WARPS];
+  __shared__ float s_acc_v[NUM_WARPS][128];
+
+  const float *q_ptr = q + (b * num_heads + head_idx) * head_dim;
+
+  int kv_heads = num_kv_heads > 0 ? num_kv_heads : num_heads;
+  int heads_per_kv = (num_heads / kv_heads) > 0 ? (num_heads / kv_heads) : 1;
+  int kv_head_idx = head_idx / heads_per_kv;
+  if (kv_head_idx >= kv_heads)
+    kv_head_idx = kv_heads - 1;
+
+  float max_score = -1e20f;
+  float sum_exp = 0.0f;
+  float acc_v[4];
+#pragma unroll
+  for (int i = 0; i < 4; ++i)
+    acc_v[i] = 0.0f;
+
+  float q_reg[4];
+  int q_items = 0;
+  for (int d = lane_id; d < head_dim && q_items < 4; d += 32, q_items++) {
+    q_reg[q_items] = q_ptr[d];
+  }
+
+  int slot_idx = d_slot_mapping ? d_slot_mapping[b] : b;
+  size_t slot_base_offset =
+      (size_t)slot_idx * slot_stride_tokens * kv_heads * head_dim;
+
+  int current_accum_block = -1;
+  float current_block_beta_sum = 0.0f;
+
+  if (t_start < actual_tokens) {
+    for (int t = t_start; t < t_end; t++) {
+      size_t tok_offset;
+      if (d_block_table != nullptr) {
+        int block_num = t / 16;
+        int in_block_t = t % 16;
+        int phys_block = d_block_table[b * max_blocks_per_seq + block_num];
+        tok_offset =
+            (size_t)(phys_block * 16 + in_block_t) * (kv_heads * head_dim) +
+            (size_t)kv_head_idx * head_dim;
+      } else {
+        tok_offset =
+            slot_base_offset + (size_t)(t * kv_heads + kv_head_idx) * head_dim;
+      }
+
+      float score = 0.0f;
+      if (is_fp16) {
+        const __half *k_tok = (const __half *)k_cache + tok_offset;
+        for (int i = 0; i < q_items; i++) {
+          score += q_reg[i] * __half2float(k_tok[lane_id + i * 32]);
+        }
+      } else {
+        const float *k_tok = (const float *)k_cache + tok_offset;
+        for (int i = 0; i < q_items; i++) {
+          score += q_reg[i] * k_tok[lane_id + i * 32];
+        }
+      }
+
+#pragma unroll
+      for (int offset = 16; offset > 0; offset >>= 1) {
+        score += __shfl_down_sync(0xFFFFFFFF, score, offset);
+      }
+
+      float cur_score = __shfl_sync(0xFFFFFFFF, score, 0) * sm_scale;
+      float new_max = fmaxf(max_score, cur_score);
+      float alpha =
+          (t == t_start)
+              ? 0.0f
+              : ((new_max == max_score) ? 1.0f : expf(max_score - new_max));
+      float beta = expf(cur_score - new_max);
+
+      if (d_block_scores != nullptr && d_block_table != nullptr) {
+        int block_num = t / 16;
+        if (lane_id == 0) {
+          if (block_num != current_accum_block) {
+            if (current_accum_block >= 0 && current_block_beta_sum > 0.0f) {
+              atomicAdd(&d_block_scores[(size_t)b * max_blocks_per_seq +
+                                        current_accum_block],
+                        current_block_beta_sum);
+            }
+            current_accum_block = block_num;
+            current_block_beta_sum = beta;
+          } else {
+            current_block_beta_sum += beta;
+          }
+        }
+      }
+
+      max_score = new_max;
+      sum_exp = sum_exp * alpha + beta;
+
+      if (is_fp16) {
+        const __half *v_tok = (const __half *)v_cache + tok_offset;
+        for (int i = 0; i < q_items; i++) {
+          acc_v[i] =
+              acc_v[i] * alpha + beta * __half2float(v_tok[lane_id + i * 32]);
+        }
+      } else {
+        const float *v_tok = (const float *)v_cache + tok_offset;
+        for (int i = 0; i < q_items; i++) {
+          acc_v[i] = acc_v[i] * alpha + beta * v_tok[lane_id + i * 32];
+        }
+      }
+    }
+
+    if (d_block_scores != nullptr && d_block_table != nullptr && lane_id == 0) {
+      if (current_accum_block >= 0 && current_block_beta_sum > 0.0f) {
+        atomicAdd(
+            &d_block_scores[(size_t)b * max_blocks_per_seq + current_accum_block],
+            current_block_beta_sum);
+      }
+    }
+  }
+
+  if (lane_id == 0) {
+    s_lse_max[warp_id] = max_score;
+    s_lse_sum[warp_id] = sum_exp;
+  }
+  for (int i = 0; i < q_items; i++) {
+    s_acc_v[warp_id][lane_id + i * 32] = acc_v[i];
+  }
+
+  __syncthreads();
+
+  if (warp_id == 0) {
+    float global_max = -1e20f;
+#pragma unroll
+    for (int s = 0; s < NUM_WARPS; s++) {
+      if (s_lse_sum[s] > 0.0f) {
+        global_max = fmaxf(global_max, s_lse_max[s]);
+      }
+    }
+
+    float global_sum_exp = 0.0f;
+    float reduced_v[4];
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      reduced_v[i] = 0.0f;
+    }
+
+#pragma unroll
+    for (int s = 0; s < NUM_WARPS; s++) {
+      if (s_lse_sum[s] > 0.0f) {
+        float weight = expf(s_lse_max[s] - global_max);
+        global_sum_exp += s_lse_sum[s] * weight;
+        for (int i = 0; i < q_items; i++) {
+          reduced_v[i] += s_acc_v[s][lane_id + i * 32] * weight;
+        }
+      }
+    }
+
+    float inv_sum = global_sum_exp > 0.0f ? (1.0f / global_sum_exp) : 0.0f;
+    float *final_ptr = final_out + (b * num_heads + head_idx) * head_dim;
+    for (int i = 0; i < q_items; i++) {
+      final_ptr[lane_id + i * 32] = reduced_v[i] * inv_sum;
+    }
+  }
+}
+
 int launch_cuda_split_k_flash_decode_h2o(
     float *output, float *partial_out, void *partial_lse, const float *q,
     const void *k_cache, const void *v_cache, const int *d_seq_positions,
@@ -758,20 +945,20 @@ int launch_cuda_split_k_flash_decode_h2o(
     return 0;
 
   int splits = num_splits > 0 ? num_splits : 1;
-  const int block_size = 32;
-  dim3 grid(num_heads, batch_size, splits);
 
-  split_k_flash_decode_continuous_batch_kernel<<<grid, block_size, 0, stream>>>(
-      partial_out, (float2 *)partial_lse, output, q, k_cache, v_cache,
-      d_seq_positions, d_slot_mapping, d_block_table, max_blocks_per_seq,
-      batch_size, num_heads, num_kv_heads, head_dim, slot_stride_tokens,
-      sm_scale, is_fp16, splits, d_block_scores);
-
-  if (splits > 1 && partial_out != nullptr && partial_lse != nullptr) {
-    dim3 reduce_grid(num_heads, batch_size);
-    split_k_flash_decode_reduce_kernel<<<reduce_grid, block_size, 0, stream>>>(
-        output, partial_out, (const float2 *)partial_lse, batch_size, num_heads,
-        head_dim, splits);
+  if (splits > 1) {
+    dim3 grid(num_heads, batch_size);
+    fused_split_k_flash_decode_continuous_batch_kernel<<<grid, 128, 0, stream>>>(
+        output, q, k_cache, v_cache, d_seq_positions, d_slot_mapping,
+        d_block_table, max_blocks_per_seq, batch_size, num_heads, num_kv_heads,
+        head_dim, slot_stride_tokens, sm_scale, is_fp16, d_block_scores);
+  } else {
+    dim3 grid(num_heads, batch_size, 1);
+    split_k_flash_decode_continuous_batch_kernel<<<grid, 32, 0, stream>>>(
+        nullptr, nullptr, output, q, k_cache, v_cache, d_seq_positions,
+        d_slot_mapping, d_block_table, max_blocks_per_seq, batch_size,
+        num_heads, num_kv_heads, head_dim, slot_stride_tokens, sm_scale,
+        is_fp16, 1, d_block_scores);
   }
 
   return cudaGetLastError();
