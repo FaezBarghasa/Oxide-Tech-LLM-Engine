@@ -33,7 +33,8 @@ pub use oxide_eda::{
     PinType, Point2d, RuleSeverity, RuleViolation, SchematicGraph, VerificationReport,
 };
 pub use oxide_lora::{
-    LoraId, NF4_BLOCK_SIZE, NF4_VALUES, QloraLinearLayer, QloraTrainingConfig, UnslothQloraTrainer,
+    EpisodicExperience, LoraId, NF4_BLOCK_SIZE, NF4_VALUES, QloraLinearLayer, QloraTrainingConfig,
+    SleepConfig, SleepConsolidationReport, SleepMemoryConsolidator, SleepState, UnslothQloraTrainer,
 };
 
 /// Supported Hardware Quantization Profiles.
@@ -147,6 +148,7 @@ impl OxideEngineBuilder {
         let paged_arena = Some(oxide_alloc::paged_kv::PagedKvArena::new(1024, 24, 16, 128));
         let mesh_engine = Mesh3dEngine::new();
         let eda_engine = EdaEngine::new();
+        let sleep_consolidator = SleepMemoryConsolidator::new(SleepConfig::default());
 
         Ok(OxideEngine {
             builder: self,
@@ -157,6 +159,7 @@ impl OxideEngineBuilder {
             paged_arena,
             mesh_engine,
             eda_engine,
+            sleep_consolidator,
         })
     }
 }
@@ -172,6 +175,7 @@ pub struct OxideEngine {
     pub paged_arena: Option<oxide_alloc::paged_kv::PagedKvArena>,
     pub mesh_engine: Mesh3dEngine,
     pub eda_engine: EdaEngine,
+    pub sleep_consolidator: SleepMemoryConsolidator,
 }
 
 impl OxideEngine {
@@ -388,6 +392,39 @@ impl OxideEngine {
     pub fn create_qlora_trainer(&self, config: QloraTrainingConfig) -> UnslothQloraTrainer {
         UnslothQloraTrainer::new(config)
     }
+
+    /// Records an interaction experience into episodic memory during the Awake phase (Google SLEEP Framework).
+    pub fn record_interaction(
+        &mut self,
+        prompt: impl Into<String>,
+        response: impl Into<String>,
+        tokens: &[u32],
+        importance_score: f32,
+        topic_tag: Option<&str>,
+    ) {
+        self.sleep_consolidator
+            .record_experience(prompt, response, tokens, importance_score, topic_tag);
+    }
+
+    /// Triggers the Google Research SLEEP Continual Learning phase:
+    /// Awake -> Consolidating (Knowledge Seeding) -> Dreaming (Self-Play Optimization) -> Awakening.
+    /// Fuses/registers consolidated low-rank memories into active serving without catastrophic forgetting.
+    pub fn sleep_and_consolidate(&mut self) -> Result<SleepConsolidationReport> {
+        let dim = 128;
+        let (adapter, report) = self
+            .sleep_consolidator
+            .execute_sleep_cycle(dim, "model.layers.0.self_attn.q_proj")?;
+        let name = adapter.name.clone();
+        self.lora_manager.register_adapter(adapter);
+        self.lora_manager.set_active_adapter(Some(&name));
+        Ok(report)
+    }
+
+    /// Returns current sleep state (Awake, Dozing, Consolidating, Dreaming, Awakening).
+    #[must_use]
+    pub fn sleep_state(&self) -> SleepState {
+        self.sleep_consolidator.state
+    }
 }
 
 #[cfg(test)]
@@ -495,5 +532,45 @@ mod tests {
         let adapter = trainer.to_unsloth_adapter("live_trained_persona");
         assert_eq!(adapter.name, "live_trained_persona");
         assert!(adapter.layers.contains_key("model.layers.0.self_attn.v_proj"));
+    }
+
+    #[test]
+    fn test_oxide_engine_sleep_framework_lifecycle() {
+        let mut engine = OxideEngine::builder()
+            .build()
+            .expect("Engine built successfully");
+
+        assert_eq!(engine.sleep_state(), SleepState::Awake);
+
+        // Record episodic interactions during Awake phase
+        engine.record_interaction(
+            "What protocol powers edge transport?",
+            "QUIC HTTP/3 with rustls and aws-lc-rs",
+            &[101, 102, 103, 104],
+            0.95, // High importance
+            Some("edge_network"),
+        );
+        engine.record_interaction(
+            "Casual greetings",
+            "Hello there",
+            &[1, 2],
+            0.1, // Low importance
+            Some("chitchat"),
+        );
+
+        assert_eq!(engine.sleep_consolidator.episodic_buffer.len(), 2);
+
+        // Trigger Sleep Cycle (Knowledge Seeding + Dreaming + Awakening)
+        let report = engine
+            .sleep_and_consolidate()
+            .expect("Sleep cycle consolidated knowledge");
+
+        assert_eq!(report.experiences_consolidated, 1);
+        assert_eq!(engine.sleep_state(), SleepState::Awake);
+        assert!(engine.lora_manager.is_adapter_active());
+        assert_eq!(
+            engine.lora_manager.active_adapter().unwrap().name,
+            report.consolidated_adapter_name
+        );
     }
 }

@@ -25,7 +25,6 @@ use crate::loader::{UnslothAdapter, UnslothAdapterConfig, UnslothTensorPair};
 use crate::qlora::{QloraLinearLayer, QloraTrainingConfig};
 use oxide_core::error::{EngineError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Operational State of the Foundation Model under the SLEEP Framework.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
