@@ -14,7 +14,8 @@
 ## Table of Contents
 
 - [Architectural Charter & Immutable Invariants](#architectural-charter--immutable-invariants)
-- [Performance Benchmarks & Comparative Evaluation](docs/benchmarks_and_performance.md)
+- [Physical Hardware Benchmarks](#physical-hardware-benchmarks-rtx-4060-dgpu-8gb--zen-4-cpu)
+- [Performance Benchmarks & Comparative Evaluation (Detailed Docs)](docs/benchmarks_and_performance.md)
 - [Dynamic ggml / llama.cpp Execution Architecture](#dynamic-ggml--llamacpp-execution-architecture)
 - [Academic Sampling Algorithms Suite](#academic-sampling-algorithms-suite)
 - [Universal Integer Quantization & GGUF Support](#universal-integer-quantization--gguf-support)
@@ -40,6 +41,32 @@ The runtime is engineered around five strict, non-negotiable systems invariants:
 3. **Monomorphized Hot Loop via Closed Dispatch**: Hot forward passes contain zero virtual dispatch (`dyn Trait` / vtables). Heterogeneous model and hardware execution is achieved via closed dispatch enums (`SpecializedPipeline`) matched once at pipeline initialization and lowered to flat direct jump tables.
 4. **Thermal-Aware Adaptive Concurrency**: Worker threads never peg CPU cores at continuous $100\%$ active spin under idle or fluctuating load. Execution actors execute a strict three-phase cycle (micro-spin $\to$ `thread::yield_now()` $\to$ futex parking via `Parker`) to prevent package thermal throttling.
 5. **Deterministic Bitwise Correctness**: Every quantized kernel (`BlockQ2_K` through `BlockQ8_0`, `PTQ1_0`, `PQ2_0`, `CQ2`, `NVFP4`) and custom layer (In-SMem FWHT, Flash Attention tiled online softmax, Engram table gather) passes automated bitwise tolerance tests against PyTorch/GGUF reference implementations.
+
+---
+
+## Physical Hardware Benchmarks (RTX 4060 dGPU 8GB & Zen 4 CPU)
+
+> Complete empirical benchmarks, comparative logs, and reproducible commands are documented in **[`docs/benchmarks_and_performance.md`](docs/benchmarks_and_performance.md)**.
+
+### Single-User Generation: Oxide-Engine vs llama.cpp vs vLLM vs SGLang
+*Evaluated on bare-metal NVIDIA GeForce RTX 4060 Laptop (8GB GDDR6, 24 SMs) running `Qwen2.5-0.5B-Instruct` across 689 prompt tokens $\to$ 128 generated tokens under greedy sampling ($T=0.0$):*
+
+| Runtime Engine | Prefill Speed (TTFT) | Decode Throughput | Step Latency | Total E2E Latency | Peak VRAM |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Oxide-Tech Engine (Split-K)** | **8,476.7 tok/s** (81.28 ms) | **311.84 – 327.78 tok/s** | **3.05 – 3.22 ms** | **489.29 ms** | **~780 MB** |
+| **llama.cpp (`b10750`, CUDA)** | **11,903.6 tok/s** (57.88 ms) | **320.90 tok/s** | **3.11 ms** | **456.68 ms** | **~1,100 MB** |
+| **vLLM (`v0.30.0`, FlashInfer)** | ~480 tok/s | ~102 tok/s | ~9.80 ms | 1,436.14 ms | 4,570 MB (4.57 GB) |
+| **SGLang (`v0.5.20`, FlashInfer)**| ~505 tok/s | ~108 tok/s | ~9.25 ms | 1,363.87 ms | 4,200 MB (4.20 GB) |
+
+- **Decode Parity**: Oxide reaches **328 tok/s**, matching bare-metal `llama.cpp` (~321 tok/s) and outperforming vLLM / SGLang by **3.1x – 3.2x**.
+- **Memory Efficiency**: Oxide operates within **~780 MB VRAM** (5.8x less than vLLM), leaving >7.3 GB free on consumer GPUs.
+- **Short/Medium Prompts**: Oxide delivers **408.73 tok/s** on medium prompts (141 tok) and up to **430 tok/s** on short prompts (17 tok).
+
+### Multi-User Concurrency ($N=4$ Simultaneous Streams, ~700 prompt $\to$ 128 output tokens/stream)
+- **Oxide-Tech Engine**: Total E2E **2,219.37 ms** (2.22s), Prefill **7,388.8 tok/s** (380 ms), Peak VRAM **< 850 MB**.
+- **SGLang (`v0.5.20`)**: Total E2E **5,220.81 ms** (5.22s), Peak VRAM **4,200 MB**.
+  - **Result: Oxide-Engine is 2.35x faster end-to-end than SGLang** with **80% lower VRAM footprint**.
+- **vLLM (`v0.30.0`)**: Total E2E **870.07 ms** (batched GEMV), Peak VRAM **4,570 MB** (5.4x higher memory footprint).
 
 ---
 
@@ -108,6 +135,7 @@ To support loading any model dynamically at runtime without requiring binary rec
 
 `crates/oxide-alloc/src/kv_advanced.rs` and `crates/oxide-models/src/flash_attn.rs`:
 
+- **Split-K Parallel FlashDecode**: 56-block grid with 4-way sequence partitioning per query head, saturating all GPU SMs on small-head models with in-register fused symmetric `Q8_1` quantization.
 - **Context Shifting**: Preserves prefix system prompt and slides the active context window with RoPE position adjustment.
 - **Prompt Caching**: 64-bit prefix tree hashing for $10\times$ faster TTFT on repeated prompt prefixes.
 - **On-the-Fly KV Quantization**: In-flight compression to `Q8_0`, `Q4_0`, `FP8`, or `INT4`.
@@ -136,7 +164,7 @@ To support loading any model dynamically at runtime without requiring binary rec
 
 | Hardware Family | Backend Crate | Key Acceleration Features |
 | :--- | :--- | :--- |
-| **NVIDIA CUDA** | `oxide-backend-cuda` | In-SMem FWHT butterflies, `__dp4a` ternary dot products, NVFP4 tensor cores, **1 to 16 GPU Clustered Arrays**, NCCL AllReduce. |
+| **NVIDIA CUDA** | `oxide-backend-cuda` | Split-K FlashDecode (56-block saturation), In-SMem FWHT butterflies, `__dp4a` ternary dot products, NVFP4 tensor cores, **1 to 16 GPU Clustered Arrays**, NCCL AllReduce. |
 | **AMD ROCm & APU** | `oxide-backend-rocm` | Matrix Core MFMA GEMV, unified memory direct zero-copy, **Tri-Compute APU (CPU + iGPU + XDNA NPU)**. |
 | **Apple Silicon** | `oxide-backend-metal` | Metal Shading Language threadgroup memory, SIMD-group intrinsics. |
 | **Google TPU** | `oxide-backend-tpu` | ICI inter-chip AllReduce, Systolic Array Matrix Units (MXU). |
