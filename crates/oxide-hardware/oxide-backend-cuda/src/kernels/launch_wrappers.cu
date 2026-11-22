@@ -104,6 +104,14 @@ int launch_cuda_mmvq_q5_0(float *y, const void *raw_blocks, const void *x_q8_1,
   if (batch_size == 1) {
     mmvq_q5_0_cuda_kernel<1, false>
         <<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1, 0);
+  } else if (batch_size <= 2) {
+    dim3 grid_2d(grid, (batch_size + 1) / 2);
+    mmvq_q5_0_cuda_kernel<2, false><<<grid_2d, block, 0, stream>>>(
+        y, raw_blocks, x_q8_1, m, k, batch_size, -1);
+  } else if (batch_size <= 4) {
+    dim3 grid_2d(grid, (batch_size + 3) / 4);
+    mmvq_q5_0_cuda_kernel<4, false><<<grid_2d, block, 0, stream>>>(
+        y, raw_blocks, x_q8_1, m, k, batch_size, -1);
   } else {
     dim3 grid_2d(grid, (batch_size + 7) / 8);
     mmvq_q5_0_cuda_kernel<8, false><<<grid_2d, block, 0, stream>>>(
@@ -122,6 +130,14 @@ int launch_cuda_mmvq_q5_0_fused_add(float *y, const void *raw_blocks,
   if (batch_size == 1) {
     mmvq_q5_0_cuda_kernel<1, true>
         <<<grid, block, 0, stream>>>(y, raw_blocks, x_q8_1, m, k, 1, 0);
+  } else if (batch_size <= 2) {
+    dim3 grid_2d(grid, (batch_size + 1) / 2);
+    mmvq_q5_0_cuda_kernel<2, true><<<grid_2d, block, 0, stream>>>(
+        y, raw_blocks, x_q8_1, m, k, batch_size, -1);
+  } else if (batch_size <= 4) {
+    dim3 grid_2d(grid, (batch_size + 3) / 4);
+    mmvq_q5_0_cuda_kernel<4, true><<<grid_2d, block, 0, stream>>>(
+        y, raw_blocks, x_q8_1, m, k, batch_size, -1);
   } else {
     dim3 grid_2d(grid, (batch_size + 7) / 8);
     mmvq_q5_0_cuda_kernel<8, true><<<grid_2d, block, 0, stream>>>(

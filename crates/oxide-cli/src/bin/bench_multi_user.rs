@@ -23,7 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .collect();
 
     println!("============================================================");
-    println!("Oxide-Engine Multi-User Benchmark (N={} concurrent users)", users);
+    println!(
+        "Oxide-Engine Multi-User Benchmark (N={} concurrent users)",
+        users
+    );
     println!("Model: /home/jrad/models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
     println!("Hardware: NVIDIA RTX 4060 Laptop GPU (CUDA Native, Zero-Copy)");
     println!("============================================================");
@@ -53,17 +56,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let gen_tokens = 128;
-    println!("\nExecuting Multi-User Prefill & Generation (4 streams x {} tokens)...", gen_tokens);
+    println!(
+        "\nExecuting Multi-User Prefill & Generation (4 streams x {} tokens)...",
+        gen_tokens
+    );
 
     let t_start = Instant::now();
     let mut user_completions: Vec<Vec<u32>> = vec![Vec::new(); users];
 
-    // 1. Prefill for all 4 user slots
-    for (slot_idx, tokens) in tokenized_prompts.iter().enumerate() {
-        pipe.prefill(slot_idx as u64 + 1, tokens, slot_idx as u16)?;
-    }
+    // 1. Unified Ragged Batched Prefill across all user slots in a single GPU pass
+    let prompt_seqs: Vec<(&[u32], usize)> = tokenized_prompts
+        .iter()
+        .enumerate()
+        .map(|(slot_idx, toks)| (toks.as_slice(), slot_idx))
+        .collect();
+    let initial_sampled = pipe.prefill_ragged_batched(&prompt_seqs)?;
     let t_prefill = t_start.elapsed();
-    println!("All {} prefill passes completed in {:.2} ms ({:.2} tok/s aggregate)",
+    println!(
+        "All {} prefill passes completed via Ragged Batching in {:.2} ms ({:.2} tok/s aggregate)",
         users,
         t_prefill.as_secs_f64() * 1000.0,
         total_prompt_tokens as f64 / t_prefill.as_secs_f64()
@@ -71,14 +81,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 2. Continuous Batched Decode Loop across all active slots in a single GPU forward pass
     let t_decode_start = Instant::now();
-    let mut active_tokens: Vec<u32> = tokenized_prompts.iter().map(|p| *p.last().unwrap_or(&1)).collect();
+    let mut active_tokens = initial_sampled;
+    for slot_idx in 0..users {
+        user_completions[slot_idx].push(active_tokens[slot_idx]);
+    }
     let mut batch_positions: Vec<usize> = (0..users)
-        .map(|slot_idx| pipe.get_seq_pos((slot_idx + 1) as u64))
+        .map(|slot_idx| pipe.get_seq_pos(slot_idx as u64))
         .collect();
     let slot_indices: Vec<usize> = (0..users).collect();
 
-    for _step in 0..gen_tokens {
-        let sampled = pipe.step_continuous_batch(&active_tokens, &batch_positions, &slot_indices)?;
+    for _step in 1..gen_tokens {
+        let sampled =
+            pipe.step_continuous_batch(&active_tokens, &batch_positions, &slot_indices)?;
         for slot_idx in 0..users {
             active_tokens[slot_idx] = sampled[slot_idx];
             user_completions[slot_idx].push(sampled[slot_idx]);
@@ -91,15 +105,33 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("============================================================");
     println!("Oxide-Engine Multi-User (N={}) Results:", users);
-    println!("Total Wall-Clock Latency: {:.2} ms", t_total.as_secs_f64() * 1000.0);
+    println!(
+        "Total Wall-Clock Latency: {:.2} ms",
+        t_total.as_secs_f64() * 1000.0
+    );
     println!("Total Prompt Tokens: {}", total_prompt_tokens);
     println!("Total Completion Tokens: {}", total_gen_tokens);
-    println!("Prefill Time: {:.2} ms ({:.2} tok/s aggregate)", t_prefill.as_secs_f64() * 1000.0, total_prompt_tokens as f64 / t_prefill.as_secs_f64());
-    println!("Decode Time: {:.2} ms ({:.2} tok/s aggregate)", t_decode.as_secs_f64() * 1000.0, total_gen_tokens as f64 / t_decode.as_secs_f64());
-    println!("Per-User Effective Latency: {:.2} ms", t_total.as_secs_f64() * 1000.0 / users as f64);
+    println!(
+        "Prefill Time: {:.2} ms ({:.2} tok/s aggregate)",
+        t_prefill.as_secs_f64() * 1000.0,
+        total_prompt_tokens as f64 / t_prefill.as_secs_f64()
+    );
+    println!(
+        "Decode Time: {:.2} ms ({:.2} tok/s aggregate)",
+        t_decode.as_secs_f64() * 1000.0,
+        total_gen_tokens as f64 / t_decode.as_secs_f64()
+    );
+    println!(
+        "Per-User Effective Latency: {:.2} ms",
+        t_total.as_secs_f64() * 1000.0 / users as f64
+    );
     for i in 0..users {
         let decoded = tokenizer.decode(&user_completions[i]);
-        println!("User {} Output (first 100 chars): {:?}", i + 1, &decoded[..decoded.len().min(100)]);
+        println!(
+            "User {} Output (first 100 chars): {:?}",
+            i + 1,
+            &decoded[..decoded.len().min(100)]
+        );
     }
     println!("============================================================");
 

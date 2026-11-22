@@ -856,6 +856,23 @@ impl SpecializedPipeline {
         results
     }
 
+    /// High-throughput unified ragged batched prefill pass across multiple user prompt streams in a single GPU pass.
+    pub fn prefill_ragged_batched(
+        &mut self,
+        sequences: &[(&[u32], usize)],
+    ) -> Result<Vec<u32>> {
+        if let Self::Llama3Cuda(engine) = self {
+            engine.backend.dispatch_prefill_ragged_batch(sequences)
+        } else {
+            let mut results = Vec::with_capacity(sequences.len());
+            for &(tokens, slot) in sequences {
+                self.prefill(slot as u64 + 1, tokens, slot as u16)?;
+                results.push(*tokens.last().unwrap_or(&1));
+            }
+            Ok(results)
+        }
+    }
+
     /// Universal model loader resolving from a local file path (GGUF/SafeTensors),
     /// a catalog model name (e.g. Qwen, DeepSeek, Mistral, Llama), or domain pipelines.
     pub fn from_model_or_path(
