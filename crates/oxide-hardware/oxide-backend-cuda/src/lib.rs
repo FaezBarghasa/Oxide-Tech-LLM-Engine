@@ -3934,6 +3934,7 @@ impl CudaBackend {
 
         // 3. Output Norm and LM Head for the tail token of each sequence
         let n_seqs = sequences.len();
+        let q8_1_stride_bytes = (h / 32) * 36;
         if let (Some(d_hid), Some(d_norm), Some(d_out_norm)) = (
             &self.d_hidden,
             &mut self.d_scratch_norm,
@@ -3945,9 +3946,14 @@ impl CudaBackend {
                     unsafe {
                         let tail_hid_ptr = d_hid.as_typed_ptr::<f32>().add(tail_tok_idx * h);
                         let norm_dst_ptr = d_norm.as_typed_ptr::<f32>().add(i * h);
+                        let q8_1_dst_ptr = if !d_q8_1_ptr.is_null() {
+                            (d_q8_1_ptr as *mut u8).add(i * q8_1_stride_bytes) as *mut std::ffi::c_void
+                        } else {
+                            std::ptr::null_mut()
+                        };
                         driver::launch_cuda_fused_rmsnorm_q8_1(
                             norm_dst_ptr,
-                            d_q8_1_ptr,
+                            q8_1_dst_ptr,
                             tail_hid_ptr,
                             d_out_norm.as_typed_ptr::<f32>(),
                             1,
@@ -3965,14 +3971,6 @@ impl CudaBackend {
             (&self.d_scratch_norm, &self.d_lm_head, &mut self.d_logits)
         {
             unsafe {
-                if !d_q8_1_ptr.is_null() {
-                    driver::launch_cuda_quantize_q8_1(
-                        d_norm.as_typed_ptr::<f32>(),
-                        d_q8_1_ptr,
-                        (n_seqs * h) as i32,
-                        s,
-                    );
-                }
                 Self::dispatch_mmvq(
                     d_logits.as_typed_ptr::<f32>(),
                     d_lm,
