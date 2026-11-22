@@ -353,7 +353,7 @@ impl CudaBackend {
                 };
                 oxide_core::sampler::SamplerState::from_config(&sampling_config)
             },
-            kv_capacity: 8192,
+            kv_capacity: (max_slots * 2048).max(8192),
             rms_norm_eps: 1e-5,
             is_qwen: false,
             sliding_window: None,
@@ -430,7 +430,7 @@ impl CudaBackend {
         self.is_qwen = is_qwen;
         self.sliding_window = sliding_window;
         if kv_capacity > 0 {
-            self.kv_capacity = kv_capacity;
+            self.kv_capacity = kv_capacity.max(self.max_slots * 2048);
         }
         if rope_theta > 0.0 {
             self.rope_theta = rope_theta;
@@ -1353,8 +1353,8 @@ impl CudaBackend {
             lm_head_bytes.len()
         );
 
-        let max_batch = 4096usize;
-        let max_logits_batch = 64usize;
+        let max_batch = self.kv_capacity.max(16384);
+        let max_logits_batch = self.slot_positions.len().max(64);
         let mut d_hidden =
             CudaDeviceBuffer::allocate(max_batch * hidden_dim * std::mem::size_of::<f32>())
                 .map_err(EngineError::BackendError)?;
@@ -3906,7 +3906,7 @@ impl CudaBackend {
             (&self.d_scratch_norm, &self.d_lm_head, &mut self.d_logits)
         {
             unsafe {
-                if !d_q8_1_ptr.is_null() && n_seqs < 16 {
+                if !d_q8_1_ptr.is_null() {
                     driver::launch_cuda_quantize_q8_1(
                         d_norm.as_typed_ptr::<f32>(),
                         d_q8_1_ptr,

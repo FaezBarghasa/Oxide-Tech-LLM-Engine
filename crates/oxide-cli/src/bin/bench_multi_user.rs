@@ -10,7 +10,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let prompt_file = "bench_large_prompt.txt";
     let base_prompt = std::fs::read_to_string(prompt_file)?;
 
-    let users = 4;
+    let args: Vec<String> = std::env::args().collect();
+    let users: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4);
+    let gen_tokens: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(128);
+
     let prompts: Vec<String> = (0..users)
         .map(|i| {
             format!(
@@ -37,12 +40,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let gguf = GgufFile::parse(&mmap)?;
     let tokenizer = GgufTokenizer::from_gguf(&gguf);
 
-    // Pass max_slots = 4 so each slot gets 8192 / 4 = 2048 tokens capacity!
+    // Pass max_slots = users so each slot gets appropriate capacity!
     let mut pipe = SpecializedPipeline::from_model_or_path(
         &model_path.to_string_lossy(),
         "cuda",
         None,
-        4,
+        users.max(4),
         None,
     )?;
 
@@ -55,10 +58,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tokenized_prompts.push(toks);
     }
 
-    let gen_tokens = 128;
     println!(
-        "\nExecuting Multi-User Prefill & Generation (4 streams x {} tokens)...",
-        gen_tokens
+        "\nExecuting Multi-User Prefill & Generation ({} streams x {} tokens)...",
+        users, gen_tokens
     );
 
     let t_start = Instant::now();
@@ -127,10 +129,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     for i in 0..users {
         let decoded = tokenizer.decode(&user_completions[i]);
+        let preview: String = decoded.chars().take(100).collect();
         println!(
             "User {} Output (first 100 chars): {:?}",
             i + 1,
-            &decoded[..decoded.len().min(100)]
+            preview
         );
     }
     println!("============================================================");

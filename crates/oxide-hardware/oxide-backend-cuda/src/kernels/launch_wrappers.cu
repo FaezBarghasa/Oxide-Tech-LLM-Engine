@@ -194,22 +194,9 @@ int launch_cuda_mmvq_q8_0(float *y, const void *raw_blocks, const void *x_q8_1,
     dim3 grid_2d(grid, 1);
     mmvq_q8_0_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 16) {
-    dim3 grid_2d(grid * 4, 1);
-    mmvq_q8_0_cuda_kernel<4, 0, 4><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 20) {
-    dim3 grid_2d(grid * 4, 1);
-    mmvq_q8_0_cuda_kernel<5, 0, 4><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 24) {
-    dim3 grid_2d(grid * 4, 1);
-    mmvq_q8_0_cuda_kernel<6, 0, 4><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
   } else {
-    int num_chunks = (batch_size + 15) / 16;
-    dim3 grid_2d(grid * 4, num_chunks);
-    mmvq_q8_0_cuda_kernel<4, 0, 4><<<grid_2d, block, 0, stream>>>(
+    dim3 grid_2d(grid, (batch_size + 7) / 8);
+    mmvq_q8_0_cuda_kernel<8><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
   }
   return cudaGetLastError();
@@ -241,22 +228,9 @@ int launch_cuda_mmvq_q8_0_fused_add(float *y, const void *raw_blocks,
     dim3 grid_2d(grid, 1);
     mmvq_q8_0_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 16) {
-    dim3 grid_2d(grid * 4, 1);
-    mmvq_q8_0_cuda_kernel<4, 1, 4><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 20) {
-    dim3 grid_2d(grid * 4, 1);
-    mmvq_q8_0_cuda_kernel<5, 1, 4><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
-  } else if (batch_size <= 24) {
-    dim3 grid_2d(grid * 4, 1);
-    mmvq_q8_0_cuda_kernel<6, 1, 4><<<grid_2d, block, 0, stream>>>(
-        y, raw_blocks, x_q8_1, m, k, batch_size);
   } else {
-    int num_chunks = (batch_size + 15) / 16;
-    dim3 grid_2d(grid * 4, num_chunks);
-    mmvq_q8_0_cuda_kernel<4, 1, 4><<<grid_2d, block, 0, stream>>>(
+    dim3 grid_2d(grid, (batch_size + 7) / 8);
+    mmvq_q8_0_cuda_kernel<8, 1><<<grid_2d, block, 0, stream>>>(
         y, raw_blocks, x_q8_1, m, k, batch_size);
   }
   return cudaGetLastError();
