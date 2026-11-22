@@ -115,6 +115,197 @@ __global__ void dequantize_token_embd_fp32_cuda_kernel(
   }
 }
 
+// -------------------------------------------------------------------------
+// Batched Token Embedding Dequantization Kernels for Ragged Prefill
+// -------------------------------------------------------------------------
+
+__global__ void dequantize_token_embd_batch_q4_k_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    const int *__restrict__ d_tokens, int total_tokens, int hidden_dim,
+    float scale, int vocab_size) {
+  int t = blockIdx.y;
+  if (t >= total_tokens)
+    return;
+
+  int actual_tok_idx = d_tokens[t];
+  if (vocab_size > 0) {
+    actual_tok_idx = actual_tok_idx % vocab_size;
+  }
+
+  int num_blocks_per_row = hidden_dim / 256;
+  int b = blockIdx.x;
+  if (b >= num_blocks_per_row)
+    return;
+
+  const BlockQ4_K_Gpu *row_blocks =
+      (const BlockQ4_K_Gpu *)((const uint8_t *)raw_embd +
+                              (size_t)actual_tok_idx * num_blocks_per_row * 144);
+  const BlockQ4_K_Gpu *blk = &row_blocks[b];
+
+  int lane_id = threadIdx.x % 32;
+  int chunk = lane_id / 8;
+  int sub_idx = lane_id % 8;
+  int sub0 = 2 * chunk + 0;
+  int sub1 = 2 * chunk + 1;
+
+  uint4 hdr = ((const uint4 *)blk)[0];
+  float d = __low2float(*((const half2 *)&hdr.x)) * scale;
+  float dmin = __high2float(*((const half2 *)&hdr.x)) * scale;
+
+  float sc0, min0, sc1, min1;
+  get_scale_min_k4_from_regs(chunk, hdr.y, hdr.z, hdr.w, &sc0, &min0, &sc1,
+                             &min1);
+
+  float d_sc0 = d * sc0;
+  float d_sc1 = d * sc1;
+  float dm_min0 = dmin * min0;
+  float dm_min1 = dmin * min1;
+
+  int v = ((const int *)blk->qs)[lane_id];
+  int v0 = v & 0x0F0F0F0F;
+  int v1 = (v >> 4) & 0x0F0F0F0F;
+
+  int8_t *q0_bytes = (int8_t *)&v0;
+  int8_t *q1_bytes = (int8_t *)&v1;
+
+  float *out_row = d_hidden + (size_t)t * hidden_dim;
+#pragma unroll
+  for (int i = 0; i < 4; i++) {
+    out_row[b * 256 + sub0 * 32 + sub_idx * 4 + i] =
+        (float)q0_bytes[i] * d_sc0 - dm_min0;
+    out_row[b * 256 + sub1 * 32 + sub_idx * 4 + i] =
+        (float)q1_bytes[i] * d_sc1 - dm_min1;
+  }
+}
+
+__global__ void dequantize_token_embd_batch_q5_0_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    const int *__restrict__ d_tokens, int total_tokens, int hidden_dim,
+    float scale, int vocab_size) {
+  int t = blockIdx.y;
+  if (t >= total_tokens)
+    return;
+
+  int actual_tok_idx = d_tokens[t];
+  if (vocab_size > 0) {
+    actual_tok_idx = actual_tok_idx % vocab_size;
+  }
+
+  int num_blocks_per_row = hidden_dim / 32;
+  int b = blockIdx.x;
+  if (b >= num_blocks_per_row)
+    return;
+
+  const BlockQ5_0_Gpu *row_blocks =
+      (const BlockQ5_0_Gpu *)((const uint8_t *)raw_embd +
+                              (size_t)actual_tok_idx * num_blocks_per_row * 22);
+  const BlockQ5_0_Gpu *blk = &row_blocks[b];
+
+  int lane_id = threadIdx.x % 32;
+  float d = __half2float(*((const half *)&blk->d)) * scale;
+  uint32_t qh = (uint32_t)blk->qh[0] | ((uint32_t)blk->qh[1] << 8) |
+                ((uint32_t)blk->qh[2] << 16) | ((uint32_t)blk->qh[3] << 24);
+
+  float *out_row = d_hidden + (size_t)t * hidden_dim;
+  if (lane_id < 16) {
+    uint8_t byte = blk->qs[lane_id];
+    uint8_t h0 = (qh >> lane_id) & 1;
+    uint8_t h1 = (qh >> (lane_id + 16)) & 1;
+    float q0 = (float)(((int)(byte & 0x0F) | ((int)h0 << 4)) - 16);
+    float q1 = (float)(((int)((byte >> 4) & 0x0F) | ((int)h1 << 4)) - 16);
+
+    out_row[b * 32 + lane_id] = q0 * d;
+    out_row[b * 32 + lane_id + 16] = q1 * d;
+  }
+}
+
+__global__ void dequantize_token_embd_batch_q8_0_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    const int *__restrict__ d_tokens, int total_tokens, int hidden_dim,
+    float scale, int vocab_size) {
+  int t = blockIdx.y;
+  if (t >= total_tokens)
+    return;
+
+  int actual_tok_idx = d_tokens[t];
+  if (vocab_size > 0) {
+    actual_tok_idx = actual_tok_idx % vocab_size;
+  }
+
+  int num_blocks_per_row = hidden_dim / 32;
+  int b = blockIdx.x;
+  if (b >= num_blocks_per_row)
+    return;
+
+  const BlockQ8_0_Gpu *row_blocks =
+      (const BlockQ8_0_Gpu *)((const uint8_t *)raw_embd +
+                              (size_t)actual_tok_idx * num_blocks_per_row * 34);
+  const BlockQ8_0_Gpu *blk = &row_blocks[b];
+
+  int lane_id = threadIdx.x % 32;
+  float d = __half2float(*((const half *)&blk->scale)) * scale;
+  float *out_row = d_hidden + (size_t)t * hidden_dim;
+  out_row[b * 32 + lane_id] = (float)blk->qs[lane_id] * d;
+}
+
+__global__ void dequantize_token_embd_batch_fp32_cuda_kernel(
+    float *__restrict__ d_hidden, const void *__restrict__ raw_embd,
+    const int *__restrict__ d_tokens, int total_tokens, int hidden_dim,
+    float scale, int vocab_size) {
+  int t = blockIdx.y;
+  if (t >= total_tokens)
+    return;
+
+  int actual_tok_idx = d_tokens[t];
+  if (vocab_size > 0) {
+    actual_tok_idx = actual_tok_idx % vocab_size;
+  }
+
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < hidden_dim) {
+    const float *row =
+        ((const float *)raw_embd) + (size_t)actual_tok_idx * hidden_dim;
+    float *out_row = d_hidden + (size_t)t * hidden_dim;
+    out_row[idx] = row[idx] * scale;
+  }
+}
+
+int launch_cuda_dequantize_token_embd_batch(
+    float *d_hidden, const void *d_token_embd, const int *d_tokens,
+    int total_tokens, int hidden_dim, float scale, int quant_type,
+    int vocab_size, cudaStream_t stream) {
+  if (!d_hidden || !d_token_embd || !d_tokens || hidden_dim <= 0 ||
+      total_tokens <= 0)
+    return 0;
+
+  if (quant_type == 1) { // Q4_K
+    int num_blocks = hidden_dim / 256;
+    dim3 grid(num_blocks, total_tokens);
+    dequantize_token_embd_batch_q4_k_cuda_kernel<<<grid, 32, 0, stream>>>(
+        d_hidden, d_token_embd, d_tokens, total_tokens, hidden_dim, scale,
+        vocab_size);
+  } else if (quant_type == 2) { // Q5_0
+    int num_blocks = hidden_dim / 32;
+    dim3 grid(num_blocks, total_tokens);
+    dequantize_token_embd_batch_q5_0_cuda_kernel<<<grid, 32, 0, stream>>>(
+        d_hidden, d_token_embd, d_tokens, total_tokens, hidden_dim, scale,
+        vocab_size);
+  } else if (quant_type == 3) { // Q8_0
+    int num_blocks = hidden_dim / 32;
+    dim3 grid(num_blocks, total_tokens);
+    dequantize_token_embd_batch_q8_0_cuda_kernel<<<grid, 32, 0, stream>>>(
+        d_hidden, d_token_embd, d_tokens, total_tokens, hidden_dim, scale,
+        vocab_size);
+  } else if (quant_type == 0) { // FP32
+    int num_blocks = (hidden_dim + 255) / 256;
+    dim3 grid(num_blocks, total_tokens);
+    dequantize_token_embd_batch_fp32_cuda_kernel<<<grid, 256, 0, stream>>>(
+        d_hidden, d_token_embd, d_tokens, total_tokens, hidden_dim, scale,
+        vocab_size);
+  }
+  return cudaGetLastError();
+}
+
 int launch_cuda_dequantize_token_embd(float *d_hidden, const void *d_token_embd,
                                       int tok_idx, int hidden_dim, float scale,
                                       int quant_type, cudaStream_t stream) {

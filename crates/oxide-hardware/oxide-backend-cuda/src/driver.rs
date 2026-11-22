@@ -728,6 +728,18 @@ unsafe extern "C" {
         stream: cudaStream_t,
     ) -> i32;
 
+    pub fn launch_cuda_dequantize_token_embd_batch(
+        d_hidden: *mut f32,
+        d_token_embd: *const std::ffi::c_void,
+        d_tokens: *const i32,
+        total_tokens: i32,
+        hidden_dim: i32,
+        scale: f32,
+        quant_type: i32,
+        vocab_size: i32,
+        stream: cudaStream_t,
+    ) -> i32;
+
     pub fn launch_cuda_dequantize_token_embd_ptr(
         d_hidden: *mut f32,
         d_token_embd: *const std::ffi::c_void,

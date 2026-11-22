@@ -3367,51 +3367,51 @@ impl CudaBackend {
         // Compute prefix token offsets for each sequence in the packed ragged buffer
         let mut token_offsets = Vec::with_capacity(sequences.len());
         let mut cur_offset = 0usize;
+        let mut flat_prompt_tokens = Vec::with_capacity(total_tokens);
         for &(toks, _) in sequences {
             token_offsets.push(cur_offset);
             cur_offset += toks.len();
+            flat_prompt_tokens.extend_from_slice(toks);
         }
 
-        // 1. Initial embedding lookup for all packed prompt tokens
+        // Ensure d_batch_tokens buffer is sufficiently sized for total_tokens
+        let batch_tokens_bytes = total_tokens * std::mem::size_of::<i32>();
+        if self
+            .d_batch_tokens
+            .as_ref()
+            .is_none_or(|b| b.size_bytes() < batch_tokens_bytes)
+        {
+            self.d_batch_tokens = Some(
+                CudaDeviceBuffer::allocate(batch_tokens_bytes.max(16384 * 4))
+                    .map_err(EngineError::BackendError)?,
+            );
+        }
+
+        if let Some(d_btok) = &mut self.d_batch_tokens {
+            let i32_tokens: Vec<i32> = flat_prompt_tokens.iter().map(|&t| t as i32).collect();
+            let _ = d_btok.copy_from_host_async(&i32_tokens, s);
+        }
+
+        // 1. Initial embedding lookup for all packed prompt tokens in a SINGLE GPU dispatch
         if let Some(d_emb) = &self.d_token_embd {
             let emb_scale = if self.is_gemma {
                 (h as f32).sqrt()
             } else {
                 1.0f32
             };
-            for (seq_idx, &(toks, _)) in sequences.iter().enumerate() {
-                let base_offset = token_offsets[seq_idx];
-                for (i, &tok) in toks.iter().enumerate() {
-                    let tok_idx = (tok as usize) % self.vocab_size.max(1);
-                    let dst_offset = (base_offset + i) * h;
-                    if let Some(d_hid) = &self.d_hidden {
-                        unsafe {
-                            let dst_ptr = d_hid.as_typed_ptr::<f32>().add(dst_offset);
-                            if self.token_embd_quant_type > 0 {
-                                driver::launch_cuda_dequantize_token_embd(
-                                    dst_ptr,
-                                    d_emb.as_raw_ptr(),
-                                    tok_idx as i32,
-                                    h as i32,
-                                    emb_scale,
-                                    self.token_embd_quant_type as i32,
-                                    s,
-                                );
-                            } else {
-                                let src_offset = tok_idx * h * std::mem::size_of::<f32>();
-                                if src_offset + h * 4 <= d_emb.size_bytes() {
-                                    let src_ptr = (d_emb.as_raw_ptr() as *const u8).add(src_offset);
-                                    let _ = driver::cudaMemcpyAsync(
-                                        dst_ptr as *mut std::ffi::c_void,
-                                        src_ptr as *const std::ffi::c_void,
-                                        h * std::mem::size_of::<f32>(),
-                                        driver::CUDA_MEMCPY_DEVICE_TO_DEVICE,
-                                        s,
-                                    );
-                                }
-                            }
-                        }
-                    }
+            if let (Some(d_hid), Some(d_btok)) = (&self.d_hidden, &self.d_batch_tokens) {
+                unsafe {
+                    driver::launch_cuda_dequantize_token_embd_batch(
+                        d_hid.as_typed_ptr::<f32>(),
+                        d_emb.as_raw_ptr(),
+                        d_btok.as_typed_ptr::<i32>(),
+                        total_tokens as i32,
+                        h as i32,
+                        emb_scale,
+                        self.token_embd_quant_type as i32,
+                        self.vocab_size as i32,
+                        s,
+                    );
                 }
             }
         } else if let Some(lookup) = &self.embedding_lookup {
@@ -3504,64 +3504,101 @@ impl CudaBackend {
                     let q_dim = cur_num_heads * cur_head_dim;
                     let kv_dim = cur_num_kv_heads * cur_head_dim;
 
-                    // Q, K, V Projections across ALL total_tokens (Single pass over weights)
-                    if let Some(d_q) = &mut self.d_scratch_q {
-                        unsafe {
-                            Self::dispatch_linear_prefill(
-                                d_q.as_typed_ptr::<f32>(),
-                                &layer.d_wq,
-                                d_norm.as_typed_ptr::<f32>(),
-                                d_q8_1_ptr,
-                                layer.q_m,
-                                layer.q_k,
-                                layer.q_quant,
-                                total_tokens,
-                                false,
-                                s,
-                                d_dequant_w_ptr,
-                                d_act_f16_ptr,
-                                None,
-                            );
+                    // Q, K, V Projections across ALL total_tokens (Fused single-pass when Q5_0)
+                    let fused_qkv_done = if layer.q_quant == 9
+                        && layer.k_quant == 9
+                        && (layer.v_quant == 3 || layer.v_quant == 9)
+                        && !d_q8_1_ptr.is_null()
+                    {
+                        if let (Some(d_q), Some(d_k), Some(d_v)) = (
+                            &mut self.d_scratch_q,
+                            &mut self.d_scratch_k,
+                            &mut self.d_scratch_v,
+                        ) {
+                            unsafe {
+                                driver::launch_cuda_mmvq_qkv_q5_0(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    d_k.as_typed_ptr::<f32>(),
+                                    d_v.as_typed_ptr::<f32>(),
+                                    layer.d_wq.as_raw_ptr(),
+                                    layer.d_wk.as_raw_ptr(),
+                                    layer.d_wv.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.q_m as i32,
+                                    layer.kv_m as i32,
+                                    layer.q_k as i32,
+                                    layer.v_quant as i32,
+                                    total_tokens as i32,
+                                    s,
+                                );
+                            }
+                            true
+                        } else {
+                            false
                         }
-                    }
+                    } else {
+                        false
+                    };
 
-                    if let Some(d_k) = &mut self.d_scratch_k {
-                        unsafe {
-                            Self::dispatch_linear_prefill(
-                                d_k.as_typed_ptr::<f32>(),
-                                &layer.d_wk,
-                                d_norm.as_typed_ptr::<f32>(),
-                                d_q8_1_ptr,
-                                layer.kv_m,
-                                layer.kv_k,
-                                layer.k_quant,
-                                total_tokens,
-                                false,
-                                s,
-                                d_dequant_w_ptr,
-                                d_act_f16_ptr,
-                                None,
-                            );
+                    if !fused_qkv_done {
+                        if let Some(d_q) = &mut self.d_scratch_q {
+                            unsafe {
+                                Self::dispatch_linear_prefill(
+                                    d_q.as_typed_ptr::<f32>(),
+                                    &layer.d_wq,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.q_m,
+                                    layer.q_k,
+                                    layer.q_quant,
+                                    total_tokens,
+                                    false,
+                                    s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
+                                );
+                            }
                         }
-                    }
 
-                    if let Some(d_v) = &mut self.d_scratch_v {
-                        unsafe {
-                            Self::dispatch_linear_prefill(
-                                d_v.as_typed_ptr::<f32>(),
-                                &layer.d_wv,
-                                d_norm.as_typed_ptr::<f32>(),
-                                d_q8_1_ptr,
-                                layer.kv_m,
-                                layer.kv_k,
-                                layer.v_quant,
-                                total_tokens,
-                                false,
-                                s,
-                                d_dequant_w_ptr,
-                                d_act_f16_ptr,
-                                None,
-                            );
+                        if let Some(d_k) = &mut self.d_scratch_k {
+                            unsafe {
+                                Self::dispatch_linear_prefill(
+                                    d_k.as_typed_ptr::<f32>(),
+                                    &layer.d_wk,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.k_quant,
+                                    total_tokens,
+                                    false,
+                                    s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
+                                );
+                            }
+                        }
+
+                        if let Some(d_v) = &mut self.d_scratch_v {
+                            unsafe {
+                                Self::dispatch_linear_prefill(
+                                    d_v.as_typed_ptr::<f32>(),
+                                    &layer.d_wv,
+                                    d_norm.as_typed_ptr::<f32>(),
+                                    d_q8_1_ptr,
+                                    layer.kv_m,
+                                    layer.kv_k,
+                                    layer.v_quant,
+                                    total_tokens,
+                                    false,
+                                    s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
+                                );
+                            }
                         }
                     }
 
@@ -3789,36 +3826,58 @@ impl CudaBackend {
                     {
                         unsafe {
                             let hid_src_norm = d_norm.as_typed_ptr::<f32>();
-                            Self::dispatch_linear_prefill(
-                                d_gate.as_typed_ptr::<f32>(),
-                                &layer.d_w1,
-                                hid_src_norm,
-                                d_q8_1_ptr,
-                                layer.inter_m,
-                                h,
-                                layer.gate_quant,
-                                total_tokens,
-                                false,
-                                s,
-                                d_dequant_w_ptr,
-                                d_act_f16_ptr,
-                                None,
-                            );
-                            Self::dispatch_linear_prefill(
-                                d_up.as_typed_ptr::<f32>(),
-                                &layer.d_w3,
-                                hid_src_norm,
-                                d_q8_1_ptr,
-                                layer.inter_m,
-                                h,
-                                layer.up_quant,
-                                total_tokens,
-                                false,
-                                s,
-                                d_dequant_w_ptr,
-                                d_act_f16_ptr,
-                                None,
-                            );
+                            let fused_gate_up = if layer.gate_quant == 9
+                                && layer.up_quant == 9
+                                && !d_q8_1_ptr.is_null()
+                            {
+                                driver::launch_cuda_mmvq_gate_up_q5_0(
+                                    d_gate.as_typed_ptr::<f32>(),
+                                    d_up.as_typed_ptr::<f32>(),
+                                    layer.d_w1.as_raw_ptr(),
+                                    layer.d_w3.as_raw_ptr(),
+                                    d_q8_1_ptr,
+                                    layer.inter_m as i32,
+                                    h as i32,
+                                    total_tokens as i32,
+                                    s,
+                                );
+                                true
+                            } else {
+                                false
+                            };
+
+                            if !fused_gate_up {
+                                Self::dispatch_linear_prefill(
+                                    d_gate.as_typed_ptr::<f32>(),
+                                    &layer.d_w1,
+                                    hid_src_norm,
+                                    d_q8_1_ptr,
+                                    layer.inter_m,
+                                    h,
+                                    layer.gate_quant,
+                                    total_tokens,
+                                    false,
+                                    s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
+                                );
+                                Self::dispatch_linear_prefill(
+                                    d_up.as_typed_ptr::<f32>(),
+                                    &layer.d_w3,
+                                    hid_src_norm,
+                                    d_q8_1_ptr,
+                                    layer.inter_m,
+                                    h,
+                                    layer.up_quant,
+                                    total_tokens,
+                                    false,
+                                    s,
+                                    d_dequant_w_ptr,
+                                    d_act_f16_ptr,
+                                    None,
+                                );
+                            }
                         }
 
                         if !d_q8_1_ptr.is_null() {
