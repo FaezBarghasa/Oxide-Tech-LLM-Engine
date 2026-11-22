@@ -11,10 +11,14 @@ pub mod fusion;
 pub mod loader;
 pub mod punica;
 pub mod qlora;
+pub mod sleep;
 
 pub use loader::{UnslothAdapter, UnslothAdapterConfig, UnslothTensorPair};
 pub use punica::UnslothLoraManager;
 pub use qlora::{NF4_BLOCK_SIZE, NF4_VALUES, QloraLinearLayer, QloraTrainingConfig, UnslothQloraTrainer};
+pub use sleep::{
+    EpisodicExperience, SleepConfig, SleepConsolidationReport, SleepMemoryConsolidator, SleepState,
+};
 
 /// Unique identifier for a registered LoRA adapter persona.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
