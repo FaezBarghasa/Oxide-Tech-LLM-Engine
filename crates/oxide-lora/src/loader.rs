@@ -90,7 +90,7 @@ impl UnslothAdapter {
 
         let config = if config_path.exists() {
             let data = std::fs::read_to_string(&config_path)
-                .map_err(|e| EngineError::IoError(format!("Read adapter_config: {e}")))?;
+                .map_err(|e| EngineError::BackendError(format!("Read adapter_config: {e}")))?;
             serde_json::from_str(&data)
                 .map_err(|e| EngineError::BackendError(format!("Parse adapter_config: {e}")))?
         } else {
@@ -101,9 +101,9 @@ impl UnslothAdapter {
 
         if safetensors_path.exists() {
             let file = std::fs::File::open(&safetensors_path)
-                .map_err(|e| EngineError::IoError(format!("Open safetensors: {e}")))?;
+                .map_err(|e| EngineError::BackendError(format!("Open safetensors: {e}")))?;
             let mmap = unsafe { memmap2::Mmap::map(&file) }
-                .map_err(|e| EngineError::IoError(format!("Mmap safetensors: {e}")))?;
+                .map_err(|e| EngineError::BackendError(format!("Mmap safetensors: {e}")))?;
             let tensors = safetensors::SafeTensors::deserialize(&mmap)
                 .map_err(|e| EngineError::BackendError(format!("Deserialize safetensors: {e}")))?;
 

@@ -4,7 +4,6 @@
 //! 750 tokens per minute). Bridges directly to the causal LLM decoder backbone and coordinates
 //! with the streaming `<think>...</think>` parser.
 
-use oxide_core::error::{EngineError, Result};
 use serde::{Deserialize, Serialize};
 
 /// MOSS-Audio Token Metadata.

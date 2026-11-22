@@ -32,7 +32,9 @@ pub use oxide_eda::{
     EdaSynthesisRequest, ElectricalNet, PcbBoardGraph, PcbRouter, PcbTrackSegment, PinEntry,
     PinType, Point2d, RuleSeverity, RuleViolation, SchematicGraph, VerificationReport,
 };
-pub use oxide_lora::LoraId;
+pub use oxide_lora::{
+    LoraId, NF4_BLOCK_SIZE, NF4_VALUES, QloraLinearLayer, QloraTrainingConfig, UnslothQloraTrainer,
+};
 
 /// Supported Hardware Quantization Profiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,6 +382,12 @@ impl OxideEngine {
         let artifact = self.eda_engine.synthesize_project(&req)?;
         Ok(artifact.pcb_kicad)
     }
+
+    /// Creates an Unsloth QLoRA trainer initialized for low-memory device fine-tuning.
+    #[must_use]
+    pub fn create_qlora_trainer(&self, config: QloraTrainingConfig) -> UnslothQloraTrainer {
+        UnslothQloraTrainer::new(config)
+    }
 }
 
 #[cfg(test)]
@@ -437,5 +445,55 @@ mod tests {
             .contains(&tool_call.stem_name.as_str())
         );
         assert_eq!(tool_call.gain_db, -1.5);
+    }
+
+    #[test]
+    fn test_oxide_engine_3d_and_eda_integration() {
+        let engine = OxideEngine::builder()
+            .build()
+            .expect("Engine built successfully");
+
+        // Test 3D generation facade
+        let req_3d = MeshGenerationRequest {
+            engine: Mesh3dEngineKind::Trellis2,
+            prompt_or_condition: "Watertight robotic arm gripper enclosure".to_string(),
+            input_images: vec![],
+            export_glb: true,
+        };
+        let glb = engine.generate_glb_mesh(req_3d).expect("3D GLB produced");
+        assert!(glb.starts_with(b"glTF"));
+
+        // Test EDA synthesis facade
+        let req_eda = EdaSynthesisRequest {
+            project_name: "Power_Stage_Module".to_string(),
+            specification_prompt: "Buck regulator 12V to 3.3V 2A".to_string(),
+            board_width_mm: 45.0,
+            board_height_mm: 30.0,
+            layer_count: 2,
+        };
+        let pcb_kicad = engine.generate_eda_board(req_eda).expect("EDA PCB produced");
+        assert!(pcb_kicad.contains("kicad_pcb"));
+    }
+
+    #[test]
+    fn test_oxide_engine_unsloth_qlora_integration() {
+        let engine = OxideEngine::builder()
+            .build()
+            .expect("Engine built successfully");
+
+        let mut trainer = engine.create_qlora_trainer(QloraTrainingConfig::default());
+        trainer.add_layer("model.layers.0.self_attn.v_proj", 32, 32);
+
+        let input = vec![0.5f32; 32];
+        let mut inter_r = vec![0.0f32; 16];
+        let mut out = vec![0.0f32; 32];
+
+        let layer = trainer.layers.get("model.layers.0.self_attn.v_proj").unwrap();
+        layer.forward(&input, &mut inter_r, &mut out);
+        assert_eq!(out.len(), 32);
+
+        let adapter = trainer.to_unsloth_adapter("live_trained_persona");
+        assert_eq!(adapter.name, "live_trained_persona");
+        assert!(adapter.layers.contains_key("model.layers.0.self_attn.v_proj"));
     }
 }

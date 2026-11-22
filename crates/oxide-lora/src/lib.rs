@@ -10,9 +10,11 @@
 pub mod fusion;
 pub mod loader;
 pub mod punica;
+pub mod qlora;
 
 pub use loader::{UnslothAdapter, UnslothAdapterConfig, UnslothTensorPair};
 pub use punica::UnslothLoraManager;
+pub use qlora::{NF4_BLOCK_SIZE, NF4_VALUES, QloraLinearLayer, QloraTrainingConfig, UnslothQloraTrainer};
 
 /// Unique identifier for a registered LoRA adapter persona.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,6 +23,57 @@ pub struct LoraId(pub u32);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unsloth_qlora_training_and_export_lifecycle() {
+        let temp_dir = std::env::temp_dir().join("oxide_test_qlora_export");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let cfg = QloraTrainingConfig {
+            learning_rate: 1e-2,
+            gradient_accumulation_steps: 2,
+            lora_r: 4,
+            lora_alpha: 8.0,
+            ..Default::default()
+        };
+
+        let mut trainer = UnslothQloraTrainer::new(cfg);
+        trainer.add_layer("model.layers.0.self_attn.q_proj", 16, 16);
+
+        // Run forward step
+        let input = vec![1.0f32; 16];
+        let mut inter_r = vec![0.0f32; 4];
+        let mut out = vec![0.0f32; 16];
+
+        let layer = trainer.layers.get("model.layers.0.self_attn.q_proj").unwrap();
+        layer.forward(&input, &mut inter_r, &mut out);
+        assert_eq!(out.len(), 16);
+
+        // Run 2 micro-steps to trigger optimizer step
+        let mut activations = HashMap::new();
+        activations.insert("model.layers.0.self_attn.q_proj".to_string(), (input.clone(), inter_r.clone()));
+        let mut grads = HashMap::new();
+        grads.insert("model.layers.0.self_attn.q_proj".to_string(), vec![0.5f32; 16]);
+
+        trainer.backward_micro_step(&activations, &grads);
+        assert!(!trainer.maybe_optimizer_step()); // step 1 of 2
+
+        trainer.backward_micro_step(&activations, &grads);
+        assert!(trainer.maybe_optimizer_step()); // step 2 of 2 -> triggered optimizer!
+        assert_eq!(trainer.step_count, 1);
+
+        // Export to disk in Unsloth Safetensors format
+        trainer.export_unsloth_checkpoint(&temp_dir, "test-model-4bit").expect("Checkpoint exported");
+        assert!(temp_dir.join("adapter_config.json").exists());
+        assert!(temp_dir.join("adapter_model.safetensors").exists());
+
+        // Re-import exported adapter into in-memory UnslothAdapter
+        let loaded = UnslothAdapter::from_directory("trained_persona", &temp_dir).expect("Adapter loaded from export");
+        assert_eq!(loaded.name, "trained_persona");
+        assert!(loaded.layers.contains_key("model.layers.0.self_attn.q_proj"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_unsloth_tensor_pair_fusion_parity() {
