@@ -4148,7 +4148,10 @@ impl HardwareBackend for CudaBackend {
         let slot = cmd.slot_idx as usize;
 
         // --- PHYSICAL CUDA GRAPH DECODE REPLAY ENGINE ---
+        // Note: Graph replay currently targets single-slot autoregression (slot 0).
+        // For multi-slot concurrent users (slot > 0), bypass single-slot graph to preserve independent KV slot strides.
         if !cmd.is_prefill_chunk
+            && slot == 0
             && self.cuda_graph_enabled
             && self.d_token_embd.is_some()
             && self.d_per_layer_emb.is_none()

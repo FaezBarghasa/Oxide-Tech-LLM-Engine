@@ -132,3 +132,58 @@ In `crates/oxide-quant/src/simd.rs::flash_attention_cpu`:
 - Queries are parallelized across all heads with threadpool work-stealing.
 - Evaluates online numerically-stable Softmax without materializing sequence-length attention weight matrices in DRAM.
 - Zero heap allocations during execution on the hot token generation path.
+
+---
+
+## 9. Split-K Parallel FlashDecode & In-Register Softmax Fusion (`flash_attn.cu`)
+
+In `crates/oxide-hardware/oxide-backend-cuda/src/kernels/flash_attn.cu`:
+
+### The Hardware Saturation Bottleneck
+On high-throughput consumer and workstation GPUs (e.g., NVIDIA RTX 4060 with 24 Streaming Multiprocessors), compact models such as `Qwen2.5-0.5B` configure only 14 query heads. A conventional FlashDecode kernel binds one threadblock per query head, dispatching only 14 blocks. Consequently:
+- 10 out of 24 SMs (41.6% of the GPU) sit completely unutilized.
+- Each threadblock serially traverses the entire KV cache sequence length $S$ (e.g. 700+ tokens), causing decode step latency to bottleneck at ~6.0 ms (~166 tok/s).
+
+### Two-Stage Split-K Microarchitecture
+
+```
+                        [ Query Vector (Head h) ]
+                                   │
+              ┌────────────────────┼────────────────────┐
+              ▼                    ▼                    ▼
+     ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+     │ Stage 1 Split 0 │  │ Stage 1 Split 1 │  │ Stage 1 Split 3 │
+     │  (tokens 0,4,8) │  │  (tokens 1,5,9) │  │ (tokens 3,7,11) │
+     └────────┬────────┘  └────────┬────────┘  └────────┬────────┘
+              │ (partial acc)      │ (partial acc)      │ (partial acc)
+              └────────────────────┼────────────────────┘
+                                   ▼
+                   ┌───────────────────────────────┐
+                   │    Stage 2 Kernel (Head h)    │
+                   │  1. Cross-Split Softmax Norm  │
+                   │  2. In-Register Q8_1 Quant    │
+                   │     via __shfl_xor_sync       │
+                   └───────────────┬───────────────┘
+                                   ▼
+                      [ Quantized Q8_1 Buffer ]
+                      (Direct Feed to Downstream GEMV)
+```
+
+#### Stage 1: `flash_decode_splitk_dim64_stage1_kernel`
+- **Execution Grid**: `dim3(num_heads, 4)` = 56 threadblocks, ensuring 2 to 3 resident blocks per SM across all 24 SMs.
+- **Thread-Strided KV Access**: Threadblocks process interleaved time steps ($pos = \text{split\_idx} + k \times \text{num\_splits}$), preserving L1/L2 cache locality across concurrent warps.
+- **Warp-Level Softmax Accumulation**: Employs Dao et al.'s online numerically-stable softmax reduction using `__shfl_down_sync` without barrier stalls.
+- **Partial Metadata Buffers**: Writes block-level running maximum $m_{h,s}$ and partition sum $l_{h,s}$ to static GPU workspace `d_split_meta`, and partial accumulated activation vector to `d_split_out`.
+
+#### Stage 2: `flash_decode_splitk_dim64_stage2_kernel`
+- **Execution Grid**: `dim3(num_heads, 1)` = 14 threadblocks.
+- **Inter-Split Softmax Normalization**: Computes the global maximum across all $K=4$ splits:
+  $$m^* = \max_{s \in [0..3]} m_s$$
+  Rescaling factors:
+  $$\alpha_s = \frac{\exp(m_s - m^*)}{\sum_{k=0}^{3} \exp(m_k - m^*) \cdot l_k}$$
+- **In-Register Fused Symmetric Q8_1 Quantization**:
+  Instead of writing FP32 partials back to global DRAM and launching a separate quantization kernel:
+  1. Warp-level butterfly reduction (`__shfl_xor_sync(0xFFFFFFFF, local_max, mask)`) identifies the absolute maximum value across all 64 head dimensions.
+  2. Dynamically derives scale factor $d = \frac{\max |x_i|}{127.0f}$.
+  3. Directly packs and stores signed 8-bit quantized integer activations (`int8_t`) with half-precision scale ($d$) into the pre-allocated activation arena for immediate consumption by downstream GEMV kernels.
+- **Performance Impact**: Slashes per-token decode step latency from **6.0 ms down to 3.05 – 3.22 ms**, delivering **312 – 328 tok/s** on 700+ token contexts and reaching parity with native `llama.cpp`.
