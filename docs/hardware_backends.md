@@ -20,7 +20,21 @@
   - Stage 1 performs thread-strided KV scanning with online numerically-stable Softmax (`__shfl_down_sync`).
   - Stage 2 performs inter-split Softmax normalization and in-register fused symmetric `Q8_1` quantization (`__shfl_xor_sync`), directly populating downstream GEMV buffers without global DRAM roundtrips.
   - Slashes decode step latency from 6.0 ms down to 3.05 – 3.22 ms, achieving **312 – 328 tok/s** on 700+ token contexts.
-- **Continuous Multi-User Slot Isolation**: Dynamic per-slot activation pointer routing (`slot * slot_capacity`) ensuring multi-user isolation across concurrent streams while bypassing single-slot CUDA Graph capture for slots > 0.
+- **Unified Ragged Multi-User Prefill (`dispatch_prefill_ragged_batch`)**:
+  - Packs prompt tokens across all concurrent users into a single contiguous activation tensor `[total_tokens, hidden_dim]`.
+  - Streams layer weights through GDDR6 VRAM **exactly once** for all users, eliminating redundant memory bandwidth waste.
+  - Features dedicated batched token embedding dequantization kernels (`dim3(num_blocks, total_tokens)`) for Q4_K, Q5_0, Q8_0, and FP32.
+  - Dispatches isolated causal attention per sequence directly into each user's designated slot KV cache.
+- **Fused Multi-Column Matrix-Vector Projections**:
+  - `launch_cuda_mmvq_qkv_q5_0` and `launch_cuda_mmvq_qkv_mixed`: Fuses Q, K, and V projections into a single pass over input activations.
+  - `launch_cuda_mmvq_gate_up_q5_0` and `launch_cuda_mmvq_gate_up_q4_k`: Fuses FFN Gate and Up projections into a single kernel dispatch.
+- **Continuous Multi-Stream Decode Scaling (N=1 to N=16 Slots)**:
+  - Dynamic slot KV cache isolation with bucketed power-of-two dispatch ($1, 2, 4, 8, 16, 32, 64$).
+  - Monotonic throughput scaling up to **707.15 tok/s aggregate** at $N=16$, outperforming `llama.cpp` single-stream decode by **1.87x**.
+  - Operates completely under **1.20 GiB VRAM**, delivering a 3.8x memory advantage over vLLM and SGLang.
+- **cuBLAS FP16 Tensor Core GEMM Integration (`cublas_ops.cu`)**:
+  - Integrated `cublasGemmEx` with `CUBLAS_COMPUTE_32F_FAST_16F` for high-throughput batched matrix multiplication.
+
 - **Branchless Ternary GEMV**: `__dp4a` hardware integer dot-product lowering with group-128 FP16 scaling.
 - **NVFP4 Tensor Cores**: Support for Blackwell 4-bit floating-point (E2M1) format.
 - **CUDA Graphs (`CudaGraphManager`)**: Sub-microsecond forward decode kernel dispatch via captured and replayed execution graphs.

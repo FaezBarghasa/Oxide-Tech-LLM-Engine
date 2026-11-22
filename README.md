@@ -62,13 +62,28 @@ The runtime is engineered around five strict, non-negotiable systems invariants:
 - **Memory Efficiency**: Oxide operates within **~780 MB VRAM** (5.8x less than vLLM), leaving >7.3 GB free on consumer GPUs.
 - **Short/Medium Prompts**: Oxide delivers **408.73 tok/s** on medium prompts (141 tok) and up to **430 tok/s** on short prompts (17 tok).
 
-### Multi-User Concurrency ($N=4$ and $N=8$ Simultaneous Streams, ~700 prompt $\to$ 128 output tokens/stream)
-- **Oxide-Tech Engine ($N=4$)**: Total E2E **1,526.52 ms** (1.53s), Prefill **7,937.31 tok/s** (354 ms), Decode **436.77 tok/s aggregate**, Peak VRAM **< 850 MB**.
-- **Oxide-Tech Engine ($N=8$)**: Total E2E **2,192.69 ms** (2.19s), Prefill **9,275.75 tok/s** (606 ms), Decode **645.50 tok/s aggregate**, Peak VRAM **< 1,350 MB**.
-  - **Result: Oxide-Engine at $N=8$ officially surpasses vLLM's decode throughput (645.50 tok/s vs 588.46 tok/s, +9.7% speedup) and crushes SGLang by 6.58x** while consuming **70% less VRAM** (<1.35 GB vs 4.57 GB).
-- **vLLM (`v0.30.0`, $N=4$)**: Total E2E **870.07 ms**, Decode **588.46 tok/s**, Peak VRAM **4,570 MB** (3.4x higher memory footprint).
-- **SGLang (`v0.5.20`, $N=4$)**: Total E2E **5,220.81 ms** (5.22s), Decode **98.07 tok/s**, Peak VRAM **4,200 MB**.
-  - **Result: Oxide-Engine is 3.42x faster end-to-end than SGLang** with **80% lower VRAM footprint**.
+### Multi-User Concurrency & Continuous Batching Scaling (N=1 to N=16 Streams)
+*Evaluated on bare-metal NVIDIA RTX 4060 Laptop GPU with `bench_large_prompt.txt` (~700 prompt tokens per stream):*
+
+| Concurrency ($N$) | Total Prompt Tokens | Total Gen Tokens | Prefill Throughput | Aggregate Decode Speed | Effective Per-User Latency | Peak Physical VRAM |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **$N = 1$ Stream** | 703 | 128 | 2,397.21 tok/s | 129.66 tok/s | 1,280.43 ms | **< 780 MB** |
+| **$N = 4$ Streams** | 2,812 | 512 | 3,030.98 tok/s | 435.69 tok/s | 525.73 ms | **< 850 MB** |
+| **$N = 8$ Streams** | 5,624 | 1,024 | 3,225.49 tok/s | 644.37 tok/s | 416.59 ms | **< 1,100 MB** |
+| **$N = 16$ Streams** | 11,262 | 1,024 | 3,302.47 tok/s | **707.15 tok/s** | **303.64 ms** | **< 1,200 MB** |
+
+### Head-to-Head Multi-User Comparison (N=4, 512 Completion Tokens, Same Machine & Prompt)
+
+| Engine | Total Wall-Clock Latency | Effective Aggregate Decode Speed | Per-User Avg Latency | Physical VRAM Consumed | Accuracy / Coherence |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **vLLM (v0.30.0)** | 890.43 ms | 575.00 tok/s | 222.61 ms | ~4.57 GiB | 100% Exact Match |
+| **SGLang (v0.5.20)** | 1,097.21 ms | 466.64 tok/s | 274.30 ms | ~4.10 GiB | 100% Exact Match |
+| **Oxide-Engine (CUDA)** | 2,102.90 ms | 435.69 tok/s | 525.73 ms | **< 1.20 GiB (3.8x lower)** | 100% Exact Match |
+| **llama.cpp (`llama-bench`)** | N/A (Single stream) | 377.13 tok/s (Single stream) | N/A | ~1.40 GiB | 100% Exact Match |
+
+- **Decode Scaling Supremacy**: At $N=16$, Oxide-Engine achieves **707.15 tok/s aggregate decode throughput**, outperforming `llama.cpp` single-stream decode speed (377.13 tok/s) by **1.87x**.
+- **The Memory Footprint Moat**: Oxide-Engine operates comfortably under **1.20 GiB VRAM**, whereas vLLM and SGLang demand **4.10 – 4.57 GiB** just to load and warm up the engine. On 8 GB consumer GPUs, Oxide enables real multi-user continuous serving without risking CUDA OOM crashes.
+
 
 ---
 

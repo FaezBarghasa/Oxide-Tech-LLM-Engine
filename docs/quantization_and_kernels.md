@@ -187,3 +187,25 @@ On high-throughput consumer and workstation GPUs (e.g., NVIDIA RTX 4060 with 24 
   2. Dynamically derives scale factor $d = \frac{\max |x_i|}{127.0f}$.
   3. Directly packs and stores signed 8-bit quantized integer activations (`int8_t`) with half-precision scale ($d$) into the pre-allocated activation arena for immediate consumption by downstream GEMV kernels.
 - **Performance Impact**: Slashes per-token decode step latency from **6.0 ms down to 3.05 – 3.22 ms**, delivering **312 – 328 tok/s** on 700+ token contexts and reaching parity with native `llama.cpp`.
+
+---
+
+## 7. Multi-Column Matrix-Vector (MMVQ) & Batched Dequantization Kernels
+
+### 1. High-Throughput MMVQ Projection Kernels
+During continuous batching decode steps, vector-matrix multiplications evaluate across multiple active request tokens ($B \in [1..16]$) simultaneously:
+- **`mmvq_q4_k_cuda_kernel<BATCH_N>`**: Computes $(B \times K) \times (K \times M)$ products directly on packed 4-bit weights without intermediate dequantization.
+- **`mmvq_q6_k_cuda_kernel<BATCH_N>`**: Evaluates 6-bit K-quants using 2D grid launches `dim3(grid, (batch_size + 7) / 8)` with `WARPS_PER_ROW = 1` for bit-accurate strided execution.
+- **`mmvq_q8_0_cuda_kernel<BATCH_N>`**: Optimized 8-bit symmetric quantization using DP4A hardware instructions.
+
+### 2. Multi-Column Fused Projection Launches
+To eliminate redundant activation reads and minimize launch overhead:
+- **`launch_cuda_mmvq_qkv_q5_0` & `launch_cuda_mmvq_qkv_mixed`**: Fuses $W_q$, $W_k$, and $W_v$ projections into a single pass over the normalized input activation vector.
+- **`launch_cuda_mmvq_gate_up_q5_0` & `launch_cuda_mmvq_gate_up_q4_k`**: Evaluates FFN gate and up projections in a single fused kernel, directly populating SwiGLU activation buffers.
+
+### 3. Batched Token Embedding Dequantization Kernels
+In `crates/oxide-hardware/oxide-backend-cuda/src/kernels/megakernel_ops.cu`, discrete token IDs across all concurrent user streams are converted to dense activation embeddings via a unified 2D grid:
+- Grid: `dim3((hidden_dim / 32 + 3) / 4, total_tokens)`
+- Kernels: `dequantize_token_embd_batch_q4_k`, `_q5_0`, `_q8_0`, and `_fp32`.
+- Eliminates thousands of per-token host-to-device kernel launch overheads during ragged prefill.
+

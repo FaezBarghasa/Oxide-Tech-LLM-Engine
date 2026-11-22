@@ -182,3 +182,26 @@ impl TransactionalBlockTable {
 ```
 
 Device VRAM is never mutated during a rollback; subsequent forward passes simply overwrite unused block slots.
+
+---
+
+## 7. Host Memory Mapping vs. Device VRAM Physical Architecture
+
+### 1. Architectural Distinction: Host vs. Device
+To maintain rigorous systems design clarity:
+- **Host Zero-Copy Memory Mapping (`memmap2`)**:
+  - Ingests model weight files (GGUF/SafeTensors) with sub-30 millisecond startup times.
+  - Slices typed structures (`&'a [BlockQ4_K]`, `&'a [BlockQ8_0]`) directly from OS disk page caches without intermediate heap buffers.
+  - Used for zero-copy CPU inference and fast metadata discovery.
+- **Physical Device VRAM Allocation (`CudaDeviceBuffer`)**:
+  - Discrete GPUs over PCIe buses (e.g. PCIe 4.0 x8 at 16 GB/s) cannot execute inference directly across host memory at target speeds.
+  - Device backends allocate physical GPU VRAM via `cudaMalloc` during `configure_model` to saturate local GDDR6 bandwidth (256 GB/s, 16x faster than PCIe).
+  - Tensors stream through high-speed device memory buses with zero host allocator interference.
+
+### 2. Continuous Multi-User Slot KV Cache Isolation
+- **Static Slot Striding**: Total device KV capacity is evenly partitioned across $N$ active user slots:
+  $$\text{slot\_stride} = \left\lfloor \frac{\text{kv\_capacity}}{\text{max\_slots}} \right\rfloor$$
+- **Linear Address Mapping**: For layer $l$, slot $s$, and token position $p$, KV cache pointers are derived with $O(1)$ arithmetic:
+  $$\text{KV\_Offset}(l, s, p) = (s \cdot \text{slot\_stride} + p) \cdot \text{num\_kv\_heads} \cdot \text{head\_dim} \cdot \text{sizeof}(\text{fp16})$$
+- **Total Isolation**: Concurrent streams never contend for dynamic allocation locks, preventing heap fragmentation and ensuring deterministic latency under peak concurrent loads.
+
