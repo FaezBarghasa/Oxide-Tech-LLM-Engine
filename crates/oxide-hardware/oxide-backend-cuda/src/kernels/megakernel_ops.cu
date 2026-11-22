@@ -312,9 +312,22 @@ int launch_cuda_flash_decode_ptr(float *output, void *out_q8_1, const float *q,
     return cudaGetLastError();
   }
   if (head_dim == 64 && is_fp16) {
-    flash_decode_vectorized_dim64_unroll2_kernel<<<num_heads, 32, 0, stream>>>(
-        output, (BlockQ8_1_Gpu *)out_q8_1, q, k_cache, v_cache, num_heads,
+    // When d_pos is provided (CUDA graphs or online decode), we use Split-K parallel stage1 + stage2
+    // with static device workspace to fully saturate 24 SMs on RTX 4060.
+    static float *d_split_out = nullptr;
+    static float *d_split_meta = nullptr;
+    if (d_split_out == nullptr) {
+      // 128 max heads * 4 splits * 64 floats = 32,768 floats (128 KB)
+      cudaMalloc(&d_split_out, 128 * 4 * 64 * sizeof(float));
+      // 128 max heads * 4 splits * 2 floats = 1,024 floats (4 KB)
+      cudaMalloc(&d_split_meta, 128 * 4 * 2 * sizeof(float));
+    }
+    dim3 grid_stage1(num_heads, 4);
+    flash_decode_splitk_dim64_stage1_kernel<<<grid_stage1, 32, 0, stream>>>(
+        d_split_out, d_split_meta, q, k_cache, v_cache, num_heads,
         num_kv_heads, head_dim, 0, start_token, sm_scale, d_pos);
+    flash_decode_splitk_dim64_stage2_kernel<<<num_heads, 32, 0, stream>>>(
+        output, (BlockQ8_1_Gpu *)out_q8_1, d_split_out, d_split_meta, num_heads);
     return cudaGetLastError();
   }
   const int block_size = 32;

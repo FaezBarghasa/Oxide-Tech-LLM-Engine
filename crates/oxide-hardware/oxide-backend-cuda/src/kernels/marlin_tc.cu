@@ -90,10 +90,26 @@ int launch_cuda_flash_decode(float *output, void *out_q8_1, const float *q,
     return cudaGetLastError();
   }
   if (head_dim == 64 && is_fp16) {
-    flash_decode_vectorized_dim64_unroll2_kernel<<<num_heads, 32, 0, stream>>>(
-        output, (BlockQ8_1_Gpu *)out_q8_1, q, k_cache, v_cache, num_heads,
-        num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale, nullptr);
-    return cudaGetLastError();
+    if (num_kv_tokens >= 64) {
+      static float *d_split_out_sync = nullptr;
+      static float *d_split_meta_sync = nullptr;
+      if (d_split_out_sync == nullptr) {
+        cudaMalloc(&d_split_out_sync, 128 * 4 * 64 * sizeof(float));
+        cudaMalloc(&d_split_meta_sync, 128 * 4 * 2 * sizeof(float));
+      }
+      dim3 grid_stage1(num_heads, 4);
+      flash_decode_splitk_dim64_stage1_kernel<<<grid_stage1, 32, 0, stream>>>(
+          d_split_out_sync, d_split_meta_sync, q, k_cache, v_cache, num_heads,
+          num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale, nullptr);
+      flash_decode_splitk_dim64_stage2_kernel<<<num_heads, 32, 0, stream>>>(
+          output, (BlockQ8_1_Gpu *)out_q8_1, d_split_out_sync, d_split_meta_sync, num_heads);
+      return cudaGetLastError();
+    } else {
+      flash_decode_vectorized_dim64_unroll2_kernel<<<num_heads, 32, 0, stream>>>(
+          output, (BlockQ8_1_Gpu *)out_q8_1, q, k_cache, v_cache, num_heads,
+          num_kv_heads, head_dim, num_kv_tokens, start_token, sm_scale, nullptr);
+      return cudaGetLastError();
+    }
   }
   const int block_size = 32; // 1 warp per block = maximum SM distribution
   int grid = num_heads;
