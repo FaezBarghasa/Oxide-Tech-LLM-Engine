@@ -1105,6 +1105,17 @@ impl CudaDeviceBuffer {
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer capacity".to_string());
         }
+        let prev_err = unsafe { cudaGetLastError() };
+        if prev_err != CUDA_SUCCESS {
+            tracing::error!("PRE-EXISTING CUDA ERROR before copy_from_host_async: {prev_err}");
+        }
+        tracing::info!(
+            "copy_from_host_async: src_ptr={:?}, dst_ptr={:?}, bytes={}, stream={:?}",
+            src.as_ptr(),
+            self.ptr,
+            bytes,
+            stream
+        );
         // SAFETY: Calling cudaMemcpyAsync with valid destination pointer, host pointer, size, and stream.
         // CUDA_MEMCPY_DEFAULT (4) allows unified virtual addressing for both physical device memory and managed memory.
         let status = unsafe {
