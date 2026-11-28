@@ -4239,6 +4239,18 @@ impl Llama3Model {
                         }
                     }
 
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let t0 = 0;
+                        let q_off = t0 * max_q_dim;
+                        let k_off = t0 * max_k_dim;
+                        let v_off = t0 * max_v_dim;
+                        eprintln!("[CPU L0 PREFILL t0] cur_head_dim: {}, cur_heads: {}, cur_kv_heads: {}, rope_head_dim: {}",
+                            cur_head_dim, cur_heads, cur_kv_heads, rope_engine.config.head_dim);
+                        eprintln!("[CPU L0 PREFILL t0] q_after_bias: {:?}", &batch_q[q_off..q_off + 4]);
+                        eprintln!("[CPU L0 PREFILL t0] k_after_bias: {:?}", &batch_k[k_off..k_off + 4]);
+                        eprintln!("[CPU L0 PREFILL t0] v_after_bias: {:?}", &batch_v[v_off..v_off + 4]);
+                    }
+
                     // Attn Q/K norm if present
                     let hd = cur_head_dim;
                     if !layer.attn_q_norm.is_empty() && layer.attn_q_norm.len() >= hd {
@@ -4375,6 +4387,12 @@ impl Llama3Model {
                             .gemv_with_q8_k_act(&batch_attn_q8[t], attn_t, o_t);
                     }
 
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let last_t = b - 1;
+                        let a_off = last_t * max_attn_out;
+                        eprintln!("[CPU L0 PREFILL] attn_out: {:?}", &batch_attn_out[a_off..a_off + 4]);
+                    }
+
                     // Post-attention norm (Gemma 2 / Nemotron)
                     if !layer.post_attn_norm.is_empty() && layer.post_attn_norm.len() >= h {
                         let mut tmp = [0.0f32; 4096];
@@ -4400,6 +4418,11 @@ impl Llama3Model {
                         for i in 0..h {
                             hid_t[i] += o_t[i];
                         }
+                    }
+
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let last_t = b - 1;
+                        eprintln!("[CPU L0 PREFILL] hid_after_attn: {:?}", &batch_hidden[last_t * h..last_t * h + 4]);
                     }
                 }
             }

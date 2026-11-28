@@ -49,6 +49,15 @@ fn test_gemv_q5_0_multithreaded() {
     let mut output = vec![0.0f32; m];
 
     gemv_q5_0(&matrix, &vector, m, n, &mut output);
+    let mut expected_chunk = [0.0f32; 32];
+    blk.dequantize(&mut expected_chunk);
+    let mut expected = 0.0f32;
+    for &w in &expected_chunk {
+        expected += w * 0.5f32;
+    }
+    expected *= 2.0;
+    println!("expected: {}, got: {}", expected, output[0]);
+    assert!((expected - output[0]).abs() < 1e-1, "Q5_0 GEMV mismatch: expected {} but got {}", expected, output[0]);
     for &val in &output {
         assert!(val.is_finite());
     }
