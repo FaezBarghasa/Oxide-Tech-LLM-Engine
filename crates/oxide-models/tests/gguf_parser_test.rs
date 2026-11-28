@@ -1,11 +1,22 @@
 use oxide_models::formats::{GgufFile, GgufQuantType};
 
 #[test]
+fn test_inspect_qwen_tensors() {
+    let path = "/home/jrad/models/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    if let Ok(file) = std::fs::File::open(path) {
+        let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
+        let gguf = GgufFile::parse(&mmap).unwrap();
+        for (name, info) in &gguf.tensors {
+            if name == "token_embd.weight" || name == "output.weight" || name.contains("output_norm") {
+                println!("Tensor {}: quant={:?}, dims={:?}, offset={}", name, info.quant_type, info.dimensions, info.offset);
+            }
+        }
+    }
+}
+
+#[test]
 fn test_gguf_synthetic_binary_parsing() {
     let mut buffer = Vec::new();
-
-    // 1. Magic 'GGUF' = [0x47, 0x47, 0x55, 0x46]
-    buffer.extend_from_slice(b"GGUF");
     // 2. Version = 3 (u32)
     buffer.extend_from_slice(&3u32.to_le_bytes());
     // 3. Tensor count = 1 (u64)

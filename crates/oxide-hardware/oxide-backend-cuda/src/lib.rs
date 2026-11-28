@@ -3229,6 +3229,13 @@ impl CudaBackend {
                         s,
                     );
                 }
+
+                if std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    let mut h_norm = [0.0f32; 4];
+                    let _ = d_norm.copy_to_host_async(&mut h_norm, s);
+                    let _ = stream.synchronize();
+                    eprintln!("[CUDA LAST] final_norm: {:?}", h_norm);
+                }
             }
         }
 

@@ -3361,6 +3361,10 @@ impl Llama3Model {
             self.config.is_gemma,
         );
 
+        if compute_logits && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+            eprintln!("[CPU LAST] final_norm: {:?}", &scratch.final_norm[..4]);
+        }
+
         // 4. LM Head projection to vocabulary logits
         oxide_quant::simd::quantize_row_q8_k(&scratch.final_norm[..h], &mut scratch.q8_k_act);
         self.lm_head.gemv_with_q8_k_act(
