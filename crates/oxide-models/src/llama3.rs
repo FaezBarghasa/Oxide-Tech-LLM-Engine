@@ -3507,7 +3507,7 @@ impl Llama3Model {
                         *v_val += b_val;
                     }
                 }
-                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() && position == 0 {
                     eprintln!("[CPU L0] q_after_bias: {:?}", &scratch.q[..4]);
                     eprintln!("[CPU L0] k_after_bias: {:?}", &scratch.k[..4]);
                     eprintln!("[CPU L0] v_after_bias: {:?}", &scratch.v[..4]);
@@ -3648,6 +3648,12 @@ impl Llama3Model {
                 for i in 0..h {
                     scratch.hidden[i] += scratch.o_proj_out[i];
                 }
+
+                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() && position == 0 {
+                    eprintln!("[CPU L0] attn_out: {:?}", &scratch.attn_out[..4]);
+                    eprintln!("[CPU L0] o_proj_out: {:?}", &scratch.o_proj_out[..4]);
+                    eprintln!("[CPU L0] hid_after_attn: {:?}", &scratch.hidden[..4]);
+                }
             }
         }
 
@@ -3721,6 +3727,11 @@ impl Llama3Model {
             // Residual 2
             for i in 0..h {
                 scratch.hidden[i] += scratch.mlp_out[i];
+            }
+
+            if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() && position == 0 {
+                eprintln!("[CPU L0] mlp_out: {:?}", &scratch.mlp_out[..4]);
+                eprintln!("[CPU L0] hid_after_mlp: {:?}", &scratch.hidden[..4]);
             }
         }
 

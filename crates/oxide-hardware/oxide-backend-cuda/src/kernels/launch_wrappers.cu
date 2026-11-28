@@ -65,7 +65,7 @@ int launch_cuda_rope(float *q, float *k, const float *cos_table,
   dim3 grid(seq_len, num_heads);
   int block_size = head_dim / 2;
   rope_embedding_kernel<<<grid, block_size, 0, stream>>>(
-      q, k, cos_table, sin_table, seq_len, num_heads, head_dim);
+      q, k, cos_table, sin_table, seq_len, num_heads, num_heads, head_dim);
   return cudaGetLastError();
 }
 

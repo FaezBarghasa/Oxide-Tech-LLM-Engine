@@ -288,6 +288,7 @@ __global__ void rope_embedding_kernel(float *__restrict__ q,
                                       const float *__restrict__ cos_table,
                                       const float *__restrict__ sin_table,
                                       int seq_len, int num_heads,
+                                      int num_kv_heads,
                                       int head_dim) {
   int token_idx = blockIdx.x;
   int head_idx = blockIdx.y;
@@ -307,12 +308,13 @@ __global__ void rope_embedding_kernel(float *__restrict__ q,
   q[q_base + d] = q0 * cos_val - q1 * sin_val;
   q[q_base + d + half_dim] = q0 * sin_val + q1 * cos_val;
 
-  // Key rotation (if k pointer provided)
-  if (k != nullptr) {
-    float k0 = k[q_base + d];
-    float k1 = k[q_base + d + half_dim];
-    k[q_base + d] = k0 * cos_val - k1 * sin_val;
-    k[q_base + d + half_dim] = k0 * sin_val + k1 * cos_val;
+  // Key rotation (if k pointer provided and head_idx < num_kv_heads)
+  if (k != nullptr && head_idx < num_kv_heads) {
+    int k_base = (token_idx * num_kv_heads + head_idx) * head_dim;
+    float k0 = k[k_base + d];
+    float k1 = k[k_base + d + half_dim];
+    k[k_base + d] = k0 * cos_val - k1 * sin_val;
+    k[k_base + d + half_dim] = k0 * sin_val + k1 * cos_val;
   }
 }
 

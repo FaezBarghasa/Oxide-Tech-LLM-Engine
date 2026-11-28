@@ -1451,6 +1451,7 @@ async fn run_chat_session(
         // 1. Prefill prompt tokens through high-throughput chunked batched forward pass
         let mut cur_token = pipeline.prefill_prompt(&prompt_tokens)?;
         let ttft = Some(t_start.elapsed());
+        eprintln!("[PREFILL RESULT] prompt_tokens: {:?}, sampled_token: {}, text: {:?}", &prompt_tokens, cur_token, tokenizer.decode_token(cur_token));
 
         // 2. Decode first sampled token and continuation tokens
         let mut gen_count = 0usize;

@@ -395,9 +395,12 @@ impl SpecializedPipeline {
                 .entry(seq_id)
                 .or_insert_with(|| model.create_kv_cache());
             let start_pos = *seq_positions.entry(seq_id).or_insert(0);
-            let logits = model.forward_batch(prompt_tokens, start_pos, cache)?;
+            for (i, &tok) in prompt_tokens.iter().enumerate() {
+                let pos = start_pos + i;
+                let is_last = i + 1 == prompt_tokens.len();
+                model.forward_step_with_scratch_flags(tok, pos, cache, scratch, is_last)?;
+            }
             seq_positions.insert(seq_id, start_pos + prompt_tokens.len());
-            scratch.logits = logits;
             // Greedy / argmax sampling for prefill prompt exit
             let mut best_id = 0u32;
             let mut best_val = f32::NEG_INFINITY;
