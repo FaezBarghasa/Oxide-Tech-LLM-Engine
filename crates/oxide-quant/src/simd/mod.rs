@@ -625,9 +625,7 @@ pub fn gemv_q4_k_prequantized(
 ) {
     let blocks_per_row = n / 256;
     #[cfg(target_arch = "x86_64")]
-    let has_vnni512 = is_x86_feature_detected!("avx512vnni")
-        && is_x86_feature_detected!("avx512bw")
-        && is_x86_feature_detected!("avx512f");
+    let has_vnni512 = false; // Disabled broken avx512vnni512 unpack; fallback to verified 256-bit avx512vnni
     #[cfg(target_arch = "x86_64")]
     let has_vnni = is_x86_feature_detected!("avx512vnni") && is_x86_feature_detected!("avx512vl");
     #[cfg(target_arch = "x86_64")]
