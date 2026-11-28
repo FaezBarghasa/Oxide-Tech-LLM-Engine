@@ -7,8 +7,8 @@ fn test_inspect_qwen_tensors() {
         let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
         let gguf = GgufFile::parse(&mmap).unwrap();
         for (name, info) in &gguf.tensors {
-            if name == "token_embd.weight" || name == "output.weight" || name.contains("output_norm") {
-                println!("Tensor {}: quant={:?}, dims={:?}, offset={}", name, info.quant_type, info.dimensions, info.offset);
+            if name.starts_with("blk.0.") || name.starts_with("blk.1.") || name.starts_with("blk.2.") {
+                println!("Tensor {}: quant={:?}, dims={:?}", name, info.quant_type, info.dimensions);
             }
         }
     }
@@ -77,6 +77,7 @@ fn test_real_gguf_models_in_home_dir() {
     }
 
     let targets = [
+        "qwen2.5-0.5b-instruct-q4_k_m.gguf",
         "LFM3-1.7B-Q4_K_M.gguf",
         "Ornith-1.5-9B-Q4_K_M.gguf",
         "NVIDIA-Nemotron-3.5-Bolt-E4B-Uncensored-AD-Q4_K_M-00001-of-00001.gguf",

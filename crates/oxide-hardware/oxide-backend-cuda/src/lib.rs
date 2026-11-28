@@ -2133,7 +2133,7 @@ impl CudaBackend {
                         }
                     }
 
-                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    if (layer_idx == 0 || layer_idx == 2) && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
                         if let (Some(d_q), Some(d_k), Some(d_v)) =
                             (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v)
                         {
@@ -2144,9 +2144,9 @@ impl CudaBackend {
                             let _ = d_k.copy_to_host_async(&mut h_k, s);
                             let _ = d_v.copy_to_host_async(&mut h_v, s);
                             let _ = stream.synchronize();
-                            eprintln!("[PREFILL L0] q_after_bias: {:?}", h_q);
-                            eprintln!("[PREFILL L0] k_after_bias: {:?}", h_k);
-                            eprintln!("[PREFILL L0] v_after_bias: {:?}", h_v);
+                            eprintln!("[PREFILL L{}] q_after_bias: {:?}", layer_idx, h_q);
+                            eprintln!("[PREFILL L{}] k_after_bias: {:?}", layer_idx, h_k);
+                            eprintln!("[PREFILL L{}] v_after_bias: {:?}", layer_idx, h_v);
                         }
                     }
 
@@ -2230,11 +2230,11 @@ impl CudaBackend {
                                     1, // is_fp16
                                     s,
                                 );
-                                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                                if (layer_idx == 0 || layer_idx == 2) && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
                                     let mut h_attn = [0.0f32; 4];
                                     let _ = d_out.copy_to_host_async(&mut h_attn, s);
                                     let _ = stream.synchronize();
-                                    eprintln!("[PREFILL L0] attn_out: {:?}", h_attn);
+                                    eprintln!("[PREFILL L{}] attn_out: {:?}", layer_idx, h_attn);
                                 }
                             }
                         }
@@ -2277,11 +2277,11 @@ impl CudaBackend {
                         }
                     }
 
-                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    if (layer_idx == 0 || layer_idx == 2) && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
                         let mut h_hid = [0.0f32; 4];
                         let _ = d_hid.copy_to_host_async(&mut h_hid, s);
                         let _ = stream.synchronize();
-                        eprintln!("[PREFILL L0] hid_after_attn: {:?}", h_hid);
+                        eprintln!("[PREFILL L{}] hid_after_attn: {:?}", layer_idx, h_hid);
                     }
                 }
 
@@ -2406,11 +2406,19 @@ impl CudaBackend {
                         eprintln!("[PREFILL L0] hid_after_mlp: {:?}", h_hid);
                     }
 
-                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                        let mut h_hid = [0.0f32; 4];
-                        let _ = d_hid.copy_to_host_async(&mut h_hid, s);
-                        let _ = stream.synchronize();
-                        eprintln!("[PREFILL L0] hid_after_mlp: {:?}", h_hid);
+                    if std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let mut h_step = [0.0f32; 4];
+                        unsafe {
+                            driver::cudaMemcpyAsync(
+                                h_step.as_mut_ptr().cast(),
+                                d_hid.as_typed_ptr::<f32>().cast(),
+                                16,
+                                2,
+                                s,
+                            );
+                            let _ = stream.synchronize();
+                        }
+                        eprintln!("[CUDA L{}] hid_after_mlp: {:?}", layer_idx, h_step);
                     }
                 }
             }
@@ -2916,7 +2924,7 @@ impl CudaBackend {
                         }
                     }
 
-                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    if (layer_idx == 0 || layer_idx == 2) && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
                         if let (Some(d_q), Some(d_k), Some(d_v)) =
                             (&self.d_scratch_q, &self.d_scratch_k, &self.d_scratch_v)
                         {
@@ -2927,9 +2935,9 @@ impl CudaBackend {
                             let _ = d_k.copy_to_host_async(&mut h_k, s);
                             let _ = d_v.copy_to_host_async(&mut h_v, s);
                             let _ = stream.synchronize();
-                            eprintln!("[PREFILL L0] q_after_bias: {:?}", h_q);
-                            eprintln!("[PREFILL L0] k_after_bias: {:?}", h_k);
-                            eprintln!("[PREFILL L0] v_after_bias: {:?}", h_v);
+                            eprintln!("[PREFILL L{}] q_after_bias: {:?}", layer_idx, h_q);
+                            eprintln!("[PREFILL L{}] k_after_bias: {:?}", layer_idx, h_k);
+                            eprintln!("[PREFILL L{}] v_after_bias: {:?}", layer_idx, h_v);
                         }
                     }
 
@@ -3013,11 +3021,11 @@ impl CudaBackend {
                                     1, // is_fp16
                                     s,
                                 );
-                                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                                if (layer_idx == 0 || layer_idx == 2) && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
                                     let mut h_attn = [0.0f32; 4];
                                     let _ = d_out.copy_to_host_async(&mut h_attn, s);
                                     let _ = stream.synchronize();
-                                    eprintln!("[PREFILL L0] attn_out: {:?}", h_attn);
+                                    eprintln!("[PREFILL L{}] attn_out: {:?}", layer_idx, h_attn);
                                 }
                             }
                         }
@@ -3060,11 +3068,11 @@ impl CudaBackend {
                         }
                     }
 
-                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                    if (layer_idx == 0 || layer_idx == 2) && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
                         let mut h_hid = [0.0f32; 4];
                         let _ = d_hid.copy_to_host_async(&mut h_hid, s);
                         let _ = stream.synchronize();
-                        eprintln!("[PREFILL L0] hid_after_attn: {:?}", h_hid);
+                        eprintln!("[PREFILL L{}] hid_after_attn: {:?}", layer_idx, h_hid);
                     }
                 }
 
@@ -3182,11 +3190,19 @@ impl CudaBackend {
                         }
                     }
 
-                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                        let mut h_hid = [0.0f32; 4];
-                        let _ = d_hid.copy_to_host_async(&mut h_hid, s);
-                        let _ = stream.synchronize();
-                        eprintln!("[PREFILL L0] hid_after_mlp: {:?}", h_hid);
+                    if std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let mut h_step = [0.0f32; 4];
+                        unsafe {
+                            driver::cudaMemcpyAsync(
+                                h_step.as_mut_ptr().cast(),
+                                d_hid.as_typed_ptr::<f32>().cast(),
+                                16,
+                                2,
+                                s,
+                            );
+                            let _ = stream.synchronize();
+                        }
+                        eprintln!("[CUDA L{}] hid_after_mlp: {:?}", layer_idx, h_step);
                     }
                 }
             }
@@ -3204,6 +3220,26 @@ impl CudaBackend {
 
         if !is_final {
             return Ok(None);
+        }
+
+        if std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+            if let Some(d_hid) = &self.d_hidden {
+                for b in 0..batch_size {
+                    let mut h_step = [0.0f32; 4];
+                    let ptr = unsafe { d_hid.as_typed_ptr::<f32>().add(b * h) };
+                    unsafe {
+                        driver::cudaMemcpyAsync(
+                            h_step.as_mut_ptr().cast(),
+                            ptr.cast(),
+                            16,
+                            2, // DeviceToHost
+                            s,
+                        );
+                        let _ = stream.synchronize();
+                    }
+                    eprintln!("[CUDA STEP pos={}] hidden[..4]: {:?}", pos + b, h_step);
+                }
+            }
         }
 
         let t_before_lm = std::time::Instant::now();
