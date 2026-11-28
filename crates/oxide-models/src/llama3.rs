@@ -2289,7 +2289,7 @@ impl Llama3Model {
     }
 
     /// Helper to extract a tensor directly into a `QuantizedTensor` with zero-copy mmap slicing.
-    fn extract_gguf_tensor(
+    pub fn extract_gguf_tensor(
         gguf: &GgufFile,
         tensor_name: &str,
         data_slice: &'static [u8],
@@ -4037,13 +4037,42 @@ impl Llama3Model {
             q8.resize(h / 256, oxide_quant::int_quant::BlockQ8_K::default());
         }
 
-        let mut batch_q = vec![0.0f32; b * q_dim];
-        let mut batch_k = vec![0.0f32; b * kv_dim];
-        let mut batch_v = vec![0.0f32; b * kv_dim];
-        let mut batch_attn_out = vec![0.0f32; b * q_dim];
-        let mut batch_attn_q8 = vec![Vec::with_capacity(q_dim / 256); b];
+        let max_q_dim = self
+            .layers
+            .iter()
+            .map(|l| l.q_proj.rows())
+            .max()
+            .unwrap_or(q_dim)
+            .max(q_dim);
+        let max_k_dim = self
+            .layers
+            .iter()
+            .map(|l| l.k_proj.rows())
+            .max()
+            .unwrap_or(kv_dim)
+            .max(kv_dim);
+        let max_v_dim = self
+            .layers
+            .iter()
+            .map(|l| l.v_proj.rows())
+            .max()
+            .unwrap_or(kv_dim)
+            .max(kv_dim);
+        let max_attn_out = self
+            .layers
+            .iter()
+            .map(|l| l.o_proj.cols())
+            .max()
+            .unwrap_or(max_q_dim)
+            .max(max_q_dim);
+
+        let mut batch_q = vec![0.0f32; b * max_q_dim];
+        let mut batch_k = vec![0.0f32; b * max_k_dim];
+        let mut batch_v = vec![0.0f32; b * max_v_dim];
+        let mut batch_attn_out = vec![0.0f32; b * max_attn_out];
+        let mut batch_attn_q8 = vec![Vec::with_capacity(max_attn_out / 256 + 1); b];
         for q8 in &mut batch_attn_q8 {
-            q8.resize(q_dim / 256, oxide_quant::int_quant::BlockQ8_K::default());
+            q8.resize(max_attn_out / 256 + 1, oxide_quant::int_quant::BlockQ8_K::default());
         }
         let mut batch_o_out = vec![0.0f32; b * h];
 
@@ -4163,9 +4192,12 @@ impl Llama3Model {
                     // B. Q, K, V Projections
                     for t in 0..b {
                         let norm_t = &batch_norm[t * h..(t + 1) * h];
-                        let q_t = &mut batch_q[t * cur_q_dim..(t + 1) * cur_q_dim];
-                        let k_t = &mut batch_k[t * cur_k_dim..(t + 1) * cur_k_dim];
-                        let v_t = &mut batch_v[t * cur_v_dim..(t + 1) * cur_v_dim];
+                        let q_offset = t * max_q_dim;
+                        let k_offset = t * max_k_dim;
+                        let v_offset = t * max_v_dim;
+                        let q_t = &mut batch_q[q_offset..q_offset + cur_q_dim];
+                        let k_t = &mut batch_k[k_offset..k_offset + cur_k_dim];
+                        let v_t = &mut batch_v[v_offset..v_offset + cur_v_dim];
                         QuantizedTensor::fused_gemv_3way(
                             &layer.q_proj,
                             q_t,
@@ -4181,7 +4213,8 @@ impl Llama3Model {
                     // Biases if present (Qwen2 / Qwen3)
                     if !layer.q_bias.is_empty() {
                         for t in 0..b {
-                            let q_t = &mut batch_q[t * cur_q_dim..(t + 1) * cur_q_dim];
+                            let q_offset = t * max_q_dim;
+                            let q_t = &mut batch_q[q_offset..q_offset + cur_q_dim];
                             for (q_val, &b_val) in q_t.iter_mut().zip(&layer.q_bias) {
                                 *q_val += b_val;
                             }
@@ -4189,7 +4222,8 @@ impl Llama3Model {
                     }
                     if !layer.k_bias.is_empty() {
                         for t in 0..b {
-                            let k_t = &mut batch_k[t * cur_k_dim..(t + 1) * cur_k_dim];
+                            let k_offset = t * max_k_dim;
+                            let k_t = &mut batch_k[k_offset..k_offset + cur_k_dim];
                             for (k_val, &b_val) in k_t.iter_mut().zip(&layer.k_bias) {
                                 *k_val += b_val;
                             }
@@ -4197,7 +4231,8 @@ impl Llama3Model {
                     }
                     if !layer.v_bias.is_empty() {
                         for t in 0..b {
-                            let v_t = &mut batch_v[t * cur_v_dim..(t + 1) * cur_v_dim];
+                            let v_offset = t * max_v_dim;
+                            let v_t = &mut batch_v[v_offset..v_offset + cur_v_dim];
                             for (v_val, &b_val) in v_t.iter_mut().zip(&layer.v_bias) {
                                 *v_val += b_val;
                             }
@@ -4210,7 +4245,8 @@ impl Llama3Model {
                         let mut tmp = [0.0f32; 512];
                         if hd <= tmp.len() {
                             for t in 0..b {
-                                let q_t = &mut batch_q[t * cur_q_dim..(t + 1) * cur_q_dim];
+                                let q_offset = t * max_q_dim;
+                                let q_t = &mut batch_q[q_offset..q_offset + cur_q_dim];
                                 for head in 0..cur_heads {
                                     let start = head * hd;
                                     let end = start + hd;
@@ -4232,7 +4268,8 @@ impl Llama3Model {
                         let mut tmp = [0.0f32; 512];
                         if hd <= tmp.len() {
                             for t in 0..b {
-                                let k_t = &mut batch_k[t * cur_k_dim..(t + 1) * cur_k_dim];
+                                let k_offset = t * max_k_dim;
+                                let k_t = &mut batch_k[k_offset..k_offset + cur_k_dim];
                                 for kv_head in 0..cur_kv_heads {
                                     let start = kv_head * hd;
                                     let end = start + hd;
@@ -4254,9 +4291,13 @@ impl Llama3Model {
                     // C. RoPE, KV-Cache append & Attention calculation sequentially per token
                     for t in 0..b {
                         let pos = start_position + t;
-                        let q_t = &mut batch_q[t * cur_q_dim..(t + 1) * cur_q_dim];
-                        let k_t = &mut batch_k[t * cur_k_dim..(t + 1) * cur_k_dim];
-                        let v_t = &batch_v[t * cur_v_dim..(t + 1) * cur_v_dim];
+                        let q_offset = t * max_q_dim;
+                        let k_offset = t * max_k_dim;
+                        let v_offset = t * max_v_dim;
+                        let attn_offset = t * max_attn_out;
+                        let q_t = &mut batch_q[q_offset..q_offset + cur_q_dim];
+                        let k_t = &mut batch_k[k_offset..k_offset + cur_k_dim];
+                        let v_t = &batch_v[v_offset..v_offset + cur_v_dim];
 
                         for head_idx in 0..cur_heads {
                             let start = head_idx * cur_head_dim;
@@ -4284,7 +4325,7 @@ impl Llama3Model {
                             (&k_t[..cur_k_dim], &v_t[..cur_v_dim])
                         };
 
-                        let attn_out_t = &mut batch_attn_out[t * cur_q_dim..(t + 1) * cur_q_dim];
+                        let attn_out_t = &mut batch_attn_out[attn_offset..attn_offset + cur_q_dim];
                         for head in 0..cur_heads {
                             let q_start = head * cur_head_dim;
                             let q_slice = &q_t[q_start..q_start + cur_head_dim];
@@ -4325,7 +4366,8 @@ impl Llama3Model {
                     // D. Output Projection O_proj
                     let o_in_dim = layer.o_proj.cols().min(cur_q_dim);
                     for t in 0..b {
-                        let attn_t = &batch_attn_out[t * cur_q_dim..t * cur_q_dim + o_in_dim];
+                        let attn_offset = t * max_attn_out;
+                        let attn_t = &batch_attn_out[attn_offset..attn_offset + o_in_dim];
                         oxide_quant::simd::quantize_row_q8_k(attn_t, &mut batch_attn_q8[t]);
                         let o_t = &mut batch_o_out[t * h..(t + 1) * h];
                         layer

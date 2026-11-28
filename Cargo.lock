@@ -1279,7 +1279,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "oxide-3d"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-alloc"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "crossbeam",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-audio-encoders"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-cpu"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "core_affinity",
@@ -1335,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-cuda"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "libc",
@@ -1350,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-hailo"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "oxide-alloc",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-intel"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "half",
  "oxide-alloc",
@@ -1374,7 +1374,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-metal"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "oxide-alloc",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-qualcomm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "oxide-alloc",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-rknn"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "oxide-alloc",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-rocm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "oxide-alloc",
@@ -1422,7 +1422,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-backend-tpu"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "half",
  "oxide-alloc",
@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "memmap2",
@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "core_affinity",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-eda"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "oxide-core",
  "serde",
@@ -1496,7 +1496,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-engine"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "core_affinity",
@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-lab"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "half",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-lora"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-models"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "memmap2",
@@ -1581,7 +1581,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-quant"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -1594,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-tech-llm-engine"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "memmap2",
  "oxide-3d",

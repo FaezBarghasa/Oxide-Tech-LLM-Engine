@@ -70,6 +70,7 @@ fn test_real_gguf_models_in_home_dir() {
         "Ornith-1.5-9B-Q4_K_M.gguf",
         "NVIDIA-Nemotron-3.5-Bolt-E4B-Uncensored-AD-Q4_K_M-00001-of-00001.gguf",
         "gemma-4-e2b-it.Q8_0.gguf",
+        "ternary/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PTQ1_0.gguf",
         "Ternary-Bonsai-2-27B-Abliterated-PTQ1_0.gguf",
     ];
 

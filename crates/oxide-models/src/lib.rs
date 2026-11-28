@@ -57,6 +57,7 @@ pub mod moe;
 pub mod monarch;
 pub mod needle;
 pub mod projector;
+pub mod qwen35;
 pub mod registry;
 pub mod rope;
 pub mod shortconv;
@@ -116,6 +117,7 @@ pub use manifest::OxideModelHeader;
 pub use moe::{ExpertRoutingDecision, MoELayer, MoERouterConfig};
 pub use monarch::MonarchMlp;
 pub use needle::{CactusNeedleConfig, NeedleSubnetwork};
+pub use qwen35::{Qwen35Config, Qwen35Layer, Qwen35Model};
 pub use registry::{
     ModelArchitectureType, ModelFamily, ModelModality, ModelSpecification, QuantizationClass,
 };

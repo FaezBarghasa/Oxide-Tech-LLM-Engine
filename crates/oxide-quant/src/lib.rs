@@ -30,6 +30,7 @@ pub mod bitsandbytes;
 pub mod compressed_tensors;
 pub mod cq2;
 pub mod dms;
+pub mod emeans;
 pub mod exl2;
 pub mod fp8;
 pub mod fwht;
@@ -62,6 +63,7 @@ pub use dms::{
     DEFAULT_DMS_WINDOW_SIZE, DMSConfig, DMSEvictionExtractor, HeadCompactKVSlotManager,
     is_dms_token_live,
 };
+pub use emeans::{EMeansCodebook, EMeansConfig};
 pub use exl2::{Exl2BitsPerWeight, Exl2Quant, Exl2WeightMatrix};
 pub use fp8::{BlockFp8E4M3, Fp8E4M3, Fp8E5M2};
 pub use fwht::{
