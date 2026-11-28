@@ -45,17 +45,21 @@ fn test_gemv_q5_0_multithreaded() {
     }
     let blk = crate::int_quant::BlockQ5_0::quantize(&row_data);
     let matrix = vec![blk; m * (n / 32)];
-    let vector = vec![0.5f32; n];
+    let mut vector = vec![0.0f32; n];
+    for (i, v) in vector.iter_mut().enumerate() {
+        *v = (i as f32 * 0.1).cos();
+    }
     let mut output = vec![0.0f32; m];
 
     gemv_q5_0(&matrix, &vector, m, n, &mut output);
     let mut expected_chunk = [0.0f32; 32];
     blk.dequantize(&mut expected_chunk);
     let mut expected = 0.0f32;
-    for &w in &expected_chunk {
-        expected += w * 0.5f32;
+    for b in 0..(n / 32) {
+        for i in 0..32 {
+            expected += expected_chunk[i] * vector[b * 32 + i];
+        }
     }
-    expected *= 2.0;
     println!("expected: {}, got: {}", expected, output[0]);
     assert!((expected - output[0]).abs() < 1e-1, "Q5_0 GEMV mismatch: expected {} but got {}", expected, output[0]);
     for &val in &output {
