@@ -2398,21 +2398,20 @@ impl CudaBackend {
                             );
                         }
                     }
-                }
 
-                if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
-                    let mut h_hid = [0.0f32; 4];
-                    unsafe {
-                        driver::cudaMemcpyAsync(
-                            h_hid.as_mut_ptr().cast(),
-                            d_hid.as_typed_ptr::<f32>().cast(),
-                            4 * 4,
-                            2,
-                            s,
-                        );
-                        driver::cudaStreamSynchronize(s);
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let mut h_hid = [0.0f32; 4];
+                        let _ = d_hid.copy_to_host_async(&mut h_hid, s);
+                        let _ = stream.synchronize();
+                        eprintln!("[PREFILL L0] hid_after_mlp: {:?}", h_hid);
                     }
-                    eprintln!("[PREFILL L0] hid_after_mlp: {:?}", h_hid);
+
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let mut h_hid = [0.0f32; 4];
+                        let _ = d_hid.copy_to_host_async(&mut h_hid, s);
+                        let _ = stream.synchronize();
+                        eprintln!("[PREFILL L0] hid_after_mlp: {:?}", h_hid);
+                    }
                 }
             }
         }
@@ -3181,6 +3180,13 @@ impl CudaBackend {
                                 Some(d_act),
                             );
                         }
+                    }
+
+                    if layer_idx == 0 && std::env::var("OXIDE_DEBUG_LAYER").is_ok() {
+                        let mut h_hid = [0.0f32; 4];
+                        let _ = d_hid.copy_to_host_async(&mut h_hid, s);
+                        let _ = stream.synchronize();
+                        eprintln!("[PREFILL L0] hid_after_mlp: {:?}", h_hid);
                     }
                 }
             }

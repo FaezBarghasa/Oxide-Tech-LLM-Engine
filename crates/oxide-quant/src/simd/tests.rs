@@ -54,6 +54,19 @@ fn test_gemv_q5_0_multithreaded() {
     gemv_q5_0(&matrix, &vector, m, n, &mut output);
     let mut expected_chunk = [0.0f32; 32];
     blk.dequantize(&mut expected_chunk);
+
+    let act_q8 = vec![crate::int_quant::BlockQ8_0::quantize(
+        vector[0..32].try_into().unwrap(),
+    )];
+    let avx_dot = unsafe {
+        crate::simd::x86_avx2::dot_q5_0_q8_0_row_avx2(&[blk], &act_q8)
+    };
+    let mut ref_dot = 0.0f32;
+    for i in 0..32 {
+        ref_dot += expected_chunk[i] * vector[i];
+    }
+    println!("ref_dot: {}, avx_dot: {}", ref_dot, avx_dot);
+
     let mut expected = 0.0f32;
     for b in 0..(n / 32) {
         for i in 0..32 {
