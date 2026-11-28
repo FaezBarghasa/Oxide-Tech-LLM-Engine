@@ -20,6 +20,7 @@ pub const CUDA_SUCCESS: cudaError_t = 0;
 pub const CUDA_MEMCPY_HOST_TO_DEVICE: u32 = 1;
 pub const CUDA_MEMCPY_DEVICE_TO_HOST: u32 = 2;
 pub const CUDA_MEMCPY_DEVICE_TO_DEVICE: u32 = 3;
+pub const CUDA_MEMCPY_DEFAULT: u32 = 4;
 
 pub const CUDA_DEVICE_SCHEDULE_SPIN: u32 = 0x01;
 pub const CUDA_HOST_ALLOC_PORTABLE: u32 = 0x01;
@@ -32,6 +33,13 @@ unsafe extern "C" {
     pub fn cudaGetDevice(device: *mut i32) -> cudaError_t;
     pub fn cudaGetDeviceCount(count: *mut i32) -> cudaError_t;
     pub fn cudaMalloc(dev_ptr: *mut *mut c_void, size: usize) -> cudaError_t;
+    pub fn cudaMallocManaged(dev_ptr: *mut *mut c_void, size: usize, flags: u32) -> cudaError_t;
+    pub fn cudaMemAdvise(
+        dev_ptr: const_ptr,
+        count: usize,
+        advice: u32,
+        device: i32,
+    ) -> cudaError_t;
     pub fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_t;
     pub fn cudaFree(dev_ptr: *mut c_void) -> cudaError_t;
     pub fn cudaHostAlloc(pHost: *mut *mut c_void, size: usize, flags: u32) -> cudaError_t;
@@ -1019,7 +1027,8 @@ impl CudaDeviceBuffer {
         }
     }
 
-    /// Allocates physical memory directly on the CUDA device via `cudaMalloc`.
+    /// Allocates physical memory directly on the CUDA device via `cudaMalloc`,
+    /// falling back to Unified Managed Memory (`cudaMallocManaged`) if physical VRAM is oversubscribed.
     pub fn allocate(size_bytes: usize) -> Result<Self, String> {
         if size_bytes == 0 {
             return Ok(Self {
@@ -1028,18 +1037,46 @@ impl CudaDeviceBuffer {
             });
         }
         let mut d_ptr: *mut c_void = ptr::null_mut();
-        // SAFETY: Calling cudaMalloc with valid pointer and size.
+        // First attempt standard device allocation via cudaMalloc
         let status = unsafe { cudaMalloc(&raw mut d_ptr, size_bytes) };
-        if status != CUDA_SUCCESS {
-            return Err(format!(
-                "cudaMalloc failed with status code {status} (requested {size_bytes} bytes = {:.2} MB)",
-                size_bytes as f64 / 1_048_576.0
-            ));
+        if status == CUDA_SUCCESS {
+            return Ok(Self {
+                ptr: d_ptr,
+                size_bytes,
+            });
         }
-        Ok(Self {
-            ptr: d_ptr,
-            size_bytes,
-        })
+
+        // Clear the pending cudaErrorMemoryAllocation from cudaMalloc failure
+        let _ = unsafe { cudaGetLastError() };
+
+        // If physical VRAM is exhausted, fallback to Unified Managed Memory (cudaMallocManaged)
+        let managed_status = unsafe { cudaMallocManaged(&raw mut d_ptr, size_bytes, 1) };
+        if managed_status == CUDA_SUCCESS {
+            tracing::info!(
+                "cudaMalloc failed (status {status}), allocated {:.2} MB via cudaMallocManaged (ptr: {:?})",
+                size_bytes as f64 / 1_048_576.0,
+                d_ptr
+            );
+            return Ok(Self {
+                ptr: d_ptr,
+                size_bytes,
+            });
+        }
+
+        let mem_info = Self::get_device_memory_info()
+            .map(|(free, total)| {
+                format!(
+                    " (physical VRAM free: {:.2} MB / {:.2} MB)",
+                    free as f64 / 1_048_576.0,
+                    total as f64 / 1_048_576.0
+                )
+            })
+            .unwrap_or_default();
+
+        Err(format!(
+            "CUDA allocation failed: cudaMalloc status {status}, cudaMallocManaged status {managed_status} for {size_bytes} bytes ({:.2} MB){mem_info}",
+            size_bytes as f64 / 1_048_576.0
+        ))
     }
 
     /// Returns (free_bytes, total_bytes) of physical device VRAM.
@@ -1068,18 +1105,22 @@ impl CudaDeviceBuffer {
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer capacity".to_string());
         }
-        // SAFETY: Calling cudaMemcpyAsync with valid device pointer, host pointer, size, and stream.
+        // SAFETY: Calling cudaMemcpyAsync with valid destination pointer, host pointer, size, and stream.
+        // CUDA_MEMCPY_DEFAULT (4) allows unified virtual addressing for both physical device memory and managed memory.
         let status = unsafe {
             cudaMemcpyAsync(
                 self.ptr,
                 src.as_ptr().cast(),
                 bytes,
-                CUDA_MEMCPY_HOST_TO_DEVICE,
+                CUDA_MEMCPY_DEFAULT,
                 stream,
             )
         };
         if status != CUDA_SUCCESS {
-            return Err(format!("cudaMemcpyAsync (H2D) failed with code {status}"));
+            return Err(format!(
+                "cudaMemcpyAsync (H2D) failed with code {status} for {bytes} bytes (dst_ptr: {:?}, capacity: {})",
+                self.ptr, self.size_bytes
+            ));
         }
         Ok(())
     }

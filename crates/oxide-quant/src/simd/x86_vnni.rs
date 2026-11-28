@@ -237,11 +237,13 @@ pub unsafe fn dot_q4_k_q8_k_4rows_avx512vnni512(
     row3_weights: &[crate::gguf_quants::BlockQ4_K],
     act_q8_k: &[crate::int_quant::BlockQ8_K],
 ) -> (f32, f32, f32, f32) {
-    dot_q4_k_q8_k_4rows_avx512vnni(
-        row0_weights,
-        row1_weights,
-        row2_weights,
-        row3_weights,
-        act_q8_k,
-    )
+    unsafe {
+        dot_q4_k_q8_k_4rows_avx512vnni(
+            row0_weights,
+            row1_weights,
+            row2_weights,
+            row3_weights,
+            act_q8_k,
+        )
+    }
 }

@@ -2,15 +2,21 @@ use oxide_models::formats::{GgufFile, GgufQuantType};
 
 #[test]
 fn test_inspect_qwen_tensors() {
-    let path = "/home/jrad/models/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let path = "/home/jrad/models/ternary/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PTQ1_0.gguf";
     if let Ok(file) = std::fs::File::open(path) {
         let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
         let gguf = GgufFile::parse(&mmap).unwrap();
-        for (name, info) in &gguf.tensors {
-            if name.starts_with("blk.0.") || name.starts_with("blk.1.") || name.starts_with("blk.2.") {
-                println!("Tensor {}: quant={:?}, dims={:?}", name, info.quant_type, info.dimensions);
+        let mut recurrent_layers = Vec::new();
+        let mut attn_layers = Vec::new();
+        for i in 0..64 {
+            if gguf.tensors.contains_key(&format!("blk.{i}.ssm_conv1d.weight")) {
+                recurrent_layers.push(i);
+            } else {
+                attn_layers.push(i);
             }
         }
+        println!("Recurrent layers count: {}, list: {:?}", recurrent_layers.len(), recurrent_layers);
+        println!("Full attention layers count: {}, list: {:?}", attn_layers.len(), attn_layers);
     }
 }
 
