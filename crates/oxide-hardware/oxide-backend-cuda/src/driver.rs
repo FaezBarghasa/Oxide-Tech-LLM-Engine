@@ -1010,6 +1010,7 @@ unsafe extern "C" {
 pub struct CudaDeviceBuffer {
     ptr: *mut c_void,
     size_bytes: usize,
+    is_managed: bool,
 }
 
 // SAFETY: CUDA device buffers are thread-safe across host threads when synchronized properly.
@@ -1024,6 +1025,7 @@ impl CudaDeviceBuffer {
         Self {
             ptr: ptr::null_mut(),
             size_bytes: 0,
+            is_managed: false,
         }
     }
 
@@ -1034,6 +1036,7 @@ impl CudaDeviceBuffer {
             return Ok(Self {
                 ptr: ptr::null_mut(),
                 size_bytes: 0,
+                is_managed: false,
             });
         }
         let mut d_ptr: *mut c_void = ptr::null_mut();
@@ -1043,6 +1046,7 @@ impl CudaDeviceBuffer {
             return Ok(Self {
                 ptr: d_ptr,
                 size_bytes,
+                is_managed: false,
             });
         }
 
@@ -1060,6 +1064,7 @@ impl CudaDeviceBuffer {
             return Ok(Self {
                 ptr: d_ptr,
                 size_bytes,
+                is_managed: true,
             });
         }
 
@@ -1105,33 +1110,26 @@ impl CudaDeviceBuffer {
         if bytes > self.size_bytes {
             return Err("Host slice exceeds device buffer capacity".to_string());
         }
-        let prev_err = unsafe { cudaGetLastError() };
-        if prev_err != CUDA_SUCCESS {
-            tracing::error!("PRE-EXISTING CUDA ERROR before copy_from_host_async: {prev_err}");
+        if self.is_managed {
+            // For unified managed memory, directly copy without custom stream cudaMemcpyAsync
+            // to avoid cudaErrorIllegalAddress (code 700) on Linux non-default streams.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src.as_ptr().cast::<u8>(), self.ptr.cast::<u8>(), bytes);
+            }
+            return Ok(());
         }
-        tracing::info!(
-            "copy_from_host_async: src_ptr={:?}, dst_ptr={:?}, bytes={}, stream={:?}",
-            src.as_ptr(),
-            self.ptr,
-            bytes,
-            stream
-        );
         // SAFETY: Calling cudaMemcpyAsync with valid destination pointer, host pointer, size, and stream.
-        // CUDA_MEMCPY_DEFAULT (4) allows unified virtual addressing for both physical device memory and managed memory.
         let status = unsafe {
             cudaMemcpyAsync(
                 self.ptr,
                 src.as_ptr().cast(),
                 bytes,
-                CUDA_MEMCPY_DEFAULT,
+                CUDA_MEMCPY_HOST_TO_DEVICE,
                 stream,
             )
         };
         if status != CUDA_SUCCESS {
-            return Err(format!(
-                "cudaMemcpyAsync (H2D) failed with code {status} for {bytes} bytes (dst_ptr: {:?}, capacity: {})",
-                self.ptr, self.size_bytes
-            ));
+            return Err(format!("cudaMemcpyAsync (H2D) failed with code {status}"));
         }
         Ok(())
     }
@@ -1144,6 +1142,13 @@ impl CudaDeviceBuffer {
         }
         if bytes > self.size_bytes {
             return Err("Destination slice exceeds device buffer size".to_string());
+        }
+        if self.is_managed {
+            unsafe {
+                cudaStreamSynchronize(stream);
+                std::ptr::copy_nonoverlapping(self.ptr.cast::<u8>(), dst.as_mut_ptr().cast::<u8>(), bytes);
+            }
+            return Ok(());
         }
         // SAFETY: Calling cudaMemcpyAsync with valid destination host pointer, device pointer, and stream.
         let status = unsafe {
@@ -1191,6 +1196,13 @@ impl CudaDeviceBuffer {
 
     pub fn memset_async(&mut self, value: i32, stream: cudaStream_t) -> Result<(), String> {
         if !self.ptr.is_null() && self.size_bytes > 0 {
+            if self.is_managed {
+                unsafe {
+                    cudaStreamSynchronize(stream);
+                    std::ptr::write_bytes(self.ptr.cast::<u8>(), value as u8, self.size_bytes);
+                }
+                return Ok(());
+            }
             let status = unsafe { cudaMemsetAsync(self.ptr, value, self.size_bytes, stream) };
             if status != CUDA_SUCCESS {
                 return Err(format!("cudaMemsetAsync failed: {status}"));
@@ -1244,6 +1256,8 @@ impl CudaStream {
         // SAFETY: Calling cudaStreamSynchronize.
         let status = unsafe { cudaStreamSynchronize(self.stream) };
         if status != CUDA_SUCCESS {
+            let bt = std::backtrace::Backtrace::capture();
+            eprintln!("[CUDA ERROR] cudaStreamSynchronize failed with code {status}:\n{bt}");
             return Err(format!("cudaStreamSynchronize failed with code {status}"));
         }
         Ok(())
